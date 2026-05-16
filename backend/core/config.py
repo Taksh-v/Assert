@@ -1,0 +1,146 @@
+"""
+Assest — Configuration Management
+Loads all settings from environment variables via pydantic-settings.
+"""
+
+from pydantic_settings import BaseSettings
+from pydantic import Field
+from typing import Optional
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from .env file."""
+
+    # ── App ──────────────────────────────────────────────
+    app_env: str = Field(default="development", description="development | production")
+    app_secret_key: str = Field(default="change-me-to-a-random-64-char-string")
+    app_host: str = Field(default="0.0.0.0")
+    app_port: int = Field(default=8000)
+    app_version: str = Field(default="0.1.0")
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:8000",
+        description="Comma-separated list of allowed CORS origins",
+    )
+
+    # ── Database ─────────────────────────────────────────
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./data/assest_dev.db",
+        description="SQLite for dev, PostgreSQL for prod",
+    )
+    supabase_url: Optional[str] = Field(default=None, description="Supabase project URL")
+    supabase_anon_key: Optional[str] = Field(default=None, description="Supabase anon key")
+    supabase_service_role_key: Optional[str] = Field(
+        default=None,
+        description="Supabase service role key for server-side storage and admin tasks",
+    )
+    supabase_storage_bucket: str = Field(default="raw-storage")
+
+    # ── Vector Database (Qdrant) ─────────────────────────
+    qdrant_host: str = Field(default="localhost")
+    qdrant_port: int = Field(default=6333)
+    qdrant_collection_name: str = Field(default="assest_knowledge_dev")
+    qdrant_mode: str = Field(
+        default="local",
+        description="'local' for file-based (dev), 'server' for remote Qdrant, 'memory' for ephemeral",
+    )
+    qdrant_path: str = Field(default="./data/qdrant")
+
+    # ── Redis ────────────────────────────────────────────
+    redis_url: str = Field(default="redis://localhost:6379/0")
+
+    # ── LLM — Groq ──────────────────────────────────────
+    groq_api_key: Optional[str] = Field(default=None)
+    groq_model: str = Field(default="llama-3.3-70b-versatile")
+
+    # ── Embeddings ───────────────────────────────────────
+    embedding_provider: str = Field(
+        default="local",
+        description="'local' for sentence-transformers, 'openai' for OpenAI API",
+    )
+    embedding_model: str = Field(default="all-MiniLM-L6-v2")
+    openai_api_key: Optional[str] = Field(default=None)
+
+    # ── Reranking ────────────────────────────────────────
+    enable_reranking: bool = Field(default=True)
+    rerank_model: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    rerank_top_k: int = Field(default=5)
+
+    # ── AWS ──────────────────────────────────────────────
+    aws_access_key_id: Optional[str] = Field(default=None)
+    aws_secret_access_key: Optional[str] = Field(default=None)
+    aws_region: str = Field(default="ap-south-1")
+    aws_s3_bucket: str = Field(default="assest-raw-documents")
+
+    # ── Notion OAuth ──────────────────────────────────────
+    notion_token: Optional[str] = Field(default=None, description="Internal integration token (quick setup)")
+    notion_client_id: Optional[str] = Field(default=None)
+    notion_client_secret: Optional[str] = Field(default=None)
+    notion_redirect_uri: str = Field(default="http://localhost:8000/api/auth/notion/callback")
+
+    # ── Google Drive OAuth ───────────────────────────────
+    google_client_id: Optional[str] = Field(default=None)
+    google_client_secret: Optional[str] = Field(default=None)
+    google_redirect_uri: str = Field(default="http://localhost:8000/api/auth/google/callback")
+    google_scopes: str = Field(default="https://www.googleapis.com/auth/drive.readonly")
+
+    # ── Slack OAuth ──────────────────────────────────────
+    slack_client_id: Optional[str] = Field(default=None)
+    slack_client_secret: Optional[str] = Field(default=None)
+    slack_redirect_uri: str = Field(default="http://localhost:8000/api/auth/slack/callback")
+    slack_bot_token: Optional[str] = Field(default=None)
+    slack_app_token: Optional[str] = Field(default=None)
+    slack_signing_secret: Optional[str] = Field(default=None)
+
+    # ── Memgraph (Graph Database) ────────────────────────
+    memgraph_url: str = Field(default="bolt://localhost:7687")
+    memgraph_user: str = Field(default="memgraph")
+    memgraph_password: str = Field(default="")
+
+    # ── Frontend ─────────────────────────────────────────
+    frontend_url: str = Field(default="http://localhost:3000")
+
+    # ── Agent Orchestration ──────────────────────────────
+    enable_multi_agent: bool = Field(default=True, description="Enable LangGraph-based multi-agent orchestration")
+    
+    # ── Worker Pool ──────────────────────────────────────
+    enable_workers: bool = Field(default=True)
+    worker_workspace_id: str = Field(default="default_workspace")
+    worker_fetch_count: int = Field(default=3)
+    worker_parser_count: int = Field(default=2)
+    worker_enrichment_count: int = Field(default=2)
+    worker_embedding_count: int = Field(default=2)
+    worker_max_concurrent_tasks: int = Field(default=5)
+    worker_batch_size: int = Field(default=10)
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse comma-separated CORS origins into a list."""
+        return [origin.strip() for origin in self.cors_origins.split(",")]
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env == "development"
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+    @property
+    def supabase_enabled(self) -> bool:
+        return bool(self.supabase_url and (self.supabase_service_role_key or self.supabase_anon_key))
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": False,
+    }
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """
+    Cached settings instance.
+    Call this function anywhere in the app to get the current config.
+    """
+    return Settings()

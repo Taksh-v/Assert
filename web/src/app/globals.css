@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+:root {
+  --background: #020617;
+  --foreground: #F8FAFC;
+  --card: rgba(15, 23, 42, 0.6);
+  --card-foreground: #F8FAFC;
+  --primary: #00F2FF;
+  --primary-foreground: #020617;
+  --secondary: #1E293B;
+  --secondary-foreground: #F8FAFC;
+  --accent: #38BDF8;
+  --accent-foreground: #020617;
+  --destructive: #EF4444;
+  --destructive-foreground: #F8FAFC;
+  --muted: #475569;
+  --muted-foreground: #94A3B8;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.05);
+  --ring: #00F2FF;
+  --radius: 1.25rem;
+  
+  /* Custom Tokens */
+  --neural-glow: radial-gradient(circle at center, rgba(0, 242, 255, 0.15) 0%, transparent 70%);
+  --glass-bg: rgba(15, 23, 42, 0.4);
+  --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --radius-xl: var(--radius);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background-color: var(--background);
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(0, 242, 255, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(56, 189, 248, 0.05) 0px, transparent 50%),
+    radial-gradient(at 50% 100%, rgba(15, 23, 42, 0.8) 0px, transparent 50%);
+  color: var(--foreground);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Glassmorphism Core */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(0, 242, 255, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 242, 255, 0.1);
+}
+
+/* Neural Elements */
+.neural-button {
+  background: linear-gradient(135deg, #00F2FF 0%, #38BDF8 100%);
+  color: #020617;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 20px rgba(0, 242, 255, 0.2);
+}
+
+.neural-button:hover {
+  transform: scale(1.02);
+  box-shadow: 0 0 30px rgba(0, 242, 255, 0.4);
+  filter: brightness(1.1);
+}
+
+.neural-input {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: white;
+  transition: all 0.3s ease;
+}
+
+.neural-input:focus {
+  border-color: var(--primary);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);
+  outline: none;
+}
+
+/* Background Atmosphere */
+.neural-bg-glow {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100vw;
+  height: 100vh;
+  background: var(--neural-glow);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Animations */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.8; }
+}
+
+.animate-pulse-slow {
+  animation: pulse-soft 4s infinite ease-in-out;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(2, 6, 23, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
