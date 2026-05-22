@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import SourceSetupModal from "@/components/SourceSetupModal";
+import { apiFetch, getActiveWorkspace } from "@/lib/auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -81,7 +82,9 @@ export default function ConnectorsPage() {
 
   const fetchConnectors = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/api/connectors?workspace_id=default-workspace`);
+      const activeWs = getActiveWorkspace();
+      const workspaceId = activeWs?.id || "default-workspace";
+      const response = await apiFetch(`/api/connectors?workspace_id=${workspaceId}`);
       if (response.ok) {
         const data = await response.json() as Connector[];
         setConnectors(data);
@@ -121,7 +124,7 @@ export default function ConnectorsPage() {
 
   const disconnectConnector = async (connectorId: string, connectorType: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/connectors/${connectorId}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/connectors/${connectorId}`, { method: "DELETE" });
       if (response.ok) {
         setNotification({ type: "success", message: `${CONNECTOR_METADATA[connectorType]?.name || connectorType} disconnected` });
         await fetchConnectors();
@@ -134,9 +137,8 @@ export default function ConnectorsPage() {
 
   const resyncConnector = async (connectorId: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/connectors/${connectorId}/sync`, {
+      const response = await apiFetch(`/api/connectors/${connectorId}/sync`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
       if (response.ok) {
@@ -409,7 +411,7 @@ export default function ConnectorsPage() {
         <SourceSetupModal 
           type={setupSource}
           metadata={CONNECTOR_METADATA[setupSource]}
-          workspaceId="default-workspace"
+          workspaceId={getActiveWorkspace()?.id || "default-workspace"}
           onClose={() => setSetupSource(null)}
           onConnect={() => { fetchConnectors(); setNotification({ type: "success", message: "Connector synced successfully!" }); }}
         />

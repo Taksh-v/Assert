@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     app_host: str = Field(default="0.0.0.0")
     app_port: int = Field(default=8000)
     app_version: str = Field(default="0.1.0")
+    sql_echo: bool = Field(
+        default=False,
+        alias="SQL_ECHO",
+        description="Enable verbose SQLAlchemy SQL logging when debugging database queries.",
+    )
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:8000",
         description="Comma-separated list of allowed CORS origins",
@@ -49,11 +54,28 @@ class Settings(BaseSettings):
     # ── Redis ────────────────────────────────────────────
     redis_url: str = Field(default="redis://localhost:6379/0")
 
+    # ── LLM Gateway (LiteLLM) ──────────────────────────
+    litellm_proxy_url: Optional[str] = Field(default="http://localhost:4000", description="Local LiteLLM proxy URL")
+    company_brain_fast_model: str = Field(default="openai/company-brain-fast")
+    company_brain_smart_model: str = Field(default="openai/company-brain-smart")
+    openrouter_api_key: Optional[str] = Field(default=None)
+    openrouter_api_base: str = Field(default="https://openrouter.ai/api/v1")
+    openrouter_site_url: Optional[str] = Field(default=None)
+    openrouter_app_name: str = Field(default="Assest Brain")
+    openrouter_fast_model: str = Field(default="openrouter/google/gemini-2.0-flash-lite:free")
+    openrouter_smart_model: str = Field(default="openrouter/meta-llama/llama-3.1-8b-instruct:free")
+
+    # ── Langfuse Observability ──────────────────────────
+    langfuse_public_key: Optional[str] = Field(default="pk-lf-public", alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: Optional[str] = Field(default="sk-lf-secret", alias="LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field(default="http://localhost:3000", alias="LANGFUSE_HOST")
+
     # ── LLM — Groq ──────────────────────────────────────
     groq_api_key: Optional[str] = Field(default=None)
     groq_model: str = Field(default="llama-3.3-70b-versatile")
 
     # ── Embeddings ───────────────────────────────────────
+    load_local_models: bool = Field(default=True, alias="ASSEST_LOAD_LOCAL_MODELS")
     embedding_provider: str = Field(
         default="local",
         description="'local' for sentence-transformers, 'openai' for OpenAI API",
@@ -91,6 +113,11 @@ class Settings(BaseSettings):
     slack_bot_token: Optional[str] = Field(default=None)
     slack_app_token: Optional[str] = Field(default=None)
     slack_signing_secret: Optional[str] = Field(default=None)
+    enable_slack_bot: bool = Field(
+        default=False,
+        alias="ENABLE_SLACK_BOT",
+        description="Start the realtime Slack Socket Mode bot on backend startup.",
+    )
 
     # ── Memgraph (Graph Database) ────────────────────────
     memgraph_url: str = Field(default="bolt://localhost:7687")
@@ -112,6 +139,16 @@ class Settings(BaseSettings):
     worker_embedding_count: int = Field(default=2)
     worker_max_concurrent_tasks: int = Field(default=5)
     worker_batch_size: int = Field(default=10)
+
+    # ── Auto Ingest Scheduler ───────────────────────────
+    enable_auto_ingest: bool = Field(
+        default=True,
+        description="Enable periodic automatic ingestion for active connectors",
+    )
+    auto_ingest_interval_minutes: int = Field(
+        default=60,
+        description="Interval in minutes between auto ingestion passes",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:

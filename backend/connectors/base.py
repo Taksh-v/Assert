@@ -45,7 +45,12 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    async def fetch_documents(self, connection: Any, since: Optional[datetime] = None) -> Iterator[RawDocument]:
+    async def fetch_documents(
+        self,
+        connection: Any,
+        since: Optional[datetime] = None,
+        selected_ids: Optional[List[str]] = None,
+    ) -> Iterator[RawDocument]:
         """Fetch documents from the source."""
         pass
 

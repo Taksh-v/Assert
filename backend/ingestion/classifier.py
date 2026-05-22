@@ -6,6 +6,8 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+from backend.core.llm_client import LLMClient
+
 class DocumentClassifier:
     """
     Blueprint Layer 2: Source Normalization & Classification.
@@ -13,33 +15,11 @@ class DocumentClassifier:
     """
 
     def __init__(self):
-        self._client = None
-        self._client_init_failed = False
-        self.model = settings.groq_model
-
-    @property
-    def client(self):
-        """Lazy-init Groq client to avoid 'proxies' TypeError."""
-        if self._client is not None:
-            return self._client
-        if self._client_init_failed or not settings.groq_api_key:
-            return None
-        try:
-            from groq import Groq
-            self._client = Groq(api_key=settings.groq_api_key)
-            return self._client
-        except TypeError as e:
-            logger.warning(f"Groq client init failed (SDK version mismatch): {e}")
-            self._client_init_failed = True
-            return None
-        except Exception as e:
-            logger.warning(f"Groq client init failed: {e}")
-            self._client_init_failed = True
-            return None
+        self.llm = LLMClient(model_type="fast")
 
     async def classify(self, content: str, filename: str) -> str:
-        """Classify document into a specific category."""
-        if not content or not self.client:
+        """Classify document into a specific category using the local brain proxy."""
+        if not content:
             return self._classify_locally(content, filename)
 
         prompt = f"""
@@ -59,12 +39,8 @@ class DocumentClassifier:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-                temperature=0,
-            )
-            category = response.choices[0].message.content.strip().lower()
+            res = await self.llm.chat_completion("You are a specialized document classifier.", prompt)
+            category = res.strip().lower()
             
             # Map to standard names
             mapping = {
@@ -74,7 +50,11 @@ class DocumentClassifier:
                 "meetingnotes": "meeting_notes",
                 "technicalmanual": "tech_manual"
             }
-            return mapping.get(category, "general")
+            # Simple check if any key is in the response
+            for key, val in mapping.items():
+                if key in category:
+                    return val
+            return "general"
         except Exception as e:
             logger.error(f"Classification failed: {e}")
             return self._classify_locally(content, filename)

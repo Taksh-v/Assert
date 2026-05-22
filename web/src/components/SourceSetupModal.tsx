@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap } from "lucide-react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { apiFetch } from "@/lib/auth";
 
 interface SourceMetadata {
   name: string;
@@ -44,6 +43,12 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [oauthConfigured, setOauthConfigured] = useState<boolean>(true);
   const [hasDirectToken, setHasDirectToken] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const sourceIconSrc =
+    type === "notion"
+      ? "https://www.notion.so/favicon.ico"
+      : type === "google_drive"
+        ? "https://www.google.com/favicon.ico"
+        : null;
 
   // Check for existing connector on mount
   useEffect(() => {
@@ -75,13 +80,13 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const discoverResources = useCallback(async (cId: string) => {
     setIsDiscovering(true);
     try {
-      const discoveryRes = await fetch(`${API_URL}/api/connectors/${cId}/discover`);
+      const discoveryRes = await apiFetch(`/api/connectors/${cId}/discover`);
       if (discoveryRes.ok) {
         const data = await discoveryRes.json() as { items?: DiscoveredItem[] };
         setDiscoveredItems(data.items || []);
@@ -104,8 +109,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     setErrorMessage("");
     try {
       // Step 1: Get the Authorization URL from the backend (uses real .env credentials)
-      const response = await fetch(`${API_URL}/api/oauth/authorize/${type}`);
-      
+      const response = await apiFetch(`/api/oauth/authorize/${type}?workspace_id=${workspaceId}`);
+
       if (!response.ok) {
         const errorData = await response.json();
         setErrorMessage(errorData.detail || "OAuth not configured for this source");
@@ -164,7 +169,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
   const handleSlackDirectConnect = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/auth/slack/direct`, { method: "POST" });
+      const response = await apiFetch(`/api/auth/slack/direct?workspace_id=${workspaceId}`, { method: "POST" });
       if (response.ok) {
         const data = await response.json();
         setConnectorId(data.connector_id);
@@ -187,13 +192,13 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const checkForExistingConnector = async () => {
     // After popup closes or on mount, check if the backend has an active connector
     try {
-      const response = await fetch(`${API_URL}/api/connectors?workspace_id=${workspaceId}`);
+      const response = await apiFetch(`/api/connectors?workspace_id=${workspaceId}`);
       if (response.ok) {
         const connectors = await response.json() as Array<{ id: string; type: string; status: string; config_summary?: Record<string, unknown> }>;
         const match = connectors.find(
-          (c) => c.type === type && 
-                 (c.status === "active" || c.status === "pending") && 
-                 (c.config_summary?.oauth || c.config_summary?.direct_token)
+          (c) => c.type === type &&
+            (c.status === "active" || c.status === "pending") &&
+            (c.config_summary?.oauth || c.config_summary?.direct_token)
         );
         if (match) {
           setConnectorId(match.id);
@@ -221,9 +226,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       }
 
       // Create connector with manual token
-      const response = await fetch(`${API_URL}/api/connectors`, {
+      const response = await apiFetch(`/api/connectors`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workspace_id: workspaceId,
           type: type,
@@ -257,9 +261,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     setSyncProgress("Initializing ingestion pipeline...");
 
     try {
-      const response = await fetch(`${API_URL}/api/connectors/${connectorId}/sync`, {
+      const response = await apiFetch(`/api/connectors/${connectorId}/sync`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ selected_ids: selectedIds.length > 0 ? selectedIds : null }),
       });
 
@@ -312,7 +315,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         {/* Header */}
         <div className="p-10 border-b border-white/5 flex items-center justify-between bg-gradient-to-br from-white/[0.03] to-transparent">
           <div className="flex items-center gap-6">
-            <div 
+            <div
               className="h-16 w-16 rounded-[1.25rem] flex items-center justify-center text-3xl font-black text-white shadow-2xl"
               style={{ backgroundColor: metadata.color, boxShadow: `0 20px 40px ${metadata.color}44` }}
             >
@@ -329,7 +332,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
               </p>
             </div>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="h-12 w-12 rounded-full hover:bg-white/5 flex items-center justify-center transition-all group"
           >
@@ -368,7 +371,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                 </div>
               )}
 
-              <button 
+              <button
                 onClick={handleOAuth}
                 disabled={isLoading}
                 className="w-full h-16 rounded-2xl bg-white text-black font-black text-lg flex items-center justify-center gap-4 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-2xl shadow-white/10 disabled:opacity-50 disabled:hover:scale-100"
@@ -379,15 +382,15 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                   <>
                     {type === "slack" ? (
                       <Zap className="w-6 h-6" />
-                    ) : (
+                    ) : sourceIconSrc ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img 
-                        src={type === "notion" ? "https://www.notion.so/favicon.ico" : type === "google_drive" ? "https://www.google.com/favicon.ico" : ""}
-                        className="w-6 h-6" 
-                        alt="" 
+                      <img
+                        src={sourceIconSrc}
+                        className="w-6 h-6"
+                        alt=""
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                       />
-                    )}
+                    ) : null}
                     {type === "slack" && hasDirectToken ? "Connect Slack" : `Authorize ${metadata.name}`}
                     <ChevronRight className="w-5 h-5" />
                   </>
@@ -395,7 +398,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
               </button>
 
               <div className="pt-4 flex flex-col items-center gap-4">
-                <button 
+                <button
                   onClick={() => setShowAdvanced(!showAdvanced)}
                   className="text-[10px] font-black text-zinc-500 uppercase tracking-widest hover:text-white transition-colors flex items-center gap-2"
                 >
@@ -405,13 +408,13 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
                 {showAdvanced && (
                   <div className="w-full space-y-4 animate-in slide-in-from-top-4 duration-300">
-                    <input 
+                    <input
                       type="password"
                       placeholder={type === "notion" ? "Enter Notion integration token..." : type === "google_drive" ? "Paste OAuth access token..." : "Enter Slack bot token..."}
                       className="w-full h-14 px-6 rounded-2xl bg-white/5 border border-white/10 text-sm text-white focus:outline-none focus:border-blue-500/50 placeholder:text-zinc-600"
                       onChange={(e) => setConfig({ ...config, api_key: e.target.value })}
                     />
-                    <button 
+                    <button
                       onClick={handleManualToken}
                       disabled={isLoading || !config.api_key}
                       className="w-full h-14 rounded-2xl bg-zinc-800 text-white font-bold text-sm hover:bg-zinc-700 transition-colors disabled:opacity-50"
@@ -429,8 +432,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold text-white">Pick Your Knowledge</h3>
                 <div className="flex items-center gap-3">
-                  <button 
-                    onClick={toggleSelectAll} 
+                  <button
+                    onClick={toggleSelectAll}
                     className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 transition-colors"
                   >
                     {selectedIds.length === discoveredItems.length ? "Deselect All" : "Select All"}
@@ -456,21 +459,19 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                   </div>
                 ) : (
                   discoveredItems.map((item) => (
-                    <div 
-                      key={item.id} 
+                    <div
+                      key={item.id}
                       onClick={() => {
                         if (selectedIds.includes(item.id)) setSelectedIds(selectedIds.filter(id => id !== item.id));
                         else setSelectedIds([...selectedIds, item.id]);
                       }}
-                      className={`flex items-center gap-4 p-5 rounded-[1.5rem] border transition-all cursor-pointer group ${
-                        selectedIds.includes(item.id) 
-                          ? "bg-blue-600/10 border-blue-500/50 shadow-lg shadow-blue-500/5" 
+                      className={`flex items-center gap-4 p-5 rounded-[1.5rem] border transition-all cursor-pointer group ${selectedIds.includes(item.id)
+                          ? "bg-blue-600/10 border-blue-500/50 shadow-lg shadow-blue-500/5"
                           : "bg-white/[0.03] border-white/5 hover:bg-white/[0.08]"
-                      }`}
+                        }`}
                     >
-                      <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${
-                        selectedIds.includes(item.id) ? "bg-blue-500 border-blue-500" : "border-white/20 bg-transparent"
-                      }`}>
+                      <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${selectedIds.includes(item.id) ? "bg-blue-500 border-blue-500" : "border-white/20 bg-transparent"
+                        }`}>
                         {selectedIds.includes(item.id) && <CheckCircle2 className="w-4 h-4 text-white" />}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -503,13 +504,13 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                   ))
                 )}
               </div>
-              
+
               {!isDiscovering && discoveredItems.length > 0 && (
-                <button 
+                <button
                   onClick={handleSync}
                   className="w-full h-16 rounded-2xl bg-white text-black font-black text-lg flex items-center justify-center gap-3 shadow-xl shadow-white/10 mt-4 hover:scale-[1.02] active:scale-[0.98] transition-all"
                 >
-                  {selectedIds.length > 0 
+                  {selectedIds.length > 0
                     ? `Sync ${selectedIds.length} Selected`
                     : "Sync All Knowledge"
                   }
@@ -568,7 +569,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                   {errorMessage || "An unexpected error occurred. Please try again."}
                 </p>
               </div>
-              <button 
+              <button
                 onClick={() => { setStep("setup"); setErrorMessage(""); }}
                 className="px-8 py-4 rounded-2xl bg-zinc-800 text-white font-bold text-sm hover:bg-zinc-700 transition-colors"
               >
@@ -580,20 +581,20 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
         {/* Footer Info */}
         <div className="px-10 py-8 bg-white/[0.02] border-t border-white/5 flex flex-wrap items-center justify-center gap-6 text-[10px] font-black text-zinc-600 uppercase tracking-widest">
-           <div className="flex items-center gap-2">
-             <Shield className="w-3 h-3 text-green-500" />
-             <span>SOC2 Certified</span>
-           </div>
-           <div className="h-1 w-1 rounded-full bg-zinc-800" />
-           <div className="flex items-center gap-2">
-             <Lock className="w-3 h-3 text-blue-500" />
-             <span>AES-256 Bit</span>
-           </div>
-           <div className="h-1 w-1 rounded-full bg-zinc-800" />
-           <div className="flex items-center gap-2">
-             <CheckCircle2 className="w-3 h-3 text-primary" />
-             <span>Zero Data Retention</span>
-           </div>
+          <div className="flex items-center gap-2">
+            <Shield className="w-3 h-3 text-green-500" />
+            <span>SOC2 Certified</span>
+          </div>
+          <div className="h-1 w-1 rounded-full bg-zinc-800" />
+          <div className="flex items-center gap-2">
+            <Lock className="w-3 h-3 text-blue-500" />
+            <span>AES-256 Bit</span>
+          </div>
+          <div className="h-1 w-1 rounded-full bg-zinc-800" />
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-3 h-3 text-primary" />
+            <span>Zero Data Retention</span>
+          </div>
         </div>
       </div>
     </div>

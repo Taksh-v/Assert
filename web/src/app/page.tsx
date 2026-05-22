@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Send, Bot, User, Loader2, Sparkles } from "lucide-react";
+import { apiFetch, getActiveWorkspace } from "@/lib/auth";
 
 interface Message {
   role: "user" | "assistant";
@@ -30,16 +31,14 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      // In a real app, workspace_id would come from context/auth
-      const response = await fetch("http://localhost:8000/api/query", {
+      const activeWs = getActiveWorkspace();
+      const workspaceId = activeWs?.id || "default-workspace";
+
+      const response = await apiFetch("/api/query", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": "assest_secret_key"
-        },
         body: JSON.stringify({
           question: input,
-          workspace_id: "default-workspace"
+          workspace_id: workspaceId
         })
       });
 

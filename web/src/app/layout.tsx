@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-import Sidebar from "@/components/Sidebar";
+import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "Assest — Company Brain",
@@ -27,10 +27,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full antialiased">
       <body className={`${geistSans.variable} ${geistMono.variable} flex h-screen overflow-hidden bg-background text-foreground`}>
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+        <AppShell>
           {children}
-        </main>
+        </AppShell>
       </body>
     </html>
   );

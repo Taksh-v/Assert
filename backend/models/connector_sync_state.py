@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, JSON
+from sqlalchemy import Column, String, DateTime, JSON, Boolean, Text
 from backend.core.database import Base
 
 class ConnectorSyncState(Base):
@@ -17,7 +17,16 @@ class ConnectorSyncState(Base):
     last_sync_token = Column(String, nullable=True)
     
     # Stats for the last sync
-    last_stats = Column(JSON, default={}) # {"added": 10, "updated": 5, "deleted": 2}
+    last_stats = Column(JSON, default=dict) # {"added": 10, "updated": 5, "deleted": 2}
+
+    # Lease-based lock for background ingestion jobs
+    is_running = Column(Boolean, default=False)
+    lock_owner = Column(String, nullable=True)
+    lock_acquired_at = Column(DateTime, nullable=True)
+    lock_expires_at = Column(DateTime, nullable=True)
+
+    # Last error seen while syncing this connector
+    last_error = Column(Text, nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

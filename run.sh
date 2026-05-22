@@ -1,94 +1,146 @@
 #!/bin/bash
 
-# Assest — System Startup Script
-# Orchestrates Backend (FastAPI) and Frontend (Next.js)
+# Assest — System Startup Script (System Python Optimized)
+# Orchestrates Backend (FastAPI) + Frontend (Next.js)
+# ─────────────────────────────────────────────────────
 
-# Colors for better visibility
+set -euo pipefail
+
+export PYTHONUNBUFFERED=1
+
+# ── Colors ─────────────────────────────────────────
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
-echo -e "${BLUE}🧠 Assest Brain — Starting System...${NC}"
+echo -e "${BLUE}${BOLD}🧠 Assest Company Brain — Starting...${NC}"
+echo -e "${CYAN}────────────────────────────────────────${NC}"
 
-# Create logs directory if it doesn't exist
+# ── Directories ────────────────────────────────────
 mkdir -p logs
 
-# Function to handle cleanup on exit
+# ── Cleanup on exit ────────────────────────────────
 cleanup() {
     echo -e "\n${YELLOW}🛑 Shutting down services...${NC}"
-    kill $BACKEND_PID 2>/dev/null
-    kill $FRONTEND_PID 2>/dev/null
-    echo -e "${GREEN}✅ Services stopped.${NC}"
+    # Kill process groups to ensure all children (npm, uvicorn) are gone
+    [[ -n "${BACKEND_PID:-}" ]]  && kill -TERM -"$BACKEND_PID"  2>/dev/null || true
+    [[ -n "${FRONTEND_PID:-}" ]] && kill -TERM -"$FRONTEND_PID" 2>/dev/null || true
+    pkill -f "uvicorn backend.main:app" 2>/dev/null || true
+    echo -e "${GREEN}✅ All services stopped.${NC}"
     exit 0
 }
-
-# Trap SIGINT (Ctrl+C) and SIGTERM
 trap cleanup SIGINT SIGTERM
 
-# 1. Environment Check
-echo -e "${BLUE}🔍 Checking environment...${NC}"
+# ── Python environment detection ───────────────────
+PYTHON_EXEC=$(which python3.12 2>/dev/null || which python3 2>/dev/null || echo "")
 
-# User requested no venv - using system python
-echo -e "   ✅ Using system Python (no venv)..."
-
-if [ ! -d "web/node_modules" ]; then
-    echo -e "   ${YELLOW}⚠️  web/node_modules not found. Running npm install...${NC}"
-    cd web && npm install && cd ..
+if [[ -z "$PYTHON_EXEC" ]]; then
+    echo -e "${RED}❌ Python not found. Please install Python 3.10+.${NC}"
+    exit 1
 fi
 
-# 2. Start Backend
-echo -e "${BLUE}🚀 Starting Backend (FastAPI)...${NC}"
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-export GRPC_DNS_RESOLVER=native
+echo -e "${BLUE}🐍 Runtime: $PYTHON_EXEC${NC}"
 
-# [FIX] Set SSL Certificates for macOS (critical for Slack/Notion)
-export SSL_CERT_FILE=$(python3 -c "import certifi; print(certifi.where())")
-echo -e "   🔒 SSL Certificates configured: $SSL_CERT_FILE"
+# ── Environment variables ──────────────────────────
+export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
 
-# [FIX] Clean up port 8000 if it's taken
-if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null ; then
-    echo -e "   ⚠️  Cleaning up port 8000..."
-    lsof -ti:8000 | xargs kill -9
+# SSL certs (critical for macOS)
+SSL_CERT=$($PYTHON_EXEC -c "import certifi; print(certifi.where())" 2>/dev/null || echo "")
+if [[ -n "$SSL_CERT" ]]; then
+    export SSL_CERT_FILE="$SSL_CERT"
+    export REQUESTS_CA_BUNDLE="$SSL_CERT"
+fi
+
+# Load .env if it exists
+if [[ -f ".env" ]]; then
+    echo -e "   📄 Loading .env..."
+    set -o allexport
+    source .env
+    set +o allexport
+fi
+
+echo -e "${CYAN}────────────────────────────────────────${NC}"
+
+# ── Infrastructure Check ───────────────────────────
+echo -e "${BLUE}🐳 Checking Infrastructure (Docker)...${NC}"
+if command -v docker-compose &> /dev/null; then
+    (cd infrastructure && docker-compose up -d)
+    echo -e "   ✅ Docker containers verified."
+else
+    echo -e "   ⚠️  docker-compose not found. Ensure containers (Qdrant, Redis, Postgres) are running."
+fi
+
+# ── Verify imports before starting ─────────────────
+echo -e "${BLUE}🔍 Verifying critical imports...${NC}"
+$PYTHON_EXEC - <<'PYCHECK'
+import sys
+failed = []
+checks = [
+    ("fastapi",              "FastAPI"),
+    ("sqlalchemy",           "SQLAlchemy"),
+    ("pydantic_settings",    "Pydantic Settings"),
+    ("litellm",              "LiteLLM Brain Gateway"),
+    ("qdrant_client",        "Qdrant vector DB"),
+    ("dlt",                  "DLT Ingestion"),
+    ("jose",                 "python-jose"),
+    ("bcrypt",               "bcrypt"),
+    ("aiosqlite",            "aiosqlite"),
+    ("slack_bolt",           "Slack Bolt"),
+    ("langfuse",             "Langfuse"),
+    ("spacy",                "Spacy"),
+]
+for mod, label in checks:
+    try:
+        __import__(mod)
+        print(f"   ✅ {label}")
+    except ImportError as e:
+        print(f"   ⚠️  {label} — {e}")
+        failed.append(label)
+
+if failed:
+    print(f"\n   ⚠️  Missing critical packages: {', '.join(failed)}")
+    print("   Try: pip install <package-name> --break-system-packages")
+PYCHECK
+
+echo -e "${CYAN}────────────────────────────────────────${NC}"
+
+# ── Clean up port 8000 ─────────────────────────────
+if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  Port 8000 in use — clearing...${NC}"
+    lsof -ti:8000 | xargs kill -9 2>/dev/null || true
     sleep 1
 fi
 
-# Using system python directly
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload > logs/backend.log 2>&1 &
+# ── Start Backend ──────────────────────────────────
+echo -e "${BLUE}🚀 Starting Backend (FastAPI on :8000)...${NC}"
+
+# Run in background with its own process group
+set -m
+$PYTHON_EXEC -m uvicorn backend.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    > logs/backend.log 2>&1 &
 BACKEND_PID=$!
+set +m
 
-# Wait a bit for backend to start
-sleep 2
-if ps -p $BACKEND_PID > /dev/null; then
-    echo -e "   ✅ Backend started (PID: $BACKEND_PID). Logs: logs/backend.log"
-else
-    echo -e "   ${RED}❌ Backend failed to start. Check logs/backend.log${NC}"
-    exit 1
-fi
+# ── Start Frontend ─────────────────────────────────
+echo -e "${BLUE}🚀 Starting Frontend (Next.js on :3000)...${NC}"
 
-# 3. Start Frontend
-echo -e "${BLUE}🚀 Starting Frontend (Next.js)...${NC}"
-cd web
-npm run dev -- -p 3000 > ../logs/frontend.log 2>&1 &
+set -m
+(cd web && npm run dev -- -p 3000) > logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
-cd ..
+set +m
 
-# Wait a bit for frontend to start
-sleep 2
-if ps -p $FRONTEND_PID > /dev/null; then
-    echo -e "   ✅ Frontend started (PID: $FRONTEND_PID). Logs: logs/frontend.log"
-else
-    echo -e "   ${RED}❌ Frontend failed to start. Check logs/frontend.log${NC}"
-    kill $BACKEND_PID
-    exit 1
-fi
+echo -e "${CYAN}────────────────────────────────────────${NC}"
+echo -e "${GREEN}${BOLD}✨ Assest is running!${NC}"
+echo -e "   🔗 Backend  : http://localhost:8000"
+echo -e "   🔗 Frontend : http://localhost:3000"
+echo -e "   🔗 Health   : http://localhost:8000/health"
+echo -e "   📄 Logs     : logs/backend.log & logs/frontend.log"
+echo -e "${CYAN}────────────────────────────────────────${NC}"
 
-echo -e "\n${GREEN}✨ System is up and running!${NC}"
-echo -e "   🔗 Backend:  ${BLUE}http://localhost:8000${NC}"
-echo -e "   🔗 API Docs: ${BLUE}http://localhost:8000/docs${NC}"
-echo -e "   🔗 Frontend: ${BLUE}http://localhost:3000${NC}"
-echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}"
-
-# Keep script running to maintain processes
 wait

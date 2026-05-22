@@ -8,6 +8,32 @@ from backend.query.generator import Generator
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
+
+def _patch_aiohttp_ping_for_slack_sdk():
+    """
+    Slack SDK 3.31 sends websocket ping payloads as str, while newer aiohttp
+    expects bytes. Keep the patch local and idempotent for optional bot startup.
+    """
+    try:
+        from aiohttp import ClientWebSocketResponse
+    except Exception as e:
+        logger.warning(f"Unable to patch aiohttp websocket ping compatibility: {e}")
+        return
+
+    if getattr(ClientWebSocketResponse.ping, "_assest_accepts_str", False):
+        return
+
+    original_ping = ClientWebSocketResponse.ping
+
+    async def ping_accepting_str(self, message=b""):
+        if isinstance(message, str):
+            message = message.encode("utf-8")
+        return await original_ping(self, message)
+
+    ping_accepting_str._assest_accepts_str = True
+    ClientWebSocketResponse.ping = ping_accepting_str
+
+
 class AssestSlackBot:
     """
     Slack Bot for Assest Company Brain.
@@ -71,5 +97,6 @@ class AssestSlackBot:
             return
 
         logger.info("Starting Assest Slack Bot in Async Socket Mode...")
+        _patch_aiohttp_ping_for_slack_sdk()
         handler = AsyncSocketModeHandler(self.app, settings.slack_app_token)
         await handler.start_async()

@@ -34,22 +34,32 @@ class Ranker:
         tier_map = {1: 1.0, 2: 0.6, 3: 0.3}
         tier_score = tier_map.get(tier, 0.5) * 0.20
         
-        # 4. Recency (Exponential Decay - Phase 3)
-        # weight: 0.20 (Increased from 0.15 for higher precision)
+        # 4. Recency (Smarter Temporal Decay - Phase 4)
+        # weight: 0.25 (Upped from 0.20 to make Time a primary dimension of truth)
         recency_score = 0.5
-        modified_at_str = chunk_data.get("metadata", {}).get("source_modified_at")
+        modified_at_str = chunk_data.get("metadata", {}).get("source_modified_at") or chunk_data.get("metadata", {}).get("created_at")
+        
         if modified_at_str:
             try:
-                modified_at = datetime.fromisoformat(modified_at_str.replace("Z", "+00:00"))
-                # Correct timedelta calculation
-                delta = datetime.utcnow() - modified_at.replace(tzinfo=None)
-                days_old = max(0, delta.days)
-                # Exponential decay: e^(-0.005 * days)
+                # Handle various ISO formats
+                clean_ts = modified_at_str.replace("Z", "+00:00")
+                modified_at = datetime.fromisoformat(clean_ts).replace(tzinfo=None)
+                days_old = max(0, (datetime.utcnow() - modified_at).days)
+                
                 import math
-                recency_score = math.exp(-0.005 * days_old) 
+                # Aggressive decay for the first year, then slow decay
+                # e^(-0.01 * days) -> 50% score after ~70 days
+                recency_score = math.exp(-0.01 * days_old)
+                
+                # 'Newness Boost': If it's from the last 7 days, it gets a flat 1.0 multiplier
+                if days_old <= 7:
+                    recency_score = 1.0
+                elif days_old <= 30:
+                    recency_score = max(recency_score, 0.9)
             except Exception:
-                pass
-        recency_score *= 0.20
+                recency_score = 0.5 # Default for missing dates
+        
+        recency_score *= 0.25 # New weight
         
         # 5. Structural Context Boost (Phase 3)
         # weight: 0.10

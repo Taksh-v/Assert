@@ -53,8 +53,51 @@ class MemoryManager:
                 update_fields={"preferences": new_prefs, "last_updated_at": datetime.utcnow()}
             )
 
-    async def summarize_episode(self, user_id: str, workspace_id: str, interaction: str):
-        """Update episodic memory with a summary of the latest interaction."""
-        # In production, use an LLM to update the summary incrementally
-        logger.info(f"Updating episodic memory for user {user_id}")
-        pass
+    async def summarize_episode(self, user_id: str, workspace_id: str, new_interaction: str):
+        """
+        Update episodic memory with an incremental summary using the local brain.
+        """
+        from backend.core.llm_client import LLMClient
+        llm = LLMClient(model_type="fast")
+        
+        current_memory = await self.get_memory(user_id, workspace_id)
+        current_summary = current_memory.recent_context_summary if current_memory else "No previous context."
+
+        prompt = f"""
+        Current Conversation Summary: {current_summary}
+        
+        New Interaction: {new_interaction}
+        
+        Task: Create a one-paragraph updated summary that combines the old summary with the new interaction.
+        Keep it concise and focus only on facts, names, and topics discussed.
+        
+        Updated Summary:
+        """
+        
+        try:
+            new_summary = await llm.chat_completion("You are a memory consolidation engine.", prompt)
+            
+            async with async_session() as session:
+                from sqlalchemy import update
+                from backend.models.user import User # Ensure User model exists or use upsert
+                
+                # Check if we need to create or update
+                if not current_memory:
+                    from backend.core.database import upsert_idempotent
+                    await upsert_idempotent(
+                        session,
+                        UserMemory,
+                        lookup_fields={"id": user_id, "workspace_id": workspace_id},
+                        update_fields={"recent_context_summary": new_summary, "last_updated_at": datetime.utcnow()}
+                    )
+                else:
+                    stmt = update(UserMemory).where(UserMemory.id == user_id).values(
+                        recent_context_summary=new_summary,
+                        last_updated_at=datetime.utcnow()
+                    )
+                    await session.execute(stmt)
+                    await session.commit()
+                    
+            logger.info(f"Memory consolidated for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to consolidate memory: {e}")

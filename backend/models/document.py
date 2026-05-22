@@ -13,7 +13,7 @@ class Document(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
-    connector_id = Column(String, ForeignKey("connectors.id"), nullable=False)
+    connector_id = Column(String, ForeignKey("connectors.id"), nullable=True)
     
     source_url = Column(String, nullable=False)
     title = Column(String, nullable=True)

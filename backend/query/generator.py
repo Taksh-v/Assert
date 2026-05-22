@@ -14,34 +14,38 @@ class Answer:
         self.tokens_used = tokens_used
 
 
+from backend.core.llm_client import LLMClient
+
 class Generator:
     """
-    Generates grounded answers from retrieved chunks using an LLM.
+    Generates grounded answers from retrieved chunks using the local brain proxy.
     """
 
     def __init__(self):
-        self.model = settings.groq_model
-        self._client = None
-        self._client_init_failed = False
+        self.llm = LLMClient(model_type="smart")
 
-    @property
-    def client(self):
-        if self._client is not None:
-            return self._client
-        if self._client_init_failed or not settings.groq_api_key:
-            return None
+    async def generate_with_reasoning_context(self, question: str, context: str) -> Answer:
+        """
+        Layer 12: Generates an answer using the structured reasoning context.
+        """
+        logger.info(f"Generating Phase 2 answer for: {question}")
+        
+        system_prompt = (
+            "You are the Assest Knowledge Architect. Answer the user's question using the provided reasoning context. "
+            "Maintain high precision and explicitly cite whether information comes from documentation, the knowledge graph, or the event timeline. "
+            "Use professional Markdown formatting."
+        )
+
         try:
-            from groq import Groq
-            self._client = Groq(api_key=settings.groq_api_key)
-            return self._client
-        except TypeError as e:
-            logger.warning(f"Groq client init failed (SDK version mismatch): {e}")
-            self._client_init_failed = True
-            return None
+            answer_text = await self.llm.chat_completion(
+                system_prompt=system_prompt,
+                user_prompt=f"Question: {question}\n\nREASONING CONTEXT:\n{context}",
+                temperature=0
+            )
+            return Answer(answer_text=answer_text, sources=[])
         except Exception as e:
-            logger.warning(f"Groq client init failed: {e}")
-            self._client_init_failed = True
-            return None
+            logger.error(f"P2 LLM generation failed: {e}")
+            return Answer(answer_text="Error generating answer.", sources=[])
 
     async def generate_answer(self, question: str, chunks: List[RetrievalResult]) -> Answer:
         """
@@ -52,11 +56,13 @@ class Generator:
         # 1. Construct context
         context = "\n\n".join([f"Source: {c.title} ({c.source_url})\nContent: {c.content}" for c in chunks])
         
-        # 2. Define system prompt
+        # 2. Define system prompt (Phase 4: Temporal Awareness)
         system_prompt = (
             "You are the Assest knowledge assistant. Answer ONLY based on the provided knowledge chunks. "
-            "If the answer is not in the chunks, say 'I couldn't find this in your company's knowledge base'. "
-            "Always cite the source document for each claim. Use Markdown formatting."
+            "IMPORTANT: Pay close attention to document dates/times. Newer documents override older ones. "
+            "If you find a conflict between an older document and a newer one, prioritize the newer information "
+            "and explicitly mention that a conflict was detected (e.g. 'The 2024 policy contradicts the 2022 version; the current rule is...'). "
+            "Always cite the source document and its date for each claim. Use Markdown formatting."
         )
         
         sources = []
@@ -67,22 +73,26 @@ class Generator:
                 sources.append({"title": chunk.title, "url": chunk.source_url})
                 seen_sources.add(key)
 
-        if not self.client:
-            best = chunks[0].content.strip() if chunks else ""
-            fallback = best[:900] + ("..." if len(best) > 900 else "")
-            return Answer(answer_text=fallback or "I couldn't find this in your company's knowledge base.", sources=sources)
-
-        logger.info(f"Calling LLM ({self.model})...")
         try:
-            response = self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Question: {question}\n\nKnowledge chunks:\n{context}"},
-                ],
-                model=self.model,
-                temperature=0.1,
+            answer_text = await self.llm.chat_completion(
+                system_prompt=system_prompt,
+                user_prompt=f"Question: {question}\n\nKnowledge chunks:\n{context}",
+                temperature=0.1
             )
-            answer_text = response.choices[0].message.content or ""
+            
+            # --- JSON Leak Protection (Self-Correction) ---
+            if answer_text.strip().startswith("{") and "tasks" in answer_text:
+                logger.warning("Internal Planning Leak detected. Re-triggering generation with strict natural language enforcement.")
+                answer_text = await self.llm.chat_completion(
+                    system_prompt=system_prompt + "\n\nCRITICAL: You are talking to a HUMAN. DO NOT output JSON. Write a clear, conversational response in Markdown.",
+                    user_prompt=f"Question: {question}\n\nKnowledge chunks:\n{context}",
+                    temperature=0.3 # Increase temperature slightly to break the loop
+                )
+
+            if not answer_text:
+                best = chunks[0].content.strip() if chunks else ""
+                answer_text = best[:900] or "I couldn't find this in your company's knowledge base."
+
             return Answer(answer_text=answer_text, sources=sources)
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")

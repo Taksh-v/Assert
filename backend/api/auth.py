@@ -1,8 +1,12 @@
 import logging
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse, HTMLResponse
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import get_settings
+from backend.core.database import get_db
+from backend.api.users import get_current_user
+from backend.models.user import User
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -12,47 +16,52 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 # ── Helper: Create or update connector with OAuth tokens ──────
 
-async def _upsert_oauth_connector(source_type: str, config: dict) -> str:
-    """Create or update a connector record with OAuth tokens. Returns connector ID."""
+async def _upsert_oauth_connector(source_type: str, workspace_id: str, config: dict) -> str:
+    """Create or update a connector record with OAuth tokens for a specific workspace."""
     from backend.core.database import async_session
     from backend.models.connector import Connector
+    from backend.models.workspace import Workspace
     from sqlalchemy import select
-    from backend.api.connectors import resolve_workspace_id
+    from backend.core.security import encrypt_config
 
     async with async_session() as session:
-        # Resolve default workspace
-        from backend.models.workspace import Workspace
+        # Resolve workspace_id to actual UUID (handles slug)
         stmt = select(Workspace).where(
-            (Workspace.id == "default-workspace") | (Workspace.slug == "default-workspace")
+            (Workspace.id == workspace_id) | (Workspace.slug == workspace_id)
         )
         result = await session.execute(stmt)
         workspace = result.scalars().first()
-
+        
         if not workspace:
-            workspace = Workspace(name="Default Workspace", slug="default-workspace")
-            session.add(workspace)
-            await session.flush()
-
-        workspace_id = workspace.id
+            if workspace_id == "default-workspace":
+                workspace = Workspace(name="Default Workspace", slug="default-workspace")
+                session.add(workspace)
+                await session.flush()
+            else:
+                raise Exception(f"Workspace {workspace_id} not found")
+        
+        resolved_w_id = workspace.id
 
         # Check if connector already exists for this workspace+type (dedup)
         stmt = select(Connector).where(
-            Connector.workspace_id == workspace_id,
+            Connector.workspace_id == resolved_w_id,
             Connector.type == source_type
         )
         result = await session.execute(stmt)
         existing = result.scalars().first()
 
+        encrypted_config = encrypt_config(config)
+
         if existing:
-            existing.config = config
+            existing.config = encrypted_config
             existing.status = "active"
             await session.commit()
             return existing.id
         else:
             new_connector = Connector(
-                workspace_id=workspace_id,
+                workspace_id=resolved_w_id,
                 type=source_type,
-                config=config,
+                config=encrypted_config,
                 status="active"
             )
             session.add(new_connector)
@@ -178,25 +187,28 @@ def _oauth_error_html(source_type: str, error: str) -> str:
 # ── Notion OAuth ──────────────────────────────────────
 
 @router.get("/notion/login")
-async def notion_login():
+async def notion_login(workspace_id: str):
     """Redirect to Notion's OAuth consent page."""
     if not settings.notion_client_id:
-        raise HTTPException(status_code=500, detail="Notion OAuth not configured — set notion_client_id in .env")
+        raise HTTPException(status_code=500, detail="Notion OAuth not configured")
         
     auth_url = (
         f"https://api.notion.com/v1/oauth/authorize"
         f"?owner=user&client_id={settings.notion_client_id}"
         f"&redirect_uri={settings.notion_redirect_uri}"
         f"&response_type=code"
+        f"&state={workspace_id}"
     )
     return RedirectResponse(auth_url)
 
 
 @router.get("/notion/callback")
-async def notion_callback(code: str, request: Request):
-    """Handle Notion's OAuth callback — exchange code for access_token and persist."""
+async def notion_callback(code: str, state: str, request: Request):
+    """Handle Notion's OAuth callback."""
     if not code:
         return HTMLResponse(_oauth_error_html("notion", "Missing authorization code"), status_code=400)
+    
+    workspace_id = state
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -232,7 +244,7 @@ async def notion_callback(code: str, request: Request):
             "oauth": True,
         }
         
-        connector_id = await _upsert_oauth_connector("notion", config)
+        connector_id = await _upsert_oauth_connector("notion", workspace_id, config)
         logger.info(f"Notion OAuth success: workspace={workspace_name}, connector_id={connector_id}")
         
         return HTMLResponse(_oauth_success_html("notion", connector_id))
@@ -241,10 +253,10 @@ async def notion_callback(code: str, request: Request):
 # ── Google OAuth ──────────────────────────────────────
 
 @router.get("/google/login")
-async def google_login():
+async def google_login(workspace_id: str):
     """Redirect to Google's OAuth consent page."""
     if not settings.google_client_id:
-        raise HTTPException(status_code=500, detail="Google OAuth not configured — set google_client_id and google_client_secret in .env")
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
         
     auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth"
@@ -252,16 +264,19 @@ async def google_login():
         f"&redirect_uri={settings.google_redirect_uri}"
         f"&response_type=code"
         f"&scope={settings.google_scopes}"
+        f"&state={workspace_id}"
         f"&access_type=offline&prompt=consent"
     )
     return RedirectResponse(auth_url)
 
 
 @router.get("/google/callback")
-async def google_callback(code: str):
-    """Handle Google's OAuth callback — exchange code for tokens and persist."""
+async def google_callback(code: str, state: str):
+    """Handle Google's OAuth callback."""
     if not code:
         return HTMLResponse(_oauth_error_html("google_drive", "Missing authorization code"), status_code=400)
+    
+    workspace_id = state
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -297,7 +312,7 @@ async def google_callback(code: str):
             "oauth": True,
         }
         
-        connector_id = await _upsert_oauth_connector("google_drive", config)
+        connector_id = await _upsert_oauth_connector("google_drive", workspace_id, config)
         logger.info(f"Google Drive OAuth success: connector_id={connector_id}")
         
         return HTMLResponse(_oauth_success_html("google_drive", connector_id))
@@ -306,10 +321,10 @@ async def google_callback(code: str):
 # ── Slack OAuth ──────────────────────────────────────
 
 @router.get("/slack/login")
-async def slack_login():
+async def slack_login(workspace_id: str):
     """Redirect to Slack's OAuth consent page."""
     if not settings.slack_client_id:
-        raise HTTPException(status_code=500, detail="Slack OAuth not configured — set slack_client_id in .env")
+        raise HTTPException(status_code=500, detail="Slack OAuth not configured")
     
     scopes = "channels:history,channels:read,users:read"
     auth_url = (
@@ -317,15 +332,24 @@ async def slack_login():
         f"?client_id={settings.slack_client_id}"
         f"&scope={scopes}"
         f"&redirect_uri={settings.slack_redirect_uri}"
+        f"&state={workspace_id}"
     )
     return RedirectResponse(auth_url)
 
 
 @router.get("/slack/callback")
-async def slack_callback(code: str):
+async def slack_callback(code: str, state: str):
     """Handle Slack's OAuth callback."""
     if not code:
         return HTMLResponse(_oauth_error_html("slack", "Missing authorization code"), status_code=400)
+
+    if not settings.slack_client_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="Slack OAuth is not configured. Please set SLACK_CLIENT_SECRET in .env",
+        )
+    
+    workspace_id = state
     
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -344,6 +368,11 @@ async def slack_callback(code: str):
         data = response.json()
         if not data.get("ok"):
             error = data.get("error", "Unknown Slack error")
+            if error == "bad_client_secret":
+                error = (
+                    "Slack rejected the client secret. Verify SLACK_CLIENT_SECRET in .env "
+                    "is the OAuth Client Secret from the Slack app, not the Signing Secret."
+                )
             return HTMLResponse(_oauth_error_html("slack", error), status_code=400)
         
         access_token = data.get("access_token")
@@ -355,25 +384,10 @@ async def slack_callback(code: str):
             "oauth": True,
         }
         
-        connector_id = await _upsert_oauth_connector("slack", config)
+        connector_id = await _upsert_oauth_connector("slack", workspace_id, config)
         logger.info(f"Slack OAuth success: team={team_name}, connector_id={connector_id}")
         
         return HTMLResponse(_oauth_success_html("slack", connector_id))
 
 
-# ── Direct Token Setup (for connectors using bot tokens from .env) ──
 
-@router.post("/slack/direct")
-async def slack_direct_connect():
-    """Connect Slack using the bot token from .env (no OAuth needed)."""
-    if not settings.slack_bot_token:
-        raise HTTPException(status_code=500, detail="Slack bot token not configured in .env")
-    
-    config = {
-        "access_token": settings.slack_bot_token,
-        "team_name": "Direct Bot Connection",
-        "direct_token": True,
-    }
-    
-    connector_id = await _upsert_oauth_connector("slack", config)
-    return {"status": "success", "connector_id": connector_id, "message": "Slack connected via bot token"}

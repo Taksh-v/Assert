@@ -38,6 +38,7 @@ settings = get_settings()
 
 
 from backend.bot.slack import AssestSlackBot
+from backend.workers.scheduler import BackgroundScheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,18 +51,31 @@ async def lifespan(app: FastAPI):
     await init_db()
     print("   ✅ Database tables created")
     
-    # 2. Start Slack Bot in background
-    try:
-        bot = AssestSlackBot()
-        asyncio.create_task(bot.start())
-        print("   🚀 Slack Bot started in background")
-    except Exception as e:
-        print(f"   ⚠️  Slack Bot startup error: {e}")
+    # 2. Start Slack Bot in background only when explicitly enabled.
+    slack_bot_task = None
+    if settings.enable_slack_bot:
+        try:
+            bot = AssestSlackBot()
+            slack_bot_task = asyncio.create_task(bot.start())
+            print("   🚀 Slack Bot started in background")
+        except Exception as e:
+            print(f"   ⚠️  Slack Bot startup error: {e}")
+    else:
+        print("   ℹ️  Slack Bot disabled (set ENABLE_SLACK_BOT=true to enable)")
+        
+    # 3. Start Background Auto-Scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.start()
+    print("   🚀 Auto-Scheduler started (Memory reflection & DLQ retries)")
 
     yield
 
     # Shutdown
     print("\n🧠 Assest Brain shutting down...")
+    if slack_bot_task:
+        slack_bot_task.cancel()
+        await asyncio.gather(slack_bot_task, return_exceptions=True)
+    await scheduler.stop()
     await close_db()
     print("   ✅ Database closed")
     print("⛔ Assest Brain shut down.")
@@ -98,13 +112,20 @@ from backend.api.connectors import router as connectors_router
 from backend.api.workspaces import router as workspaces_router
 from backend.api.auth import router as auth_router
 from backend.api.conversations import router as conversations_router
+from backend.api.users import router as users_router
+from backend.api.reasoning import router as reasoning_router
+from backend.api.tools import router as tools_router
 
 app.include_router(query_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(workspaces_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
 app.include_router(conversations_router)
+app.include_router(reasoning_router, prefix="/api")
+app.include_router(tools_router, prefix="/api")
+
 
 
 @app.get("/")

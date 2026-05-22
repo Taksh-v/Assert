@@ -2,8 +2,6 @@ import logging
 import json
 import uuid
 from typing import List, Dict, Any, Tuple
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
-from presidio_anonymizer import AnonymizerEngine
 
 logger = logging.getLogger(__name__)
 
@@ -13,28 +11,54 @@ class PIIScrubber:
     Blueprint Layer 11: Security & Redaction.
     Scrubs PII and maintains a vault for authorized re-identification.
     """
+    _shared_analyzer = None
+    _shared_anonymizer = None
+    _load_attempted = False
+    _custom_recognizers_added = False
 
     def __init__(self):
-        self.analyzer = AnalyzerEngine()
-        self.anonymizer = AnonymizerEngine()
-        self.vault: Dict[str, str] = {} # placeholder -> original
-        self._add_custom_recognizers()
+        if not PIIScrubber._load_attempted:
+            PIIScrubber._load_attempted = True
+            try:
+                from presidio_analyzer import AnalyzerEngine
+                from presidio_anonymizer import AnonymizerEngine
+                PIIScrubber._shared_analyzer = AnalyzerEngine()
+                PIIScrubber._shared_anonymizer = AnonymizerEngine()
+            except ImportError as e:
+                logger.warning(f"presidio not available, PII scrubbing disabled: {e}")
+            except Exception as e:
+                logger.warning(f"presidio initialization failed, PII scrubbing disabled: {e}")
+
+        self.analyzer = PIIScrubber._shared_analyzer
+        self.anonymizer = PIIScrubber._shared_anonymizer
+        self.vault: Dict[str, str] = {}  # placeholder -> original
+        if self.analyzer and not PIIScrubber._custom_recognizers_added:
+            self._add_custom_recognizers()
+            PIIScrubber._custom_recognizers_added = True
 
     def _add_custom_recognizers(self):
         """Add Indian ID recognizers."""
-        pan_pattern = Pattern(name="pan_pattern", regex=r"[A-Z]{5}[0-9]{4}[A-Z]{1}", score=0.8)
-        pan_recognizer = PatternRecognizer(supported_entity="PAN_CARD", patterns=[pan_pattern])
-        self.analyzer.registry.add_recognizer(pan_recognizer)
+        if not self.analyzer:
+            return
+        try:
+            from presidio_analyzer import Pattern, PatternRecognizer
+            pan_pattern = Pattern(name="pan_pattern", regex=r"[A-Z]{5}[0-9]{4}[A-Z]{1}", score=0.8)
+            pan_recognizer = PatternRecognizer(supported_entity="PAN_CARD", patterns=[pan_pattern])
+            self.analyzer.registry.add_recognizer(pan_recognizer)
 
-        aadhaar_pattern = Pattern(name="aadhaar_pattern", regex=r"\d{4}\s\d{4}\s\d{4}", score=0.8)
-        aadhaar_recognizer = PatternRecognizer(supported_entity="AADHAAR_CARD", patterns=[aadhaar_pattern])
-        self.analyzer.registry.add_recognizer(aadhaar_recognizer)
+            aadhaar_pattern = Pattern(name="aadhaar_pattern", regex=r"\d{4}\s\d{4}\s\d{4}", score=0.8)
+            aadhaar_recognizer = PatternRecognizer(supported_entity="AADHAAR_CARD", patterns=[aadhaar_pattern])
+            self.analyzer.registry.add_recognizer(aadhaar_recognizer)
+        except Exception as e:
+            logger.warning(f"Failed to add custom recognizers: {e}")
 
     def scrub(self, text: str) -> Tuple[str, List[str]]:
         """
         Scrub PII from text and return the scrubbed text and list of found entity types.
         """
         if not text:
+            return text, []
+        if not self.analyzer or not self.anonymizer:
             return text, []
 
         try:

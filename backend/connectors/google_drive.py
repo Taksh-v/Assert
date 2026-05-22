@@ -9,6 +9,8 @@ from backend.connectors.base import BaseConnector, RawDocument
 logger = logging.getLogger(__name__)
 
 
+from backend.connectors.registry import connector_registry
+
 class GoogleDriveConnector(BaseConnector):
     """
     Connector for Google Drive using the official API.
@@ -35,6 +37,8 @@ class GoogleDriveConnector(BaseConnector):
 
     async def connect(self, config: Dict[str, Any]) -> Any:
         """Connect using OAuth access_token or service account credentials."""
+
+
         from googleapiclient.discovery import build
         
         # Priority 1: OAuth access_token (from OAuth flow)
@@ -72,13 +76,20 @@ class GoogleDriveConnector(BaseConnector):
             "Please connect via OAuth or provide credentials in the connector config."
         )
 
-    async def fetch_documents(self, connection: Any, since: Optional[datetime] = None) -> Iterator[RawDocument]:
+    async def fetch_documents(
+        self,
+        connection: Any,
+        since: Optional[datetime] = None,
+        selected_ids: Optional[List[str]] = None,
+    ) -> Iterator[RawDocument]:
         """
         Fetch files modified since 'since'.
         """
-        from googleapiclient.http import MediaIoBaseDownload
-
         logger.info(f"Fetching Google Drive documents updated since {since}...")
+
+
+
+        from googleapiclient.http import MediaIoBaseDownload
         
         query = "mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf'"
         if since:
@@ -97,6 +108,8 @@ class GoogleDriveConnector(BaseConnector):
             
             for file in response.get('files', []):
                 file_id = file['id']
+                if selected_ids and file_id not in selected_ids:
+                    continue
                 mime_type = file['mimeType']
                 
                 try:
@@ -162,6 +175,8 @@ class GoogleDriveConnector(BaseConnector):
         """
         logger.info("Listing Google Drive resources for discovery...")
 
+
+
         resources = []
         next_page_token = None
         
@@ -209,3 +224,5 @@ class GoogleDriveConnector(BaseConnector):
         
         logger.info(f"Discovered {len(resources)} Google Drive resources")
         return resources
+
+connector_registry.register('google_drive', GoogleDriveConnector)

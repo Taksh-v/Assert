@@ -69,12 +69,13 @@ cp .env.example .env
 
 ### 4. Run the System
 ```bash
-# Start the backend
-./run_backend.sh
+./run.sh
+```
 
-# Start the frontend
-cd web
-npm run dev
+### 5. Repair Local Dev Schema
+If you already have a local SQLite database and pulled schema changes, run the repair helper once to rebuild the legacy `failed_ingestions.retry_count` column and refresh additive columns:
+```bash
+python3 scripts/repair_dev_schema.py
 ```
 
 ---

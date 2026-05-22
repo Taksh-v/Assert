@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { Bot, User, Loader2, Send, Paperclip } from "lucide-react";
+import { apiFetch, getActiveWorkspace } from "@/lib/auth";
 
 interface Message {
   id: string;
@@ -22,7 +23,7 @@ export default function ChatIdPage() {
 
   const fetchConversation = useCallback(async () => {
     try {
-      const response = await fetch(`http://localhost:8000/api/conversations/${id}`);
+      const response = await apiFetch(`/api/conversations/${id}`);
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages);
@@ -52,15 +53,14 @@ export default function ChatIdPage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/query", {
+      const activeWs = getActiveWorkspace();
+      const workspaceId = activeWs?.id || "default-workspace";
+
+      const response = await apiFetch("/api/query", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": "assest_secret_key"
-        },
         body: JSON.stringify({
           question: userQuestion,
-          workspace_id: "default-workspace",
+          workspace_id: workspaceId,
           conversation_id: id
         })
       });

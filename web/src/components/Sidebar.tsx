@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { MessageSquare, Link2, Settings, Shield, Brain } from "lucide-react";
@@ -30,10 +31,11 @@ export default function Sidebar() {
             <Link
               key={item.name}
               href={item.href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all ${isActive
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                isActive
                   ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20"
                   : "text-muted hover:bg-accent hover:text-foreground"
-                }`}
+              }`}
             >
               <Icon className="h-5 w-5" />
               {item.name}
@@ -49,7 +51,7 @@ export default function Sidebar() {
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-medium">John Doe</span>
-            <span className="text-xs text-muted">test-org</span>
+            <span className="text-xs text-muted">default-workspace</span>
           </div>
         </div>
       </div>

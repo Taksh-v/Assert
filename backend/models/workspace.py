@@ -18,6 +18,7 @@ class Workspace(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
+    members = relationship("WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan")
     connectors = relationship("Connector", back_populates="workspace", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="workspace", cascade="all, delete-orphan")
     query_logs = relationship("QueryLog", back_populates="workspace", cascade="all, delete-orphan")

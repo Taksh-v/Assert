@@ -104,7 +104,7 @@ class SearchAgent:
             
             for entity in entities:
                 # Get related entities (2-hop for richer context)
-                related = self.graph_store.search_related_entities(entity)
+                related = self.graph_store.get_context(entity).get("relationships", [])
                 if related:
                     graph_context[entity] = related
             

@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Dict
 import hashlib
 import os
 import numpy as np
@@ -49,8 +49,7 @@ class Embedder:
         all_embeddings = []
         
         for i in range(0, len(texts), BATCH_SIZE):
-            batch = [str(t) for t in texts[i:i+BATCH_SIZE] if t]
-            if not batch: continue
+            batch = [str(t) if t else "" for t in texts[i:i+BATCH_SIZE]]
             
             if self.provider == "local":
                 try:

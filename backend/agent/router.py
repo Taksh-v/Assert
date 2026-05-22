@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Literal, Optional
 from pydantic import BaseModel
-from groq import Groq
 from backend.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -14,14 +13,15 @@ class RoutingDecision(BaseModel):
     reasoning: str
 
 
+from backend.core.llm_client import LLMClient
+
 class QueryRouter:
     """
-    Routes incoming queries to the appropriate engine.
+    Routes incoming queries to the appropriate engine using the local brain proxy.
     """
 
     def __init__(self):
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        self.model = "llama3-70b-8192"
+        self.llm = LLMClient(model_type="fast")
 
     async def route(self, query: str) -> RoutingDecision:
         """
@@ -29,32 +29,35 @@ class QueryRouter:
         """
         prompt = f"""
         You are the Routing Engine for Assest, an Enterprise AI.
-        Your job is to decide if a query needs:
+        Decide if a query needs:
         1. 'knowledge_retrieval': Searching internal docs (Notion, Drive, etc).
-        2. 'tool_call': Performing an action or fetching real-time data from an API (GitHub, Jira).
+        2. 'tool_call': Fetching real-time data from an API (GitHub, Jira).
         3. 'general_chat': Greeting or general conversation.
 
         Available Tools:
-        - github: For repo issues, commits, or PRs.
-        - jira: For project tickets and sprints.
-        
+        - github: Repo issues, commits, PRs.
+        - jira: Project tickets, sprints.
+
         Query: "{query}"
 
-        Return JSON only:
+        Return ONLY valid JSON:
         {{
             "intent": "knowledge_retrieval" | "tool_call" | "general_chat",
             "tool_name": "github" | "jira" | null,
             "reasoning": "brief explanation"
         }}
         """
-        
+
         try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[{{"role": "user", "content": prompt}}],
-                model=self.model,
-                response_format={{"type": "json_object"}}
-            )
-            return RoutingDecision.model_validate_json(chat_completion.choices[0].message.content)
+            res = await self.llm.chat_completion("You are a specialized enterprise query router.", prompt)
+            # Basic JSON extraction
+            if "```json" in res:
+                res = res.split("```json")[1].split("```")[0].strip()
+            elif "```" in res:
+                res = res.split("```")[1].split("```")[0].strip()
+
+            return RoutingDecision.model_validate_json(res)
         except Exception as e:
             logger.error(f"Routing failed: {e}")
             return RoutingDecision(intent="knowledge_retrieval", reasoning="Fallback due to error")
+

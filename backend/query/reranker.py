@@ -1,7 +1,6 @@
 import logging
 import os
 from typing import List, Dict, Any
-from sentence_transformers import CrossEncoder
 from backend.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,7 @@ class CrossEncoderReranker:
 
             try:
                 logger.info(f"Loading Cross-Encoder model: {self.model_name}...")
+                from sentence_transformers import CrossEncoder  # lazy import
                 self.model = CrossEncoder(self.model_name, local_files_only=True)
             except Exception as e:
                 logger.warning(f"Cross-Encoder unavailable, using existing rank scores: {e}")

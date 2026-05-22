@@ -22,7 +22,7 @@ if settings.database_url.startswith("sqlite"):
 
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.is_development,
+    echo=settings.sql_echo,
     connect_args=_connect_args,
 )
 
@@ -108,11 +108,34 @@ async def _ensure_sqlite_dev_columns(conn):
             "last_sync_cursor": "VARCHAR",
             "error_log": "JSON",
         },
+        "connector_sync_states": {
+            "last_sync_token": "VARCHAR",
+            "last_stats": "JSON",
+            "is_running": "BOOLEAN DEFAULT 0",
+            "lock_owner": "VARCHAR",
+            "lock_acquired_at": "DATETIME",
+            "lock_expires_at": "DATETIME",
+            "last_error": "TEXT",
+        },
+        "failed_ingestions": {
+            "attempts": "JSON",
+            "retry_count": "INTEGER DEFAULT 0",
+            "status": "VARCHAR DEFAULT 'pending'",
+        },
         "query_logs": {
             "conversation_id": "VARCHAR",
             "feedback": "VARCHAR DEFAULT 'NULL'",
             "response_time_ms": "INTEGER",
         },
+        "knowledge_objects": {
+            "title": "VARCHAR",
+            "type": "VARCHAR",
+            "summary": "TEXT",
+            "entities": "JSON",
+            "topics": "JSON",
+            "source_document_ids": "JSON",
+            "relationships": "JSON",
+        }
     }
 
     for table_name, columns in table_columns.items():

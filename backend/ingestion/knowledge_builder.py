@@ -20,64 +20,63 @@ class KnowledgeBuilder:
 
     async def discover_and_build(self, workspace_id: str):
         """
-        Scan recently ingested documents and discover concepts to promote to Knowledge Objects.
+        Layer 7: High-Fidelity Synthesis.
+        Enriches existing KnowledgeObjects by synthesizing content from multiple source documents.
         """
-        logger.info(f"Starting Knowledge Object Discovery for workspace: {workspace_id}")
+        logger.info(f"Starting Knowledge Object Synthesis for workspace: {workspace_id}")
         
         async with async_session() as session:
-            # 1. Fetch recent documents and their metadata
-            stmt = select(Document).where(Document.workspace_id == workspace_id).limit(50)
+            # 1. Fetch KnowledgeObjects that have multiple sources but no deep summary
+            stmt = select(KnowledgeObject).where(
+                KnowledgeObject.workspace_id == workspace_id
+            )
             result = await session.execute(stmt)
-            docs = result.scalars().all()
+            k_objects = result.scalars().all()
             
-            if not docs:
-                return
-            
-            # 2. Group by Topic (Simple heuristic for now)
-            topic_map = {}
-            for doc in docs:
-                # Assuming metadata contains 'topics' from Layer 5
-                # We'll use a more advanced entity-matching logic in production
-                topics = ["General"] # Fallback
+            for obj in k_objects:
+                source_ids = obj.source_document_ids or []
+                if len(source_ids) < 2:
+                    continue # Only synthesize for cross-linked concepts
                 
-                # Try to find topics from any related chunks or metadata (simplifying for demo)
-                if doc.title:
-                    topics = [doc.title.split(":")[0].strip()]
+                # Check if we already have a long, professional summary (simplified check)
+                if obj.summary and len(obj.summary) > 200:
+                    continue
+
+                logger.info(f"Synthesizing deep knowledge for: {obj.title} (Sources: {len(source_ids)})")
                 
-                for topic in topics:
-                    if topic not in topic_map:
-                        topic_map[topic] = []
-                    topic_map[topic].append(doc)
-            
-            # 3. For each group, synthesize a Knowledge Object
-            for topic, group_docs in topic_map.items():
-                if len(group_docs) < 2:
-                    continue # Only build objects for cross-linked knowledge
+                # 2. Fetch full text for source documents
+                doc_stmt = select(Document).where(Document.id.in_(source_ids))
+                doc_res = await session.execute(doc_stmt)
+                docs = doc_res.scalars().all()
                 
-                logger.info(f"Synthesizing Knowledge Object for concept: {topic}")
+                # Build context (using titles and snippets)
+                context_parts = []
+                for d in docs:
+                    context_parts.append(f"--- Document: {d.title} ---\n{d.summary or 'No summary available.'}")
                 
-                # Build context for LLM
-                context = "\n".join([f"- {d.title} (Source: {d.source_url})" for d in group_docs])
+                context = "\n\n".join(context_parts)
                 
                 prompt = f"""
-                You are a Knowledge Architect. Analyze these related documents and synthesize them into a single 'Knowledge Object'.
+                You are a Senior Knowledge Engineer. Your task is to synthesize a high-fidelity 'Knowledge Object' from multiple source documents.
                 
-                Concept: {topic}
-                Documents:
+                Title: {obj.title}
+                Category: {obj.type}
+                
+                Source Summaries:
                 {context}
                 
-                Identify:
-                1. Type: (workflow, process, policy, incident, or project)
-                2. Unified Title: A professional name for this concept.
-                3. Executive Summary: A 2-3 sentence summary of the combined knowledge.
-                4. Key Entities: Specific people, tools, or products involved.
+                Task:
+                1. Write a professional, executive-level synthesis (2-3 paragraphs).
+                2. Identify key organizational relationships (who owns this, which teams use it).
+                3. List technical dependencies or business impact.
+                4. Refine the 'type' if necessary (Workflow, System, Project, Team, API).
                 
                 Output ONLY valid JSON:
                 {{
-                  "type": "...",
-                  "title": "...",
-                  "summary": "...",
-                  "entities": ["...", "..."]
+                  "refined_type": "...",
+                  "synthesis": "...",
+                  "relationships": ["...", "..."],
+                  "dependencies": ["...", "..."]
                 }}
                 """
                 
@@ -85,20 +84,17 @@ class KnowledgeBuilder:
                     res_json = await self.llm.chat_completion(prompt, "")
                     data = json.loads(res_json)
                     
-                    # Create or update Knowledge Object
-                    new_obj = KnowledgeObject(
-                        workspace_id=workspace_id,
-                        type=data.get("type", "concept"),
-                        title=data.get("title", topic),
-                        summary=data.get("summary", ""),
-                        entities=data.get("entities", []),
-                        source_document_ids=[d.id for d in group_docs],
-                        topics=[topic]
-                    )
+                    # Update Knowledge Object
+                    obj.summary = data.get("synthesis", obj.summary)
+                    obj.type = data.get("refined_type", obj.type)
                     
-                    session.add(new_obj)
+                    # Store extra metadata in a structured field if available (using entities/topics for now)
+                    obj.entities = list(set((obj.entities or []) + data.get("relationships", []) + data.get("dependencies", [])))
+                    
+                    obj.updated_at = datetime.utcnow()
                     await session.commit()
-                    logger.info(f"Successfully built Knowledge Object: {new_obj.title}")
+                    logger.info(f"Successfully synthesized knowledge for: {obj.title}")
                     
                 except Exception as e:
-                    logger.error(f"Failed to synthesize Knowledge Object for {topic}: {e}")
+                    logger.error(f"Failed synthesis for {obj.title}: {e}")
+                    await session.rollback()

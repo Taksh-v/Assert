@@ -7,90 +7,102 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+import logging
+import json
+from typing import List, Dict, Any
+from backend.core.config import get_settings
+from backend.core.llm_client import LLMClient
+
+settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
 class EntityExtractor:
     """
-    Extracts entities and relationships from text using LLMs.
-    Uses lazy initialization for the Groq client to avoid SDK compatibility issues.
+    Extracts entities and relationships from text using the unified LLMClient.
+    Uses the 'smart' model path for high-fidelity extraction.
     """
 
     def __init__(self):
-        self.api_key = settings.groq_api_key
-        self.model = settings.groq_model
-        self._client = None
-        self._client_init_failed = False
-
-    @property
-    def client(self):
-        """Lazy-init Groq client — avoids the 'proxies' TypeError on module load."""
-        if self._client is not None:
-            return self._client
-        if self._client_init_failed or not self.api_key:
-            return None
-        try:
-            from groq import Groq
-            self._client = Groq(api_key=self.api_key)
-            return self._client
-        except TypeError as e:
-            # Groq SDK versions > 0.10 removed 'proxies' param from httpx
-            logger.warning(f"Groq client init failed (SDK version mismatch): {e}")
-            self._client_init_failed = True
-            return None
-        except Exception as e:
-            logger.warning(f"Groq client init failed: {e}")
-            self._client_init_failed = True
-            return None
+        self.llm = LLMClient(model_type="smart")
 
     async def extract_semantic_metadata(self, text: str) -> Dict[str, Any]:
         """
         Layer 5: Semantic Metadata Enrichment.
-        Extracts entities, topics, keywords, and a summary in a single pass.
+        Extracts categorized entities, topics, keywords, and a summary.
+        Categories: Organizational, Technical, Business, Operational.
         """
-        if not self.client:
-            logger.warning("Groq API client not available, skipping enrichment")
-            return {"entities": [], "topics": [], "keywords": [], "summary": ""}
-
         if not text or len(text) < 50:
             return {"entities": [], "topics": [], "keywords": [], "summary": ""}
 
         prompt = f"""
         Analyze the following text and extract semantic metadata for an enterprise knowledge base.
         
-        Focus on:
-        1. Entities: People, Projects, Technologies, Departments.
-        2. Topics: The main subjects (e.g., Security, Onboarding, API Design).
-        3. Keywords: 3-5 essential search terms.
-        4. Summary: A one-sentence summary of the content.
-        
+        ### 1. Categorized Entities
+        Extract key entities and categorize them into:
+        - ORGANIZATIONAL: People, Teams, Departments, Managers.
+        - TECHNICAL: APIs, Repositories, Databases, Services, Tools.
+        - BUSINESS: Customers, Products, Metrics, Contracts.
+        - OPERATIONAL: Incidents, Workflows, SOPs, Meetings, Tasks.
+
+        ### 2. Relationships
+        For each entity, identify its primary relationship to the context (e.g., 'owns', 'depends_on', 'caused', 'part_of').
+
+        ### 3. Confidence
+        Assign a confidence score (0.0 to 1.0) for each extraction.
+
         Output ONLY valid JSON in this format:
         {{
-          "entities": [{"name": "...", "type": "...", "relationship": "..."}],
-          "topics": ["...", "..."],
-          "keywords": ["...", "..."],
-          "summary": "..."
+          "entities": [
+            {{
+              "name": "Entity Name", 
+              "category": "ORGANIZATIONAL|TECHNICAL|BUSINESS|OPERATIONAL",
+              "type": "Specific Type (e.g. Employee, API, Incident)",
+              "relationship": "relationship_type",
+              "confidence": 0.95
+            }}
+          ],
+          "events": [
+            {{
+              "title": "Event Title",
+              "type": "deployment|incident|policy|milestone",
+              "timestamp": "ISO-8601 or approximate",
+              "description": "Brief context",
+              "related_entities": ["names of entities involved"]
+            }}
+          ],
+          "topics": ["main subject 1", "main subject 2"],
+          "keywords": ["term1", "term2"],
+          "summary": "One-sentence summary."
         }}
         
         Text:
-        {text[:3000]}
+        {text[:4000]}
         
         JSON Output:
         """
 
         try:
-            response = self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a specialized metadata enrichment agent. Output ONLY valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                model=self.model,
-                temperature=0,
-                response_format={"type": "json_object"}
+            content = await self.llm.chat_completion(
+                system_prompt="You are a specialized enterprise knowledge architect. Output ONLY valid JSON.",
+                user_prompt=prompt,
+                temperature=0
             )
             
-            content = response.choices[0].message.content
+            if not content:
+                return {"entities": [], "topics": [], "keywords": [], "summary": ""}
+                
+            # Clean possible markdown noise
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+                
             data = json.loads(content)
             
             return {
                 "entities": data.get("entities", []),
+                "events": data.get("events", []),
                 "topics": data.get("topics", []),
                 "keywords": data.get("keywords", []),
                 "summary": data.get("summary", "")

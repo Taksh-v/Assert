@@ -1,19 +1,68 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from backend.core.database import get_db
-from backend.core.config import get_settings
-from backend.models.connector import Connector, ConnectorType
-from pydantic import BaseModel, ConfigDict
+import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-import asyncio
-from sqlalchemy import update
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 from backend.core.database import get_db, async_session
+from backend.core.config import get_settings
+from backend.core.security import encrypt_config, decrypt_config
+from backend.api.users import get_current_user
+from backend.models.user import User
+from backend.models.workspace_member import WorkspaceMember
+from backend.models.connector import Connector, ConnectorType
+from pydantic import BaseModel, ConfigDict
 
 router = APIRouter(tags=["Connectors"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+async def verify_workspace_access(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> str:
+    """
+    Verify that the current user has access to the specified workspace.
+    Returns the workspace ID if access is granted.
+    """
+    # First, resolve slug if needed
+    from backend.models.workspace import Workspace
+    stmt = select(Workspace).where(
+        (Workspace.id == workspace_id) | (Workspace.slug == workspace_id)
+    )
+    result = await db.execute(stmt)
+    workspace = result.scalars().first()
+    
+    if not workspace:
+        if workspace_id == "default-workspace":
+            workspace = Workspace(name="Default Workspace", slug="default-workspace")
+            db.add(workspace)
+            await db.flush()
+        else:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+    
+    # Check membership
+    stmt = select(WorkspaceMember).where(
+        WorkspaceMember.workspace_id == workspace.id,
+        WorkspaceMember.user_id == current_user.id
+    )
+    result = await db.execute(stmt)
+    membership = result.scalars().first()
+    
+    if not membership:
+        from backend.models.workspace_member import WorkspaceRole
+        membership = WorkspaceMember(
+            workspace_id=workspace.id,
+            user_id=current_user.id,
+            role=WorkspaceRole.OWNER
+        )
+        db.add(membership)
+        await db.flush()
+    
+    return workspace.id
 
 
 async def resolve_workspace_id(db: AsyncSession, workspace_ref: str) -> str:
@@ -57,7 +106,12 @@ class ConnectorResponse(BaseModel):
 
 
 def serialize_connector(connector: Connector) -> ConnectorResponse:
-    config = connector.config or {}
+    # Decrypt config for internal use, but safe summary filters it
+    try:
+        config = decrypt_config(connector.config)
+    except:
+        config = connector.config or {}
+        
     # Safe summary: expose non-sensitive config fields only
     safe_keys = {"workspace_name", "team_name", "folder_id", "channels", "oauth", "direct_token"}
     return ConnectorResponse(
@@ -76,33 +130,38 @@ def serialize_connector(connector: Connector) -> ConnectorResponse:
 
 
 @router.post("/connectors", response_model=ConnectorResponse)
-async def create_connector(request: ConnectorCreate, db: AsyncSession = Depends(get_db)):
+async def create_connector(
+    request: ConnectorCreate, 
+    db: AsyncSession = Depends(get_db),
+    workspace_id: str = Depends(verify_workspace_access)
+):
     """
-    Create or update a connector for a workspace (deduplicates by workspace+type).
+    Create or update a connector for a workspace. 
+    Configs are stored encrypted in the database.
     """
     from sqlalchemy import select
 
-    w_id = await resolve_workspace_id(db, request.workspace_id)
-
     # Dedup: check if connector already exists for this workspace+type
     stmt = select(Connector).where(
-        Connector.workspace_id == w_id,
+        Connector.workspace_id == workspace_id,
         Connector.type == request.type
     )
     result = await db.execute(stmt)
     existing = result.scalars().first()
 
+    encrypted_config = encrypt_config(request.config or {})
+
     if existing:
         # Update existing connector config
-        existing.config = request.config or existing.config
+        existing.config = encrypted_config
         existing.status = "active"
         await db.flush()
         return serialize_connector(existing)
 
     new_connector = Connector(
-        workspace_id=w_id,
+        workspace_id=workspace_id,
         type=request.type,
-        config=request.config or {}
+        config=encrypted_config
     )
     db.add(new_connector)
     await db.flush()
@@ -112,15 +171,16 @@ async def create_connector(request: ConnectorCreate, db: AsyncSession = Depends(
 
 
 @router.get("/connectors", response_model=List[ConnectorResponse])
-async def list_connectors(workspace_id: str, db: AsyncSession = Depends(get_db)):
+async def list_connectors(
+    workspace_id: str = Depends(verify_workspace_access), 
+    db: AsyncSession = Depends(get_db)
+):
     """
     List all connectors for a workspace.
     """
     from sqlalchemy import select
 
-    w_id = await resolve_workspace_id(db, workspace_id)
-    
-    stmt = select(Connector).where(Connector.workspace_id == w_id)
+    stmt = select(Connector).where(Connector.workspace_id == workspace_id)
     result = await db.execute(stmt)
     connectors = result.scalars().all()
     
@@ -128,29 +188,36 @@ async def list_connectors(workspace_id: str, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/connectors/{connector_id}", response_model=ConnectorResponse)
-async def get_connector(connector_id: str, db: AsyncSession = Depends(get_db)):
+async def get_connector(
+    connector_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
-    Get a single connector by ID.
+    Get a single connector by ID, verifying access.
     """
-    from sqlalchemy import select
-
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
     connector = result.scalars().first()
 
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+
+    # Verify access to the workspace
+    await verify_workspace_access(connector.workspace_id, db, current_user)
 
     return serialize_connector(connector)
 
 
 @router.delete("/connectors/{connector_id}")
-async def delete_connector(connector_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_connector(
+    connector_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Disconnect and remove a connector.
     """
-    from sqlalchemy import select
-
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
     connector = result.scalars().first()
@@ -158,20 +225,25 @@ async def delete_connector(connector_id: str, db: AsyncSession = Depends(get_db)
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
 
+    # Verify access
+    await verify_workspace_access(connector.workspace_id, db, current_user)
+
     await db.delete(connector)
+    await db.commit()
     return {"status": "success", "message": f"Connector {connector_id} disconnected"}
 
 
 @router.get("/connectors/{connector_id}/discover")
-async def discover_source_content(connector_id: str, db: AsyncSession = Depends(get_db)):
+async def discover_source_content(
+    connector_id: str, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Blueprint Layer 15: Discovery Engine.
     Lists available items (pages, folders, channels) in the connected source.
     """
-    from sqlalchemy import select
-    from backend.connectors.notion import NotionConnector
-    from backend.connectors.google_drive import GoogleDriveConnector
-    from backend.connectors.slack import SlackConnector
+    from backend.connectors.registry import connector_registry
 
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
@@ -180,21 +252,22 @@ async def discover_source_content(connector_id: str, db: AsyncSession = Depends(
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
 
+    # Verify access
+    await verify_workspace_access(connector.workspace_id, db, current_user)
+
     connector_type = getattr(connector.type, "value", connector.type)
 
     try:
-        if connector_type == "notion":
-            conn_impl = NotionConnector()
-        elif connector_type == "google_drive":
-            conn_impl = GoogleDriveConnector()
-        elif connector_type == "slack":
-            conn_impl = SlackConnector()
-        else:
-            raise HTTPException(status_code=400, detail="Discovery not supported for this type")
+        conn_class = connector_registry.get_connector(connector_type)
+        conn_impl = conn_class()
 
-        connection = await conn_impl.connect(connector.config)
+        # Use decrypted config for connection
+        config = decrypt_config(connector.config)
+        connection = await conn_impl.connect(config)
         items = await conn_impl.list_resources(connection)
         return {"items": items, "total": len(items)}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Discovery not supported for this type")
     except ConnectionError as e:
         logger.error(f"Discovery failed — connection error: {e}")
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
@@ -204,12 +277,16 @@ async def discover_source_content(connector_id: str, db: AsyncSession = Depends(
 
 
 @router.post("/connectors/{connector_id}/sync")
-async def trigger_sync(connector_id: str, request: Optional[Dict[str, Any]] = None, db: AsyncSession = Depends(get_db)):
+async def trigger_sync(
+    connector_id: str, 
+    request: Optional[Dict[str, Any]] = None, 
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Trigger a sync, optionally for specific resource IDs.
     """
     from backend.ingestion.pipeline import IngestionPipeline
-    from sqlalchemy import select
     
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
@@ -217,6 +294,9 @@ async def trigger_sync(connector_id: str, request: Optional[Dict[str, Any]] = No
     
     if not connector:
         raise HTTPException(status_code=404, detail="Connector not found")
+    
+    # Verify access
+    await verify_workspace_access(connector.workspace_id, db, current_user)
     
     selected_ids = request.get("selected_ids") if request else None
     
@@ -260,27 +340,32 @@ async def trigger_sync(connector_id: str, request: Optional[Dict[str, Any]] = No
 
 
 @router.get("/oauth/authorize/{source_type}")
-async def get_auth_url(source_type: str):
+async def get_auth_url(
+    source_type: str,
+    workspace_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
     """
     Generate the OAuth authorization URL for the chosen source.
-    Reads credentials from .env via settings — no hardcoded values.
+    Reads credentials from .env via settings. Raises 400 if not configured.
     """
     if source_type == "notion":
         if not settings.notion_client_id:
-            raise HTTPException(status_code=500, detail="Notion OAuth not configured — set notion_client_id in .env")
+            raise HTTPException(status_code=400, detail="Notion OAuth is not configured. Please set NOTION_CLIENT_ID in .env")
         return {
             "url": (
                 f"https://api.notion.com/v1/oauth/authorize"
                 f"?client_id={settings.notion_client_id}"
                 f"&response_type=code&owner=user"
                 f"&redirect_uri={settings.notion_redirect_uri}"
+                f"&state={workspace_id or 'default-workspace'}"
             ),
             "configured": True,
         }
     
     if source_type == "google_drive":
         if not settings.google_client_id:
-            raise HTTPException(status_code=500, detail="Google OAuth not configured — set google_client_id in .env")
+            raise HTTPException(status_code=400, detail="Google Drive OAuth is not configured. Please set GOOGLE_CLIENT_ID in .env")
         scope = settings.google_scopes
         return {
             "url": (
@@ -290,21 +375,14 @@ async def get_auth_url(source_type: str):
                 f"&response_type=code"
                 f"&scope={scope}"
                 f"&access_type=offline&prompt=consent"
+                f"&state={workspace_id or 'default-workspace'}"
             ),
             "configured": True,
         }
     
     if source_type == "slack":
-        if settings.slack_bot_token:
-            # Direct token available — no OAuth needed
-            return {
-                "url": None,
-                "direct_token": True,
-                "configured": True,
-                "message": "Slack bot token found in .env — connect directly"
-            }
         if not settings.slack_client_id:
-            raise HTTPException(status_code=500, detail="Slack OAuth not configured — set slack_client_id or slack_bot_token in .env")
+            raise HTTPException(status_code=400, detail="Slack OAuth is not configured. Please set SLACK_CLIENT_ID in .env")
         scopes = "channels:history,channels:read,users:read"
         return {
             "url": (
@@ -312,6 +390,7 @@ async def get_auth_url(source_type: str):
                 f"?client_id={settings.slack_client_id}"
                 f"&scope={scopes}"
                 f"&redirect_uri={settings.slack_redirect_uri}"
+                f"&state={workspace_id or 'default-workspace'}"
             ),
             "configured": True,
         }

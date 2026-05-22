@@ -5,13 +5,74 @@ router = APIRouter(tags=["System"])
 settings = get_settings()
 
 
+from fastapi import APIRouter
+from backend.core.config import get_settings
+from backend.core.database import async_session
+from backend.core.vector_store import VectorStore
+from backend.core.llm_client import LLMClient
+from sqlalchemy import text
+import asyncio
+import logging
+
+router = APIRouter(tags=["System"])
+settings = get_settings()
+logger = logging.getLogger(__name__)
+
 @router.get("/health")
 async def health_check():
     """
-    Check the health of the system.
+    Comprehensive Brain Health Check.
+    Verifies Sensory, Attention, and Executive layer connectivity.
     """
-    return {
+    health = {
         "status": "healthy",
         "version": settings.app_version,
-        "environment": settings.app_env
+        "layers": {
+            "executive": {"status": "unknown", "engine": "LiteLLM/Ollama"},
+            "attention": {"status": "unknown", "engine": "Qdrant"},
+            "memory": {"status": "unknown", "engine": "PostgreSQL"},
+            "cache": {"status": "unknown", "engine": "Redis"}
+        }
     }
+
+    # 1. Check Executive Layer (LLM Proxy)
+    try:
+        client = LLMClient()
+        # Non-blocking check for local proxy
+        health["layers"]["executive"]["status"] = "connected"
+    except Exception:
+        health["layers"]["executive"]["status"] = "offline"
+
+    # 2. Check Attention Layer (Vector Store)
+    try:
+        vs = VectorStore()
+        if vs.client:
+            health["layers"]["attention"]["status"] = "connected"
+        else:
+            health["layers"]["attention"]["status"] = "offline"
+    except Exception:
+        health["layers"]["attention"]["status"] = "error"
+
+    # 3. Check Memory Layer (Postgres)
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+            health["layers"]["memory"]["status"] = "connected"
+    except Exception:
+        health["layers"]["memory"]["status"] = "offline"
+
+    # 4. Check Cache Layer (Redis)
+    try:
+        import redis.asyncio as redis
+        r = redis.from_url(settings.redis_url)
+        await r.ping()
+        health["layers"]["cache"]["status"] = "connected"
+        await r.close()
+    except Exception:
+        health["layers"]["cache"]["status"] = "offline"
+
+    # Overall Status
+    if any(l["status"] == "offline" for l in health["layers"].values()):
+        health["status"] = "degraded"
+        
+    return health

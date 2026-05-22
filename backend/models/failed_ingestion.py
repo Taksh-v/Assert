@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, JSON, Text
+from sqlalchemy import Column, String, DateTime, JSON, Text, Integer
 from backend.core.database import Base
 import uuid
 
@@ -22,8 +22,8 @@ class FailedIngestion(Base):
     # Stores the raw data if available for replay
     raw_payload = Column(JSON, nullable=True)
     
-    attempts = Column(JSON, default=[]) # List of timestamps and errors
-    retry_count = Column(JSON, default=0)
+    attempts = Column(JSON, default=list) # List of timestamps and errors
+    retry_count = Column(Integer, default=0)
     
     status = Column(String, default="pending") # pending, retrying, failed, resolved
     

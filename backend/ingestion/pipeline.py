@@ -1,30 +1,35 @@
 import logging
+import asyncio
+import uuid
 from datetime import datetime, timedelta
-from typing import Optional, List
-from backend.models.connector import Connector
+from typing import Optional, List, Any
+from sqlalchemy import select, delete, update
+
+from backend.models.connector import Connector, ConnectorStatus
 from backend.models.document import Document
+from backend.models.knowledge_object import KnowledgeObject
+from backend.models.knowledge_event import KnowledgeEvent
+from backend.models.chunk import Chunk as DBChunk
+from backend.models.connector_sync_state import ConnectorSyncState
+from backend.core.security import decrypt_config
+
 from backend.connectors.notion import NotionConnector
 from backend.connectors.google_drive import GoogleDriveConnector
 from backend.connectors.slack import SlackConnector
+
 from backend.ingestion.pii_scrubber import PIIScrubber
 from backend.ingestion.normalizer import DocumentNormalizer
 from backend.ingestion.chunker import DocumentChunker
 from backend.ingestion.embedder import Embedder
-from backend.core.vector_store import VectorStore
-from backend.core.database import async_session, upsert_idempotent
-from sqlalchemy import select, delete
-
 from backend.ingestion.extractor import EntityExtractor
 from backend.ingestion.classifier import DocumentClassifier
+from backend.ingestion.document_parser import HybridParser
 from backend.graph.graph_store import GraphStore
-from backend.core.metrics import INGESTION_LATENCY, CHUNK_COUNT
-from qdrant_client.http import models
-from backend.models.chunk import Chunk as DBChunk
-import time
-import uuid
+from backend.graph.entity_resolver import EntityResolver
+from backend.core.vector_store import VectorStore
+from backend.core.database import async_session, upsert_idempotent
 
 logger = logging.getLogger(__name__)
-
 
 class IngestionPipeline:
     """
@@ -33,6 +38,7 @@ class IngestionPipeline:
 
     def __init__(self):
         self.normalizer = DocumentNormalizer()
+        self.parser = HybridParser()
         self.scrubber = PIIScrubber()
         self.embedder = Embedder()
         self.vector_store = VectorStore()
@@ -49,345 +55,405 @@ class IngestionPipeline:
             logger.warning(f"GraphStore init failed (non-fatal): {e}")
             self.graph_store = None
 
-    async def run_reconciliation(self, connector_id: str):
+    def _matches_selected_id(self, raw_doc: Any, selected_ids: Optional[List[str]]) -> bool:
+        """Safety filter for connectors that cannot pre-filter selected resources."""
+        if not selected_ids:
+            return True
+
+        selected = {str(item) for item in selected_ids if item}
+        source_id = str(getattr(raw_doc, "source_id", ""))
+        metadata = getattr(raw_doc, "metadata", {}) or {}
+        channel_id = str(metadata.get("channel_id", ""))
+
+        candidates = {source_id}
+        if channel_id:
+            candidates.add(channel_id)
+            candidates.add(f"slack-channel-{channel_id}")
+
+        return bool(selected.intersection(candidates))
+
+    async def _process_document(self, raw_doc: Any, workspace_id: str, connector_id: Optional[str] = None):
         """
-        Blueprint Layer 14: Sync Reconciliation.
-        Detects deleted items at source and prunes them from the brain.
+        Processes a single document through the ingestion lifecycle.
         """
-        logger.info(f"Starting reconciliation for connector {connector_id}")
-        # 1. Get all IDs from source
-        # 2. Get all IDs from our DB
-        # 3. Identify IDs in DB but NOT in source
-        # 4. Prune those IDs
-        pass
+        start_time = datetime.utcnow()
+        try:
+            resolver = EntityResolver()
+            parser = self.parser
+
+            logger.info(f"Processing: {raw_doc.title} ({raw_doc.source_type})")
+
+            normalized = self.normalizer.normalize_generic(
+                {
+                    "source_id": getattr(raw_doc, "source_id", "unknown"),
+                    "document_id": getattr(raw_doc, "source_id", str(uuid.uuid4())),
+                    "title": getattr(raw_doc, "title", "Untitled"),
+                    "content": getattr(raw_doc, "raw_content", getattr(raw_doc, "content", "")),
+                    "source_url": getattr(raw_doc, "source_url", ""),
+                    "metadata": getattr(raw_doc, "metadata", {}),
+                    "permissions": getattr(raw_doc, "permissions", []),
+                },
+                workspace_id=workspace_id,
+            )
+            
+            # 1. Versioning & Idempotency Check
+            current_version = 1
+            prev_doc_id = None
+            async with async_session() as session:
+                stmt = select(Document).where(
+                    Document.source_url == raw_doc.source_url,
+                    Document.workspace_id == workspace_id,
+                    Document.is_active == True
+                )
+                res = await session.execute(stmt)
+                existing_doc = res.scalars().first()
+                
+                if existing_doc:
+                    if hasattr(raw_doc, 'content_hash') and existing_doc.content_hash == raw_doc.content_hash:
+                        logger.info(f"Deduplication hit: skipping {raw_doc.title}")
+                        return
+                    
+                    logger.info(f"Versioning: Archiving v{existing_doc.version} of {raw_doc.title}")
+                    existing_doc.is_active = False
+                    current_version = existing_doc.version + 1
+                    prev_doc_id = existing_doc.id
+                    
+                    await session.execute(
+                        update(DBChunk)
+                        .where(DBChunk.document_id == existing_doc.id)
+                        .values(is_active=False)
+                    )
+                    await session.commit()
+            
+            # 2. Parsing (Multi-Modal Sensory Layer)
+            raw_content = normalized.raw_content or getattr(raw_doc, "raw_content", getattr(raw_doc, "content", ""))
+            content_format = getattr(raw_doc, "content_format", "text")
+            file_name = getattr(raw_doc, "title", "document")
+            if hasattr(raw_doc, "source_url") and "." in raw_doc.source_url:
+                file_name = raw_doc.source_url.split("/")[-1]
+
+            # Use HybridParser for actual multi-modal extraction if it's not simple text
+            if isinstance(raw_content, bytes) or (isinstance(raw_content, str) and len(raw_content) < 1000 and any(raw_content.lower().endswith(ext) for ext in [".pdf", ".png", ".jpg", ".mp3"])):
+                content_bytes = raw_content if isinstance(raw_content, bytes) else raw_content.encode()
+                elements = await parser.parse_bytes(content_bytes, file_name)
+            elif content_format == "html":
+                elements = parser._parse_html_string(raw_content)
+            else:
+                elements = [{"type": "text", "content": raw_content, "metadata": {}}]
+
+            if not elements:
+                 elements = [{"type": "text", "content": str(raw_content), "metadata": {}}]
+
+            # 3. PII Scrubbing
+            scrubbed_elements = []
+            for el in elements:
+                scrubbed_text, _ = self.scrubber.scrub(el["content"])
+                el["content"] = scrubbed_text
+                scrubbed_elements.append(el)
+            
+            full_text = "\n\n".join([el["content"] for el in scrubbed_elements])
+            tier = getattr(raw_doc, "tier", 2)
+            doc_title = normalized.title or raw_doc.title
+            doc_type = await self.classifier.classify(full_text, doc_title)
+            
+            # 4. Metadata Enrichment
+            enriched_metadata = {"entities": [], "topics": [], "keywords": [], "summary": "", "events": []}
+            if self.extractor:
+                try:
+                    logger.info(f"Enriching metadata for: {doc_title}")
+                    raw_metadata = await self.extractor.extract_semantic_metadata(full_text)
+                    enriched_metadata.update(raw_metadata)
+                    
+                    # Scrub PII from metadata
+                    enriched_metadata["summary"], _ = self.scrubber.scrub(enriched_metadata.get("summary", ""))
+                except Exception as e:
+                    logger.warning(f"Semantic enrichment failed: {e}")
+            
+            # 5. Entity Resolution
+            extracted_entities = enriched_metadata.get("entities", [])
+            resolved_entities = []
+            if extracted_entities:
+                async with async_session() as session:
+                    resolved_entities = await resolver.resolve_and_link(
+                        session=session,
+                        workspace_id=workspace_id,
+                        document_id=str(uuid.uuid4()),
+                        entities=extracted_entities
+                    )
+
+            # 6. Chunking
+            chunks_data = self.chunker.chunk_elements(scrubbed_elements, doc_type="auto")
+            chunks = [c["content"] for c in chunks_data]
+            
+            # 7. Database Record
+            async with async_session() as session:
+                doc_record = Document(
+                    workspace_id=workspace_id,
+                    connector_id=connector_id,
+                    source_url=raw_doc.source_url,
+                    title=raw_doc.title,
+                    document_type=doc_type,
+                    content_hash=getattr(raw_doc, "content_hash", str(hash(raw_content))),
+                    chunk_count=len(chunks),
+                    tier=tier,
+                    tags=enriched_metadata.get("keywords", []),
+                    version=current_version,
+                    previous_version_id=prev_doc_id,
+                    is_active=True
+                )
+                doc_record = await session.merge(doc_record)
+                await session.commit()
+                await session.refresh(doc_record)
+
+            # 8. Vector Storage
+            multi_embeddings = self.embedder.embed_multi(
+                chunks=chunks,
+                title=raw_doc.title,
+                summary=enriched_metadata.get("summary", "")
+            )
+            
+            payloads = [
+                {
+                    "title": raw_doc.title,
+                    "source_url": raw_doc.source_url,
+                    "source_type": raw_doc.source_type,
+                    "content_tier": tier,
+                    "extracted_entities": [e["name"] for e in (resolved_entities or extracted_entities)],
+                    "summary": enriched_metadata.get("summary", ""),
+                    "version": current_version,
+                    "is_active": True
+                }
+                for i in range(len(chunks))
+            ]
+            
+            self.vector_store.upsert_batch(workspace_id, multi_embeddings, payloads)
+
+            # 9. Chunk Storage
+            async with async_session() as session:
+                for idx, chunk_text in enumerate(chunks):
+                    c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
+                    payload = payloads[idx]
+                    new_chunk = DBChunk(
+                        id=c_id,
+                        document_id=doc_record.id,
+                        workspace_id=workspace_id,
+                        content=chunk_text,
+                        chunk_index=idx,
+                        tier=payload.get("content_tier", 2),
+                        source_type=payload.get("source_type"),
+                        source_url=payload.get("source_url"),
+                        document_title=payload.get("title"),
+                        version=current_version,
+                        is_active=True
+                    )
+                    await session.merge(new_chunk)
+                await session.commit()
+            
+            # 10. Graph & Event Storage
+            if self.graph_store:
+                try:
+                    self.graph_store.add_document_node(workspace_id, doc_record.id, raw_doc.title, raw_doc.source_url)
+                    if resolved_entities:
+                        self.graph_store.add_entities_and_relationships(doc_record.id, resolved_entities)
+                    
+                    extracted_events = enriched_metadata.get("events", [])
+                    if extracted_events:
+                        async with async_session() as session:
+                            for event_data in extracted_events:
+                                new_event = KnowledgeEvent(
+                                    workspace_id=workspace_id,
+                                    event_type=event_data.get("type", "milestone"),
+                                    title=event_data.get("title", "Unknown Event"),
+                                    description=event_data.get("description"),
+                                    timestamp=datetime.utcnow(),
+                                    source_document_id=doc_record.id,
+                                    metadata_json=event_data
+                                )
+                                session.add(new_event)
+                                self.graph_store.add_event_node(doc_record.id, event_data)
+                            await session.commit()
+                except Exception as ge:
+                    logger.warning(f"Graph storage failed: {ge}")
+            
+            logger.info(f"✅ Finished Ingestion: {doc_title}")
+            
+        except Exception as e:
+            logger.error(f"Error processing document {raw_doc.title}: {e}")
+            raise e
+
+    async def _persist_sync_state(
+        self,
+        connector_id: str,
+        workspace_id: str,
+        stats: dict,
+        last_error: Optional[str] = None,
+    ) -> None:
+        """Persist sync metadata so later runs can incrementally resume."""
+        async with async_session() as session:
+            stmt = select(ConnectorSyncState).where(
+                ConnectorSyncState.connector_id == connector_id,
+                ConnectorSyncState.workspace_id == workspace_id,
+            )
+            result = await session.execute(stmt)
+            state = result.scalars().first()
+
+            now = datetime.utcnow()
+            if not state:
+                state = ConnectorSyncState(
+                    connector_id=connector_id,
+                    workspace_id=workspace_id,
+                )
+                session.add(state)
+
+            if last_error:
+                state.last_error = last_error
+                await session.execute(
+                    update(Connector)
+                    .where(Connector.id == connector_id)
+                    .values(
+                        status=ConnectorStatus.ERROR,
+                        error_log={"last_error": last_error, "timestamp": now.isoformat()},
+                    )
+                )
+            else:
+                state.last_sync_at = now
+                state.last_sync_token = None
+                state.last_error = None
+
+                await session.execute(
+                    update(Connector)
+                    .where(Connector.id == connector_id)
+                    .values(status=ConnectorStatus.ACTIVE, last_synced_at=now)
+                )
+
+            state.last_stats = stats
+            state.updated_at = now
+            await session.commit()
+
     async def run(self, connector_id: str, selected_ids: Optional[List[str]] = None):
         """
-        Run the enhanced ingestion pipeline with optional selective indexing.
+        Run the ingestion pipeline for a connector.
         """
-        overall_start = datetime.utcnow()
-        connector_type = "unknown"
-        
+        stats = {
+            "connector_id": connector_id,
+            "processed": 0,
+            "failed": 0,
+            "fetched": 0,
+            "skipped_selected": 0,
+            "run_started_at": datetime.utcnow().isoformat(),
+        }
         async with async_session() as session:
-            # 1. Fetch connector config
             stmt = select(Connector).where(Connector.id == connector_id)
-            result = await session.execute(stmt)
-            connector = result.scalars().first()
-            
-            if not connector:
+            connector = (await session.execute(stmt)).scalars().first()
+            if not connector: 
                 logger.error(f"Connector {connector_id} not found")
                 return
 
-            connector_type = getattr(connector.type, "value", connector.type)
+            sync_stmt = select(ConnectorSyncState).where(
+                ConnectorSyncState.connector_id == connector_id,
+                ConnectorSyncState.workspace_id == connector.workspace_id,
+            )
+            sync_state = (await session.execute(sync_stmt)).scalars().first()
+            since = None
+            if sync_state and sync_state.last_sync_at:
+                since = sync_state.last_sync_at - timedelta(minutes=5)
 
-            # 2. Initialize connector
-            if connector_type == "notion":
-                conn_impl = NotionConnector()
-            elif connector_type == "google_drive":
-                conn_impl = GoogleDriveConnector()
-            elif connector_type == "slack":
-                conn_impl = SlackConnector()
-            else:
-                logger.error(f"Unsupported connector type: {connector_type}")
-                return
-            
-            # 3. Connect & Fetch
+            # Decrypt configuration for connection
             try:
-                from backend.models.connector_sync_state import ConnectorSyncState
-                
-                # Layer 14: Get Incremental Sync State
-                stmt = select(ConnectorSyncState).where(
-                    ConnectorSyncState.connector_id == connector_id,
-                    ConnectorSyncState.workspace_id == connector.workspace_id
-                )
-                res = await session.execute(stmt)
-                sync_state = res.scalars().first()
-                
-                if not sync_state:
-                    sync_state = ConnectorSyncState(
-                        connector_id=connector_id,
-                        workspace_id=connector.workspace_id,
-                        last_sync_at=connector.last_synced_at or datetime(2000, 1, 1)
-                    )
-                    session.add(sync_state)
-                    await session.commit()
-
-                connection = await conn_impl.connect(connector.config)
-                logger.info(f"Streaming documents for {connector_type} (Since: {sync_state.last_sync_at})")
-                doc_stream = conn_impl.fetch_documents(connection, since=sync_state.last_sync_at)
+                config = decrypt_config(connector.config)
             except Exception as e:
-                logger.error(f"Dynamic connection failed for {connector_type}: {e}")
-                connector.status = "error"
-                await session.commit()
+                logger.error(f"Failed to decrypt config for connector {connector_id}: {e}")
                 return
 
-            # Initialize workers and tools once outside the loop
-            from backend.ingestion.document_parser import HybridParser
-            from backend.ingestion.entity_resolver import EntityResolver
-            parser = HybridParser()
-            resolver = EntityResolver()
-            
-            semaphore = asyncio.Semaphore(5)  # Process 5 documents at once
-            
-            async def process_document(raw_doc):
-                async with semaphore:
-                    try:
-                        # Layer 14: Strict Differential Filtering
-                        if sync_state.last_sync_at and raw_doc.modified_at:
-                            # If timezone-aware vs naive issues occur, we'll strip tz for comparison
-                            doc_mod = raw_doc.modified_at.replace(tzinfo=None)
-                            state_sync = sync_state.last_sync_at.replace(tzinfo=None)
-                            if doc_mod <= state_sync:
-                                logger.info(f"Incremental skip: {raw_doc.title} (unmodified)")
-                                return
+            connector_type = getattr(connector.type, "value", connector.type)
+            workspace_id = connector.workspace_id
 
-                        start_time = datetime.utcnow()
-                        # ... (rest of processing) ...
-                        # Selective Indexing Gate
-                        if selected_ids and raw_doc.source_id not in selected_ids:
-                            return
+            # Initialize connector implementation dynamically
+            try:
+                from backend.connectors.registry import connector_registry
+                conn_class = connector_registry.get_connector(connector_type)
+                conn_impl = conn_class()
+            except ValueError as e:
+                logger.error(f"Unsupported connector type: {connector_type} - {e}")
+                return
+
+            try:
+                connection = await conn_impl.connect(config)
+                
+                # Fetch documents and process concurrently with error isolation
+                semaphore = asyncio.Semaphore(5)  # Cap concurrency to 5 parallel documents
+                tasks_list = []
+                
+                from backend.observability.telemetry import Telemetry
+
+                async def process_with_boundary(doc_obj):
+                    async with semaphore:
+                        try:
+                            await self._process_document(doc_obj, workspace_id, connector_id)
+                            return True
+                        except Exception as doc_error:
+                            stats["failed"] += 1
+                            logger.warning(f"Error processing document {getattr(doc_obj, 'title', 'unknown')}: {doc_error}")
                             
-                        logger.info(f"Processing: {raw_doc.title} ({raw_doc.source_type})")
-                        workspace_id = connector.workspace_id
-                        
-                        # 3b. Versioning & Idempotency Check (Layer 15)
-                        current_version = 1
-                        prev_doc_id = None
-                        async with async_session() as session:
-                            stmt = select(Document).where(
-                                Document.source_url == raw_doc.source_url,
-                                Document.workspace_id == workspace_id,
-                                Document.is_active == True
-                            )
-                            res = await session.execute(stmt)
-                            existing_doc = res.scalars().first()
-                            
-                            if existing_doc:
-                                if existing_doc.content_hash == raw_doc.content_hash:
-                                    logger.info(f"Deduplication hit: skipping {raw_doc.title}")
-                                    return
-                                
-                                # Content changed! Archive the old version
-                                logger.info(f"Versioning: Archiving v{existing_doc.version} of {raw_doc.title}")
-                                existing_doc.is_active = False
-                                current_version = existing_doc.version + 1
-                                prev_doc_id = existing_doc.id
-                                
-                                # ARCHIVE chunks in Postgres
-                                from backend.models.chunk import Chunk as DBChunk
-                                from sqlalchemy import update
-                                await session.execute(
-                                    update(DBChunk)
-                                    .where(DBChunk.document_id == existing_doc.id)
-                                    .values(is_active=False)
-                                )
-                                await session.commit()
-                                
-                                # ARCHIVE chunks in Qdrant (Phase 2: Metadata Update)
-                                # For simplicity, we'll just upsert new active ones, 
-                                # but in production, we'd update the old ones to is_active=False in Qdrant too.
-
-                        # 4. Multimodal Parsing
-                        if raw_doc.content_format == "html":
-                            elements = parser._parse_html_string(raw_doc.raw_content)
-                        else:
-                            elements = [{"type": "text", "content": raw_doc.raw_content, "metadata": {}}]
-
-                        # 5. Scrub PII (Parallelized)
-                        scrub_tasks = [asyncio.to_thread(self.scrubber.scrub, el["content"]) for el in elements]
-                        scrubbed_results = await asyncio.gather(*scrub_tasks)
-                        for i, (scrubbed_text, _) in enumerate(scrubbed_results):
-                            elements[i]["content"] = scrubbed_text
-                        
-                        # Full text for classification and extraction
-                        full_text = "\n\n".join([el["content"] for el in elements])
-                        tier = getattr(raw_doc, "tier", None) or 2
-                        doc_type = await self.classifier.classify(full_text, raw_doc.title)
-                        
-                        # 6. Semantic Metadata Enrichment (Layer 5)
-                        enriched_metadata = {"entities": [], "topics": [], "keywords": [], "summary": ""}
-                        if self.extractor:
+                            # Safe retrieval of content in case it raises an exception
                             try:
-                                logger.info(f"Enriching metadata (Layer 5) for: {raw_doc.title}")
-                                raw_metadata = await self.extractor.extract_semantic_metadata(full_text)
+                                raw_content = getattr(doc_obj, "raw_content", getattr(doc_obj, "content", ""))
+                                content_snippet = str(raw_content)[:2000] if raw_content else ""
+                            except Exception:
+                                content_snippet = "<UNREADABLE: error retrieving content>"
                                 
-                                # ELITE REPAIR: Scrub PII from AI-generated metadata
-                                enriched_metadata["summary"], _ = self.scrubber.scrub(raw_metadata.get("summary", ""))
-                                enriched_metadata["topics"] = [self.scrubber.scrub(t)[0] for t in raw_metadata.get("topics", [])]
-                                enriched_metadata["keywords"] = [self.scrubber.scrub(k)[0] for k in raw_metadata.get("keywords", [])]
-                                enriched_metadata["entities"] = raw_metadata.get("entities", [])
-                            except Exception as e:
-                                logger.warning(f"Semantic enrichment failed: {e}")
-                        
-                        extracted_entities = enriched_metadata.get("entities", [])
-                        
-                        # 7. Adaptive Chunking (Layer 6)
-                        chunks_data = self.chunker.chunk_elements(elements, doc_type="auto")
-                        
-                        # Layer 3: PII Scrubbing (Privacy-First)
-                        for chunk_info in chunks_data:
-                            scrubbed_text, entities = self.scrubber.scrub(chunk_info["content"])
-                            chunk_info["content"] = scrubbed_text
-                            chunk_info["pii_entities"] = entities
-                        
-                        chunks = [c["content"] for c in chunks_data]
-                        
-                        # 9. Document Record (Layer 9/15) - Unified Storage
-                        async with async_session() as session:
-                            doc_record = Document(
-                                workspace_id=workspace_id,
-                                connector_id=connector_id,
-                                source_url=raw_doc.source_url,
-                                title=raw_doc.title,
-                                document_type=doc_type,
-                                content_hash=raw_doc.content_hash,
-                                chunk_count=len(chunks),
-                                tier=tier,
-                                tags=enriched_metadata.get("keywords", []),
-                                # Layer 15: Versioning
-                                version=current_version,
-                                previous_version_id=prev_doc_id,
-                                is_active=True
-                            )
-                            doc_record = await session.merge(doc_record)
-                            await session.commit()
-                            await session.refresh(doc_record)
-
-                        # 10. Multi-Vector Storage (Layer 8)
-                        logger.info(f"Generating Multi-Vector embeddings (Layer 8) for: {raw_doc.title}")
-                        multi_embeddings = await self.embedder.embed_multi(
-                            contents=chunks,
-                            titles=[raw_doc.title] * len(chunks),
-                            summaries=[enriched_metadata.get("summary", "")] * len(chunks)
-                        )
-                        
-                        payloads = [
-                            {
-                                "title": raw_doc.title,
-                                "source_url": raw_doc.source_url,
-                                "source_type": raw_doc.source_type,
-                                "content_tier": tier,
-                                "source_modified_at": raw_doc.modified_at.isoformat() if raw_doc.modified_at else None,
-                                "extracted_entities": [e["name"] for e in extracted_entities],
-                                "topics": enriched_metadata.get("topics", []),
-                                "keywords": enriched_metadata.get("keywords", []),
-                                "summary": enriched_metadata.get("summary", ""),
-                                "heading_path": chunks_data[i].get("heading_path", []),
-                                # Layer 11/15: Security & Versioning
-                                "allowed_users": raw_doc.permissions.get("allowed_users", []),
-                                "visibility": raw_doc.visibility,
-                                "is_public": raw_doc.visibility == "public",
-                                "version": current_version,
-                                "is_active": True
+                            raw_payload = {
+                                "title": getattr(doc_obj, "title", "unknown"),
+                                "source_id": getattr(doc_obj, "source_id", "unknown"),
+                                "source_url": getattr(doc_obj, "source_url", "unknown"),
+                                "source_type": getattr(doc_obj, "source_type", "unknown"),
+                                "content": content_snippet
                             }
-                            for i in range(len(chunks))
-                        ]
-                        
-                        self.vector_store.upsert_batch(
-                            workspace_id=workspace_id,
-                            vectors=multi_embeddings,
-                            payloads=payloads
-                        )
+                            await Telemetry.log_failure(
+                                workspace_id=workspace_id,
+                                source_type=connector_type,
+                                source_url=getattr(doc_obj, "source_url", "unknown"),
+                                error=doc_error,
+                                raw_payload=raw_payload
+                            )
+                            logger.warning(f"Skipping corrupted document {getattr(doc_obj, 'title', 'Unknown')} and continuing: {doc_error}")
+                            return False
 
-                        # 10b. Chunk Storage (Postgres for Hybrid Search)
-                        # Tier-Aware Expiry (Assest Architecture Hierarchy)
-                        expiry_map = {1: 90, 2: 30, 3: 7} # Days
-                        expiry_days = expiry_map.get(tier, 30)
-                        expires_at = datetime.utcnow() + timedelta(days=expiry_days)
-
-                        async with async_session() as session:
-                            for idx, chunk_info in enumerate(chunks_data):
-                                chunk_text = chunk_info["content"]
-                                chunk_type = chunk_info.get("type", "text")
-                                
-                                # Store in Postgres (Layer 9/15)
-                                c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
-                                new_chunk = DBChunk(
-                                    id=c_id,
-                                    document_id=doc_record.id,
-                                    workspace_id=workspace_id,
-                                    content=chunk_text,
-                                    chunk_index=idx,
-                                    chunk_type=chunk_type,
-                                    metadata_json=payloads[idx],
-                                    expires_at=expires_at,
-                                    version=current_version,
-                                    is_active=True
-                                )
-                                await session.merge(new_chunk)
-                            await session.commit()
-                        
-                        # 11. Knowledge Graph Storage (Layer 9/10 - Memgraph)
-                        if self.graph_store:
-                            try:
-                                logger.info(f"Syncing relationships to Graph Store for: {raw_doc.title}")
-                                self.graph_store.add_document_node(
-                                    workspace_id=workspace_id,
-                                    document_id=doc_record.id,
-                                    title=raw_doc.title,
-                                    source_url=raw_doc.source_url
-                                )
-                                if extracted_entities:
-                                    self.graph_store.add_entities_and_relationships(doc_record.id, extracted_entities)
-                                
-                                # Layer 9/13: Lineage & Telemetry
-                                logger.info(f"AUDIT: Document {doc_record.id} successfully ingested from {raw_doc.source_type}")
-                            except Exception as ge:
-                                logger.warning(f"Graph storage failed (Non-fatal): {ge}")
-                        
-                        elapsed = (datetime.utcnow() - start_time).total_seconds()
-                        
-                        # Layer 13: Track Success
-                        from backend.observability.telemetry import Telemetry
-                        Telemetry.track_latency(raw_doc.source_type, elapsed)
-                        Telemetry.track_chunking(raw_doc.source_type, len(chunks))
-                        
-                        logger.info(f"✅ Finished Ingestion: {raw_doc.title} in {elapsed:.2f}s")
-                    except Exception as e:
-                        # Layer 13: DLQ Routing
-                        from backend.observability.telemetry import Telemetry
-                        await Telemetry.log_failure(
-                            workspace_id=workspace_id,
-                            source_type=raw_doc.source_type,
-                            source_url=raw_doc.source_url,
-                            error=e,
-                            raw_payload={"title": raw_doc.title}
-                        )
-                        logger.error(f"Error processing document {raw_doc.title}: {e}")
-            
-            # Collect tasks for concurrent execution
-            tasks = []
-            async for raw_doc in doc_stream:
-                tasks.append(process_document(raw_doc))
-            
-            if tasks:
-                await asyncio.gather(*tasks)
-            
-            # 12. Update connector sync status (Layer 14: Elite Incremental tracking)
-            async with async_session() as session:
-                # Update the main Connector model
-                stmt = select(Connector).where(Connector.id == connector_id)
-                res = await session.execute(stmt)
-                conn_to_update = res.scalars().first()
+                async for raw_doc in conn_impl.fetch_documents(
+                    connection,
+                    since=since,
+                    selected_ids=selected_ids,
+                ):
+                    # Filter by selected_ids if provided
+                    if not self._matches_selected_id(raw_doc, selected_ids):
+                        stats["skipped_selected"] += 1
+                        continue
+                    stats["fetched"] += 1
+                    tasks_list.append(asyncio.create_task(process_with_boundary(raw_doc)))
                 
-                # Update the specialized Sync State model
-                stmt_state = select(ConnectorSyncState).where(
-                    ConnectorSyncState.connector_id == connector_id,
-                    ConnectorSyncState.workspace_id == connector.workspace_id
+                if tasks_list:
+                    results = await asyncio.gather(*tasks_list)
+                    stats["processed"] = sum(1 for result in results if result)
+                
+                stats["run_completed_at"] = datetime.utcnow().isoformat()
+                await self._persist_sync_state(
+                    connector_id=connector_id,
+                    workspace_id=workspace_id,
+                    stats=stats,
                 )
-                res_state = await session.execute(stmt_state)
-                state_to_update = res_state.scalars().first()
+                logger.info(f"Sync completed for connector {connector_id}")
+                return stats
+            except Exception as e:
+                logger.error(f"Sync failed for connector {connector_id}: {e}")
+                stats["run_completed_at"] = datetime.utcnow().isoformat()
+                await self._persist_sync_state(
+                    connector_id=connector_id,
+                    workspace_id=workspace_id,
+                    stats=stats,
+                    last_error=str(e),
+                )
+                raise e
 
-                now = datetime.utcnow()
-                if conn_to_update:
-                    conn_to_update.last_synced_at = now
-                if state_to_update:
-                    state_to_update.last_sync_at = now
-                
-                await session.commit()
-            
-            duration = (datetime.utcnow() - overall_start).total_seconds()
-            logger.info(f"🚀 Full incremental ingestion completed for connector: {connector_id} in {duration:.2f}s")
-            
-    # Clean up
     def close(self):
-        self.graph_store.close()
+        if self.graph_store:
+            self.graph_store.close()

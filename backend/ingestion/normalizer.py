@@ -65,13 +65,18 @@ class DocumentNormalizer:
 
     def normalize_generic(self, raw_data: Dict[str, Any], workspace_id: str) -> UnifiedDocument:
         """Fall-back normalization for other sources."""
+        perms = raw_data.get("permissions")
+        if not isinstance(perms, list):
+            perms = []
+
         return UnifiedDocument(
-            source_id=raw_data.get("source_id", "unknown"),
             workspace_id=workspace_id,
+            source_type=raw_data.get("source_type", "unknown"),
+            source_id=raw_data.get("source_id", raw_data.get("document_id", "unknown")),
             document_id=raw_data.get("document_id", "unknown"),
             title=raw_data.get("title", "Untitled"),
             raw_content=raw_data.get("content", ""),
             source_url=raw_data.get("source_url", ""),
             metadata=raw_data.get("metadata", {}),
-            permissions=raw_data.get("permissions", [])
+            permissions=perms
         )

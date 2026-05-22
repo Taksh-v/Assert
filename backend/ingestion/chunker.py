@@ -12,6 +12,10 @@ class DocumentChunker:
     Specialized splitting for Code, Tables, and Structured Text.
     """
 
+    def __init__(self, chunk_size: int = 1200, chunk_overlap: int = 200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+
     def chunk(self, text: str, doc_type: str = "general") -> List[Dict[str, Any]]:
         """Choose the best strategy based on document type."""
         if doc_type == "code":
@@ -192,6 +196,39 @@ class DocumentChunker:
             chunks.append({
                 "content": f"[{path_str} Final Discussion]\n\n" + "\n".join(current_discussion),
                 "type": "transcript_segment"
+            })
+            
+        return chunks
+
+    def _chunk_structured_text(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Standard sliding window chunking for unstructured text.
+        Splits by sentences to avoid cutting in the middle of words.
+        """
+        # Split by basic sentence endings
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+                
+            if len(current_chunk) + len(sentence) > self.chunk_size and current_chunk:
+                chunks.append({
+                    "content": current_chunk.strip(),
+                    "type": "text"
+                })
+                # Overlap logic
+                overlap_text = current_chunk[-self.chunk_overlap:] if self.chunk_overlap > 0 else ""
+                current_chunk = overlap_text + " " + sentence if overlap_text else sentence
+            else:
+                current_chunk += " " + sentence if current_chunk else sentence
+                
+        if current_chunk:
+            chunks.append({
+                "content": current_chunk.strip(),
+                "type": "text"
             })
             
         return chunks
