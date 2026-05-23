@@ -1,6 +1,8 @@
 import logging
 from typing import List, Dict, Any, Optional
 from backend.core.config import get_settings
+from backend.core.async_utils import run_blocking
+from backend.core.retry import retry_sync
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -41,6 +43,12 @@ class GraphStore:
         Layer 13: Temporal Intelligence.
         Adds an Event node and links it to the document and related entities.
         """
+        # Offload the graph write to a threadpool to avoid blocking the event loop.
+        return run_blocking(self._add_event_node_blocking, document_id, event_data)
+
+
+    def _add_event_node_blocking(self, document_id: str, event_data: Dict[str, Any]):
+        """Blocking implementation of add_event_node. Intended to be run via `run_blocking`."""
         if not self.driver:
             self.connect()
         if not self.driver:
@@ -51,7 +59,7 @@ class GraphStore:
             e_type = event_data.get("type", "milestone").upper()
             ts = event_data.get("timestamp")
             related = event_data.get("related_entities", [])
-            
+
             # 1. Create Event node
             query = f"""
             MATCH (d:Document {{id: $doc_id}})
@@ -60,7 +68,7 @@ class GraphStore:
             MERGE (d)-[:REPORTED]->(ev)
             """
             session.run(query, doc_id=document_id, title=title, ts=str(ts), type=e_type)
-            
+
             # 2. Link to related entities
             for ent_name in related:
                 link_query = f"""
@@ -71,14 +79,29 @@ class GraphStore:
                 """
                 session.run(link_query, title=title, ts=str(ts), ent_name=ent_name)
 
+    # Add retries to blocking graph operations to improve resilience to transient errors
+    _add_event_node_blocking = retry_sync(max_attempts=3, initial_delay=0.1)(_add_event_node_blocking)
+
     def close(self):
         """Close connection."""
+        # Close driver in threadpool to avoid blocking
+        return run_blocking(self._close_blocking)
+
+
+    def _close_blocking(self):
         if self.driver:
-            self.driver.close()
-            self.driver = None
+            try:
+                self.driver.close()
+            finally:
+                self.driver = None
+    _close_blocking = retry_sync(max_attempts=2, initial_delay=0.05)(_close_blocking)
 
     def add_document_node(self, workspace_id: str, document_id: str, title: str, source_url: str, is_active: bool = True):
         """Create a Version-Aware Document node in the graph."""
+        return run_blocking(self._add_document_node_blocking, workspace_id, document_id, title, source_url, is_active)
+
+
+    def _add_document_node_blocking(self, workspace_id: str, document_id: str, title: str, source_url: str, is_active: bool = True):
         if not self.driver:
             self.connect()
         if not self.driver:
@@ -96,12 +119,18 @@ class GraphStore:
         with self.driver.session() as session:
             session.run(query, doc_id=document_id, title=title, url=source_url, ws_id=workspace_id, active=is_active)
 
+    _add_document_node_blocking = retry_sync(max_attempts=3, initial_delay=0.1)(_add_document_node_blocking)
+
     def add_entities_and_relationships(self, document_id: str, entities: List[Dict[str, Any]]):
         """
         Layer 10: Advanced Entity Resolution.
         Categorizes entities into specialized nodes (Employee, Project, API, SOP, etc.) 
         and links them with weighted relationships.
         """
+        return run_blocking(self._add_entities_and_relationships_blocking, document_id, entities)
+
+
+    def _add_entities_and_relationships_blocking(self, document_id: str, entities: List[Dict[str, Any]]):
         if not self.driver:
             self.connect()
         if not self.driver:
@@ -114,7 +143,7 @@ class GraphStore:
                 e_type = entity.get("type", "concept")
                 relationship = entity.get("relationship", "MENTIONS").upper()
                 confidence = entity.get("confidence", 0.5)
-                
+
                 # Determine Label based on category and type
                 label = "Entity"
                 if category == "ORGANIZATIONAL":
@@ -149,7 +178,7 @@ class GraphStore:
                         label = "Meeting"
                     else:
                         label = "Process"
-                
+
                 # 1. Create/Merge specialized node
                 # 2. Link Document to Entity
                 # 3. Store confidence and weight
@@ -165,6 +194,8 @@ class GraphStore:
                     r.updated_at = timestamp()
                 """
                 session.run(query, doc_id=document_id, name=name, type=e_type, category=category, confidence=confidence)
+        
+    _add_entities_and_relationships_blocking = retry_sync(max_attempts=3, initial_delay=0.1)(_add_entities_and_relationships_blocking)
 
     def get_context(self, entity_name: str) -> Dict[str, Any]:
         """Alias for get_knowledge_cluster for unified retrieval API."""

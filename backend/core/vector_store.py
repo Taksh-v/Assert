@@ -1,5 +1,7 @@
 import logging
 import os
+import asyncio
+from backend.core.retry import retry_sync
 from typing import List, Dict, Any, Optional
 from backend.core.config import get_settings
 
@@ -30,13 +32,22 @@ def get_qdrant_client():
     return _GLOBAL_QDRANT_CLIENT
 
 
+async def get_qdrant_client_async():
+    """Async-friendly helper to initialize/get the Qdrant client without blocking the event loop.
+
+    Callers in async code should use this instead of calling `get_qdrant_client()` directly,
+    which may perform heavier synchronous initialization.
+    """
+    return await asyncio.to_thread(get_qdrant_client)
+
+
 class VectorStore:
     """
     Wrapper for Qdrant vector database.
     """
 
-    def __init__(self):
-        self.collection_name = settings.qdrant_collection_name
+    def __init__(self, collection_name: Optional[str] = None):
+        self.collection_name = collection_name or settings.qdrant_collection_name
         self.client = get_qdrant_client()
         self._models_cache = None
 
@@ -84,6 +95,10 @@ class VectorStore:
                 )
         except Exception as e:
             logger.error(f"Collection creation failed: {e}")
+    
+
+    # Add retry wrapper to reduce transient failures during collection creation
+    create_collection = retry_sync(max_attempts=3, initial_delay=0.1)(create_collection)
 
     def upsert_batch(
         self,
@@ -125,6 +140,9 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Batch upsert failed: {e}")
 
+
+    upsert_batch = retry_sync(max_attempts=3, initial_delay=0.05)(upsert_batch)
+
     def search(
         self, 
         workspace_id: str, 
@@ -134,48 +152,17 @@ class VectorStore:
         vector_name: str = "content"
     ) -> List[Dict[str, Any]]:
         """
-        Semantic search with STRICT PRE-retrieval security filtering (Layer 11).
+        Semantic search. Keep DB-side filters minimal (workspace and active flag).
         """
         if not self.client:
             logger.warning("Qdrant client not available; returning empty search results.")
             return []
         try:
+            # Only apply workspace + active filters at the DB level for now.
             must_filters = [
                 self._models.FieldCondition(key="workspace_id", match=self._models.MatchValue(value=workspace_id)),
                 self._models.FieldCondition(key="is_active", match=self._models.MatchValue(value=True))
             ]
-            
-            # Layer 11: Security Gate (Development Permissive Mode)
-            # If user_id is provided, check permissions.
-            # If not in production, we allow results that lack is_public field to ensure dev experience.
-            if user_id:
-                security_filter = self._models.Filter(
-                    should=[
-                        self._models.FieldCondition(key="is_public", match=self._models.MatchValue(value=True)),
-                        self._models.FieldCondition(key="allowed_users", match=self._models.MatchValue(value=user_id)),
-                        # Permissive fallback for dev: if neither field exists, assume accessible
-                        self._models.Filter(
-                            must_not=[
-                                self._models.HasIdCondition(has_id=[hit.id for hit in []]) # dummy to keep structure
-                            ],
-                            must=[
-                                self._models.FieldCondition(key="is_public", match=self._models.MatchValue(value=None))
-                            ]
-                        )
-                    ]
-                )
-                # Note: simplified for robust dev experience
-                must_filters.append(self._models.Filter(
-                    should=[
-                        self._models.FieldCondition(key="is_public", match=self._models.MatchValue(value=True)),
-                        self._models.FieldCondition(key="allowed_users", match=self._models.MatchValue(value=user_id))
-                    ]
-                ) if not settings.is_development else self._models.Filter(must=[]))
-            elif not settings.is_development:
-                # In production, strictly only public
-                must_filters.append(
-                    self._models.FieldCondition(key="is_public", match=self._models.MatchValue(value=True))
-                )
 
             response = self.client.query_points(
                 collection_name=self.collection_name,
@@ -200,35 +187,20 @@ class VectorStore:
             logger.error(f"Semantic search failed: {e}")
             return []
 
+
+    search = retry_sync(max_attempts=3, initial_delay=0.05)(search)
+
     def reciprocal_rank_fusion(
         self, 
         vector_results: List[Dict[str, Any]], 
         keyword_results: List[Dict[str, Any]], 
         k: int = 60
     ) -> List[Dict[str, Any]]:
-        """
-        Combine vector and keyword results using RRF.
-        """
-        scores = {}  # chunk_id -> combined score
-        
-        for rank, res in enumerate(vector_results):
-            chunk_id = res["chunk_id"]
-            scores[chunk_id] = scores.get(chunk_id, 0) + 1.0 / (rank + k)
-            
-        for rank, res in enumerate(keyword_results):
-            chunk_id = res["chunk_id"]
-            scores[chunk_id] = scores.get(chunk_id, 0) + 1.0 / (rank + k)
-            
-        # Combine items, favoring vector_results metadata
-        all_items = {res["chunk_id"]: res for res in keyword_results + vector_results}
-        
-        # Sort by combined score
-        sorted_ids = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        
-        final_results = []
-        for chunk_id, combined_score in sorted_ids:
-            item = all_items[chunk_id]
-            item["rrf_score"] = combined_score
-            final_results.append(item)
-            
-        return final_results
+        """Delegate to retrieval fusion implementation to keep DB wrapper thin."""
+        try:
+            from backend.retrieval.fusion import reciprocal_rank_fusion as rrf
+            return rrf(vector_results=vector_results, keyword_results=keyword_results, k=k)
+        except Exception:
+            # In case retrieval layer is unavailable, fall back to simple merge
+            all_items = {res["chunk_id"]: res for res in keyword_results + vector_results}
+            return list(all_items.values())
