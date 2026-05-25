@@ -145,6 +145,25 @@ class Telemetry:
             logger.info(f"Failed ingestion routed to DLQ (ID: {failure.id})")
 
     @staticmethod
+    def track_run_start(connector_type: str, run_id: str):
+        """Record that a sync run has started."""
+        logger.info(f"Run start: connector={connector_type} run_id={run_id}")
+        try:
+            metrics.RETRIEVAL_PRECISION  # ensure metrics module present
+        except Exception:
+            pass
+
+    @staticmethod
+    def track_run_finish(connector_type: str, run_id: str, duration_seconds: float, processed: int, failed: int):
+        """Record run completion metrics and timing."""
+        logger.info(f"Run finish: connector={connector_type} run_id={run_id} duration={duration_seconds}s processed={processed} failed={failed}")
+        try:
+            # Add a simple histogram-like observation using INGESTION_LATENCY
+            metrics.INGESTION_LATENCY.labels(connector_type=connector_type).observe(duration_seconds)
+        except Exception:
+            pass
+
+    @staticmethod
     def track_latency(connector_type: str, duration: float):
         """Track ingestion latency in Prometheus."""
         metrics.INGESTION_LATENCY.labels(connector_type=connector_type).observe(duration)

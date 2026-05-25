@@ -4,6 +4,7 @@ import hashlib
 import os
 import numpy as np
 from backend.core.config import get_settings
+from backend.core.async_utils import run_blocking
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -109,6 +110,14 @@ class Embedder:
             })
             
         return multi_vectors
+
+    async def aembed(self, texts: List[str]) -> List[List[float]]:
+        """Async wrapper for `embed` to avoid blocking the event loop."""
+        return await run_blocking(self.embed, texts)
+
+    async def aembed_multi(self, chunks: List[str], title: str, summary: str) -> List[Dict[str, List[float]]]:
+        """Async wrapper for `embed_multi`."""
+        return await run_blocking(self.embed_multi, chunks, title, summary)
 
     def _hash_embedding(self, text: str, dimensions: int = 384) -> List[float]:
         """Deterministic fallback embedding for local/dev operation without model downloads."""

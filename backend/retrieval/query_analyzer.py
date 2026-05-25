@@ -19,7 +19,7 @@ class QueryAnalyzer:
     Analyzes user intent and builds a structured retrieval plan.
     """
 
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "groq/llama-3.3-70b-versatile"):
         from backend.generation.llm_client import LLMClient
         self.client = LLMClient()
         self.model = model

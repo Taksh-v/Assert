@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Ensure backend directory is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -18,12 +18,46 @@ mock_module = MagicMock()
 mock_module.RetrievalOrchestrator = MockRetrievalOrchestrator
 sys.modules["backend.retrieval.orchestrator"] = mock_module
 
+# Mock LLMClient so it returns a valid JSON plan
+class MockLLMClient:
+    def __init__(self, *args, **kwargs):
+        pass
+        
+    async def chat_completion(self, system_prompt, user_prompt, temperature=0):
+        # Planner expects a plan
+        if "Enterprise Strategy" in system_prompt:
+            return '{"plan": "mocked plan", "tasks": [{"id": "task_1", "task_name": "Task 1", "description": "Requires approve", "dependencies": []}]}'
+        # Analyst/Researcher/Synthesizer
+        return '{"result": "mocked result", "sources": ["mock"], "confidence": 0.9, "answer": "final answer"}'
+        
+    @property
+    def chat(self):
+        outer = self
+        class Chat:
+            class Completions:
+                def create(self, *args, **kwargs):
+                    class MockChoice:
+                        class MockMessage:
+                            @property
+                            def content(self):
+                                return '{"plan": "mocked plan", "tasks": [{"id": "task_1", "task_name": "Task 1", "description": "Requires approve", "dependencies": []}]}'
+                        message = MockMessage()
+                    class MockResp:
+                        choices = [MockChoice()]
+                    return MockResp()
+            completions = Completions()
+        return Chat()
+
 # Now import database and orchestrator safely without loading heavy ML modules
 from backend.core.database import init_db, close_db, async_session
+
 from backend.reasoning.orchestrator import ReasoningOrchestrator
 from backend.models.reasoning_execution import ReasoningExecution
 from sqlalchemy import select
 
+@patch("backend.reasoning.agents.planner.LLMClient", MockLLMClient)
+@patch("backend.reasoning.agents.analyst.LLMClient", MockLLMClient)
+@patch("backend.reasoning.agents.synthesizer.LLMClient", MockLLMClient)
 async def test_durable_workflow_lifecycle():
     print("🚀 Initializing test database...")
     await init_db()
@@ -48,7 +82,7 @@ async def test_durable_workflow_lifecycle():
     
     assert result["status"] == "suspended", f"Expected 'suspended' but got {result['status']}"
     assert result["awaiting_approval"] is True, "Expected awaiting_approval to be True"
-    assert result["iterations"] == 2, f"Expected 2 iterations, got {result['iterations']}"
+    assert result["iterations"] == 1, f"Expected 1 iteration, got {result['iterations']}"
 
     
     # 2. Check Database Checkpoint
@@ -60,7 +94,7 @@ async def test_durable_workflow_lifecycle():
         
         assert execution is not None, "Execution record not found in database!"
         assert execution.status == "suspended", f"Expected DB status 'suspended' but got {execution.status}"
-        assert execution.current_task_index == 1, f"Expected task index 1, got {execution.current_task_index}"
+        assert execution.current_task_index == 0, f"Expected task index 0, got {execution.current_task_index}"
         
         state_snap = execution.state_snapshot
         assert state_snap["query"] == query

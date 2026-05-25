@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
@@ -15,25 +15,25 @@ import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
  * it shows a fallback UI with a redirect link.
  */
 export default function OAuthCallbackPage() {
+  return (
+    <Suspense fallback={null}>
+      <OAuthCallbackContent />
+    </Suspense>
+  );
+}
+
+function OAuthCallbackContent() {
   const searchParams = useSearchParams();
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
-  const [message, setMessage] = useState("");
+  const connected = searchParams.get("connected");
+  const connectorId = searchParams.get("connector_id");
+  const error = searchParams.get("error");
+  const initialStatus: "loading" | "success" | "error" = error ? "error" : connected && connectorId ? "success" : "loading";
+  const initialMessage = error || (connected ? `Successfully connected to ${connected}!` : "Processing connection...");
+  const [status, setStatus] = useState<"loading" | "success" | "error">(initialStatus);
+  const [message, setMessage] = useState(initialMessage);
 
   useEffect(() => {
-    const connected = searchParams.get("connected");
-    const connectorId = searchParams.get("connector_id");
-    const error = searchParams.get("error");
-
-    if (error) {
-      setStatus("error");
-      setMessage(error);
-      return;
-    }
-
     if (connected && connectorId) {
-      setStatus("success");
-      setMessage(`Successfully connected to ${connected}!`);
-
       // Send message to the opener window (SourceSetupModal)
       if (window.opener) {
         window.opener.postMessage({
@@ -46,19 +46,20 @@ export default function OAuthCallbackPage() {
         // Auto-close after brief display
         setTimeout(() => window.close(), 1500);
       }
-    } else {
-      setStatus("loading");
-      setMessage("Processing connection...");
+      return;
+    }
+
+    if (!error) {
       // Wait briefly for any server redirect
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (status === "loading") {
           setStatus("error");
           setMessage("Connection timed out. Please try again.");
         }
       }, 10000);
+      return () => clearTimeout(timer);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [connected, connectorId, error, status]);
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-background">

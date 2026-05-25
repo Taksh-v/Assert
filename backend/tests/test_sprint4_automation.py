@@ -37,9 +37,9 @@ async def test_scheduler_lifecycle():
     
     scheduler.start()
     print("   BackgroundScheduler started.")
-    
+
     # Verify tasks are added
-    assert len(scheduler._tasks) == 3
+    assert len(scheduler._tasks) == 4
     assert scheduler._running is True
     print("   ✅ Scheduler start and tasks creation verified.")
 

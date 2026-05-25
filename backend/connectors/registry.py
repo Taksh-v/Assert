@@ -30,3 +30,21 @@ class ConnectorRegistry:
 
 # Singleton registry instance
 connector_registry = ConnectorRegistry()
+
+
+class ConnectorFactory:
+    """Simple factory that instantiates connector implementations using a registry.
+
+    This provides a DI-friendly creation point while remaining compatible with
+    the existing `connector_registry` usage.
+    """
+    def __init__(self, registry: ConnectorRegistry):
+        self._registry = registry
+
+    def create(self, connector_type: str, *args, **kwargs):
+        cls = self._registry.get_connector(connector_type)
+        return cls(*args, **kwargs)
+
+
+# Default factory using the global registry
+connector_factory = ConnectorFactory(connector_registry)

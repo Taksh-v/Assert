@@ -24,7 +24,7 @@ class GraphExpansionEngine:
         for entity in entities:
             try:
                 # Fetch cluster from graph store
-                cluster = self.graph_store.get_knowledge_cluster(entity)
+                cluster = await self.graph_store.async_get_knowledge_cluster(entity)
                 if cluster and cluster.get("relationships"):
                     # Format into factual blocks
                     fact_str = f"Knowledge about {entity}:\n"

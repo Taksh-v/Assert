@@ -390,4 +390,22 @@ async def slack_callback(code: str, state: str):
         return HTMLResponse(_oauth_success_html("slack", connector_id))
 
 
+@router.post("/slack/direct")
+async def slack_direct(workspace_id: str, current_user: User = Depends(get_current_user)):
+    """Create or update a Slack connector from the configured bot token."""
+    if not settings.slack_bot_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Slack direct token is not configured. Please set SLACK_BOT_TOKEN in .env",
+        )
+
+    config = {
+        "access_token": settings.slack_bot_token,
+        "team_name": "Slack Workspace",
+        "direct_token": True,
+    }
+    connector_id = await _upsert_oauth_connector("slack", workspace_id, config)
+    logger.info(f"Slack direct token connector ready: connector_id={connector_id}")
+    return {"connector_id": connector_id, "status": "connected"}
+
 

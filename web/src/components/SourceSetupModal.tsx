@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
+import { useSyncRunPolling } from "@/lib/syncRuns";
 
 interface SourceMetadata {
   name: string;
@@ -19,6 +20,13 @@ interface DiscoveredItem {
   description?: string;
   display_type?: string;
   member_count?: number;
+}
+
+interface SyncRun {
+  id: string;
+  status: "queued" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
+  stats?: Record<string, unknown>;
+  error?: string | null;
 }
 
 interface SourceSetupModalProps {
@@ -40,48 +48,17 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [connectorId, setConnectorId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [syncProgress, setSyncProgress] = useState<string>("");
-  const [oauthConfigured, setOauthConfigured] = useState<boolean>(true);
+  const [doneMessage, setDoneMessage] = useState<string>("Your brain is now live. Ask questions and get grounded answers from your connected sources.");
+  const [, setOauthConfigured] = useState<boolean>(true);
   const [hasDirectToken, setHasDirectToken] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const { startPolling } = useSyncRunPolling();
   const sourceIconSrc =
     type === "notion"
       ? "https://www.notion.so/favicon.ico"
       : type === "google_drive"
         ? "https://www.google.com/favicon.ico"
         : null;
-
-  // Check for existing connector on mount
-  useEffect(() => {
-    const init = async () => {
-      setIsInitialLoading(true);
-      await checkForExistingConnector();
-      setIsInitialLoading(false);
-    };
-    init();
-  }, [type, workspaceId]);
-
-  // Listen for OAuth popup messages
-  useEffect(() => {
-    const handler = (event: MessageEvent) => {
-      if (event.data?.type === "oauth-callback") {
-        if (event.data.status === "success") {
-          const cId = event.data.connector_id;
-          setConnectorId(cId);
-          setStep("discover");
-          setIsDiscovering(true);
-          discoverResources(cId);
-        } else if (event.data.status === "error") {
-          setErrorMessage(event.data.error || "OAuth flow failed");
-          setStep("error");
-        }
-        setIsLoading(false);
-      }
-    };
-
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const discoverResources = useCallback(async (cId: string) => {
     setIsDiscovering(true);
@@ -181,7 +158,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         setErrorMessage(errorData.detail || "Slack direct connection failed");
         setStep("error");
       }
-    } catch (error) {
+    } catch {
       setErrorMessage("Failed to connect Slack");
       setStep("error");
     } finally {
@@ -189,7 +166,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     }
   };
 
-  const checkForExistingConnector = async () => {
+  const checkForExistingConnector = useCallback(async () => {
     // After popup closes or on mount, check if the backend has an active connector
     try {
       const response = await apiFetch(`/api/connectors?workspace_id=${workspaceId}`);
@@ -197,7 +174,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         const connectors = await response.json() as Array<{ id: string; type: string; status: string; config_summary?: Record<string, unknown> }>;
         const match = connectors.find(
           (c) => c.type === type &&
-            (c.status === "active" || c.status === "pending") &&
+            c.status === "active" &&
             (c.config_summary?.oauth || c.config_summary?.direct_token)
         );
         if (match) {
@@ -212,7 +189,39 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       console.error("Failed to check for existing connector", e);
     }
     return false;
-  };
+  }, [discoverResources, type, workspaceId]);
+
+  // Check for existing connector on mount
+  useEffect(() => {
+    const init = async () => {
+      setIsInitialLoading(true);
+      await checkForExistingConnector();
+      setIsInitialLoading(false);
+    };
+    void init();
+  }, [checkForExistingConnector]);
+
+  // Listen for OAuth popup messages
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === "oauth-callback") {
+        if (event.data.status === "success") {
+          const cId = event.data.connector_id;
+          setConnectorId(cId);
+          setStep("discover");
+          setIsDiscovering(true);
+          void discoverResources(cId);
+        } else if (event.data.status === "error") {
+          setErrorMessage(event.data.error || "OAuth flow failed");
+          setStep("error");
+        }
+        setIsLoading(false);
+      }
+    };
+
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [discoverResources]);
 
   const handleManualToken = async () => {
     setIsLoading(true);
@@ -247,7 +256,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       setStep("discover");
       setIsDiscovering(true);
       await discoverResources(connector.id);
-    } catch (error) {
+    } catch {
       setErrorMessage("Connection failed. Check your token and try again.");
     } finally {
       setIsLoading(false);
@@ -258,7 +267,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     if (!connectorId) return;
 
     setStep("syncing");
-    setSyncProgress("Initializing ingestion pipeline...");
+    setSyncProgress("Starting sync...");
 
     try {
       const response = await apiFetch(`/api/connectors/${connectorId}/sync`, {
@@ -267,18 +276,41 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       });
 
       if (response.ok) {
-        setSyncProgress("Knowledge captured successfully!");
-        setStep("done");
-        setTimeout(() => {
-          onConnect(config);
-          onClose();
-        }, 2000);
+        const started = await response.json() as { sync_run_id: string; status: string; message?: string };
+        setSyncProgress(started.message || "Sync queued...");
+        startPolling(started.sync_run_id, {
+          onSuccess: (syncRun) => {
+            if (syncRun.status === "completed") {
+              setDoneMessage("Knowledge captured successfully. Your connected source is ready for grounded answers.");
+              setStep("done");
+              setTimeout(() => {
+                onConnect(config);
+                onClose();
+              }, 2000);
+            } else if (syncRun.status === "completed_with_errors") {
+              const failed = typeof syncRun.stats?.failed === "number" ? syncRun.stats.failed : "some";
+              setDoneMessage(`Sync completed with ${failed} document errors. Successful documents are available now.`);
+              setStep("done");
+              setTimeout(() => {
+                onConnect(config);
+                onClose();
+              }, 2600);
+            }
+          },
+          onError: (errStr) => {
+            setErrorMessage(errStr);
+            setStep("error");
+          },
+          onProgress: (progText) => {
+            setSyncProgress(progText);
+          }
+        });
       } else {
         const errorData = await response.json();
         setErrorMessage(errorData.detail || "Sync failed");
         setStep("error");
       }
-    } catch (error) {
+    } catch {
       setErrorMessage("Sync failed. Check backend logs for details.");
       setStep("error");
     }
@@ -549,7 +581,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
               <div className="space-y-3">
                 <h3 className="text-2xl font-black">Knowledge Captured!</h3>
                 <p className="text-sm text-zinc-500 max-w-[300px] mx-auto leading-relaxed">
-                  Your brain is now live. Ask questions and get grounded answers from your connected sources.
+                  {doneMessage}
                 </p>
               </div>
             </div>

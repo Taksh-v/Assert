@@ -28,7 +28,6 @@ class IngestionRunner:
         self.memory_store = memory_store
 
     def select_template(self, package: IngestionPackage) -> Optional[Any]:
-        # Mimic previous selection behaviour
         doc_type = package.metadata.get("document_type")
         if doc_type and doc_type.lower() in self.templates:
             return self.templates[doc_type.lower()]
@@ -37,9 +36,17 @@ class IngestionRunner:
         if source_type and source_type.lower() in self.templates:
             return self.templates[source_type.lower()]
 
-        source_url = getattr(package.raw_doc, "source_url", "")
-        if source_url.lower().endswith(".pdf") and "pdf" in self.templates:
-            return self.templates["pdf"]
+        source_url = getattr(package.raw_doc, "source_url", "").lower()
+        if source_url:
+            import urllib.parse
+            import os
+            try:
+                parsed_url = urllib.parse.urlparse(source_url)
+                ext = os.path.splitext(parsed_url.path)[1].lstrip(".")
+                if ext and ext in self.templates:
+                    return self.templates[ext]
+            except Exception:
+                pass
 
         return self.default_template
 

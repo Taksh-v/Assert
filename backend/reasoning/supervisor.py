@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 
+from backend.generation.llm_client import LLMClient
 from backend.core.config import get_settings
 
 settings = get_settings()
@@ -38,22 +39,7 @@ class SupervisorAgent:
     """
 
     def __init__(self):
-        self._client = None
-        self._client_init_failed = False
-
-    @property
-    def client(self):
-        if self._client is not None:
-            return self._client
-        if self._client_init_failed or not settings.groq_api_key:
-            return None
-        try:
-            from groq import Groq
-            self._client = Groq(api_key=settings.groq_api_key)
-            return self._client
-        except Exception as e:
-            self._client_init_failed = True
-            return None
+        self.client = LLMClient(model_type="smart")
 
     async def classify_intent(self, query: str) -> IntentClassification:
         """Analyze query to determine the best reasoning path."""
@@ -65,13 +51,6 @@ class SupervisorAgent:
                     intent=QueryIntent.CONVERSATIONAL,
                     reasoning="Simple greeting or acknowledgment"
                 )
-
-        if not self.client:
-            logger.warning("Supervisor: No LLM client, defaulting to DEEP_ANALYSIS")
-            return IntentClassification(
-                intent=QueryIntent.DEEP_ANALYSIS,
-                reasoning="Fallback due to missing LLM client"
-            )
 
         prompt = f"""Classify the intent of the following user query to route it to the correct AI specialist.
 
@@ -97,7 +76,7 @@ Output ONLY valid JSON matching this schema:
                     {"role": "system", "content": "You are a highly efficient query router. Output ONLY valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                model=settings.groq_model,
+                model=settings.openrouter_smart_model,
                 temperature=0,
                 response_format={"type": "json_object"}
             )

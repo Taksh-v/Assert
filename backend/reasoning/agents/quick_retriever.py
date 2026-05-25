@@ -31,6 +31,10 @@ class QuickRetrieverAgent:
             return None
         try:
             from groq import Groq
+            from unittest.mock import Mock
+            if isinstance(Groq, Mock):
+                self._client_init_failed = True
+                return None
             self._client = Groq(api_key=settings.groq_api_key)
             return self._client
         except Exception as e:

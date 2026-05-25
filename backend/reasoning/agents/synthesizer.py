@@ -12,7 +12,7 @@ class SynthesizerAgent:
     Generates high-fidelity executive intelligence and recommendations.
     """
 
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "groq/llama-3.3-70b-versatile"):
         self.client = LLMClient()
         self.model = model
 

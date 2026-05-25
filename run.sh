@@ -118,14 +118,29 @@ fi
 # ── Start Backend ──────────────────────────────────
 echo -e "${BLUE}🚀 Starting Backend (FastAPI on :8000)...${NC}"
 
-# Run in background with its own process group
+# Reuse the dedicated backend startup script so the backend uses the same
+# dependency checks and interpreter selection as manual backend launches.
 set -m
-$PYTHON_EXEC -m uvicorn backend.main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    > logs/backend.log 2>&1 &
+./run_backend.sh > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 set +m
+
+# Wait for the backend health endpoint before starting the frontend.
+echo -e "${BLUE}⏳ Waiting for backend health on :8000...${NC}"
+READY=0
+for _ in $(seq 1 60); do
+    if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    sleep 1
+done
+
+if [[ "$READY" -ne 1 ]]; then
+    echo -e "${RED}❌ Backend did not become healthy. See logs/backend.log${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✅ Backend is healthy.${NC}"
 
 # ── Start Frontend ─────────────────────────────────
 echo -e "${BLUE}🚀 Starting Frontend (Next.js on :3000)...${NC}"
@@ -140,6 +155,7 @@ echo -e "${GREEN}${BOLD}✨ Assest is running!${NC}"
 echo -e "   🔗 Backend  : http://localhost:8000"
 echo -e "   🔗 Frontend : http://localhost:3000"
 echo -e "   🔗 Health   : http://localhost:8000/health"
+echo -e "   🔗 Traces   : http://localhost:8000/api/traces"
 echo -e "   📄 Logs     : logs/backend.log & logs/frontend.log"
 echo -e "${CYAN}────────────────────────────────────────${NC}"
 

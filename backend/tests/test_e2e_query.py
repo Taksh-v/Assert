@@ -119,7 +119,7 @@ def test_query_endpoints():
         events = []
         for line in stream_resp.iter_lines():
             if line:
-                decoded = line.decode("utf-8")
+                decoded = line.decode("utf-8") if isinstance(line, bytes) else line
                 print(f"   Stream chunk: {decoded}")
                 events.append(decoded)
                 if len(events) >= 5:

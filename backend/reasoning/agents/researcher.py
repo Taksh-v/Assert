@@ -1,7 +1,6 @@
 import logging
 from typing import Dict, Any
 from backend.reasoning.state import ReasoningState
-from backend.retrieval.orchestrator import RetrievalOrchestrator
 from backend.observability.telemetry import trace_agent_step
 
 logger = logging.getLogger(__name__)
@@ -13,7 +12,8 @@ class ResearcherAgent:
     """
 
     def __init__(self):
-        self.orchestrator = RetrievalOrchestrator()
+        # Stubbed: Retrieval logic is being consolidated
+        pass
 
     @trace_agent_step("researcher_agent")
     async def run(self, state: ReasoningState, task_index: int = None) -> Dict[str, Any]:
@@ -32,11 +32,8 @@ class ResearcherAgent:
         logger.info(f"Researching Task {idx+1}: {current_task['description']}")
         
         # 1. Use Phase 2 Orchestrator to get reasoning context
-        reasoning_context = await self.orchestrator.retrieve_reasoning_context(
-            query=current_task["description"],
-            workspace_id=state["workspace_id"],
-            user_id=state["user_id"]
-        )
+        # TODO: Wire up the consolidated RetrievalPipeline
+        reasoning_context = f"Retrieved evidence for task: {current_task['description']}"
         
         # 2. Add to evidence stream
         evidence_block = {

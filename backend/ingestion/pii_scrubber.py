@@ -17,8 +17,8 @@ class PIIScrubber:
     _custom_recognizers_added = False
 
     def __init__(self):
-        if not PIIScrubber._load_attempted:
-            PIIScrubber._load_attempted = True
+        if not getattr(PIIScrubber, "_load_attempted", False):
+            setattr(PIIScrubber, "_load_attempted", True)
             try:
                 from presidio_analyzer import AnalyzerEngine
                 from presidio_anonymizer import AnonymizerEngine
@@ -29,12 +29,12 @@ class PIIScrubber:
             except Exception as e:
                 logger.warning(f"presidio initialization failed, PII scrubbing disabled: {e}")
 
-        self.analyzer = PIIScrubber._shared_analyzer
-        self.anonymizer = PIIScrubber._shared_anonymizer
+        self.analyzer = getattr(PIIScrubber, "_shared_analyzer", None)
+        self.anonymizer = getattr(PIIScrubber, "_shared_anonymizer", None)
         self.vault: Dict[str, str] = {}  # placeholder -> original
-        if self.analyzer and not PIIScrubber._custom_recognizers_added:
+        if self.analyzer and not getattr(PIIScrubber, "_custom_recognizers_added", False):
             self._add_custom_recognizers()
-            PIIScrubber._custom_recognizers_added = True
+            setattr(PIIScrubber, "_custom_recognizers_added", True)
 
     def _add_custom_recognizers(self):
         """Add Indian ID recognizers."""

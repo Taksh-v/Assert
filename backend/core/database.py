@@ -63,87 +63,14 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if settings.database_url.startswith("sqlite"):
-            await _ensure_sqlite_dev_columns(conn)
+            from backend.core.migrations import ensure_sqlite_dev_columns
+            await ensure_sqlite_dev_columns(conn)
 
 
 async def close_db():
     """Dispose engine connections. Called on app shutdown."""
     await engine.dispose()
 
-
-async def _ensure_sqlite_dev_columns(conn):
-    """
-    Additive schema sync for local SQLite development.
-    SQLAlchemy create_all creates missing tables but does not migrate existing ones.
-    """
-    table_columns = {
-        "chunks": {
-            "parent_id": "VARCHAR",
-            "heading_path": "JSON",
-            "chunk_type": "VARCHAR DEFAULT 'text'",
-            "structural_metadata": "JSON",
-            "content_tokens": "INTEGER DEFAULT 0",
-            "search_content": "TEXT",
-            "tier": "INTEGER DEFAULT 2",
-            "source_type": "VARCHAR",
-            "source_url": "VARCHAR",
-            "document_title": "VARCHAR",
-            "permissions": "JSON",
-            "quality_score": "FLOAT DEFAULT 1.0",
-            "retrieval_count": "INTEGER DEFAULT 0",
-            "positive_feedback": "INTEGER DEFAULT 0",
-            "negative_feedback": "INTEGER DEFAULT 0",
-            "source_modified_at": "DATETIME",
-            "expires_at": "DATETIME",
-            "created_at": "DATETIME",
-        },
-        "documents": {
-            "document_type": "VARCHAR DEFAULT 'general'",
-            "mime_type": "VARCHAR",
-            "tier": "INTEGER DEFAULT 2",
-            "tags": "JSON",
-            "is_stale": "BOOLEAN DEFAULT 0",
-        },
-        "connectors": {
-            "last_sync_cursor": "VARCHAR",
-            "error_log": "JSON",
-        },
-        "connector_sync_states": {
-            "last_sync_token": "VARCHAR",
-            "last_stats": "JSON",
-            "is_running": "BOOLEAN DEFAULT 0",
-            "lock_owner": "VARCHAR",
-            "lock_acquired_at": "DATETIME",
-            "lock_expires_at": "DATETIME",
-            "last_error": "TEXT",
-        },
-        "failed_ingestions": {
-            "attempts": "JSON",
-            "retry_count": "INTEGER DEFAULT 0",
-            "status": "VARCHAR DEFAULT 'pending'",
-        },
-        "query_logs": {
-            "conversation_id": "VARCHAR",
-            "feedback": "VARCHAR DEFAULT 'NULL'",
-            "response_time_ms": "INTEGER",
-        },
-        "knowledge_objects": {
-            "title": "VARCHAR",
-            "type": "VARCHAR",
-            "summary": "TEXT",
-            "entities": "JSON",
-            "topics": "JSON",
-            "source_document_ids": "JSON",
-            "relationships": "JSON",
-        }
-    }
-
-    for table_name, columns in table_columns.items():
-        existing = await conn.execute(text(f"PRAGMA table_info({table_name})"))
-        existing_names = {row[1] for row in existing.fetchall()}
-        for column_name, column_type in columns.items():
-            if column_name not in existing_names:
-                await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
 # ── Idempotent Operations (Phase 3a: Event-Driven Sync) ────

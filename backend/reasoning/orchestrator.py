@@ -10,7 +10,6 @@ from backend.reasoning.agents.researcher import ResearcherAgent
 from backend.reasoning.agents.analyst import AnalystAgent
 from backend.reasoning.agents.synthesizer import SynthesizerAgent
 from backend.evals.pipeline import ScoringPipeline
-from backend.memory.manager import MemoryManager
 
 try:
     from langgraph.graph import StateGraph, END
@@ -33,7 +32,8 @@ class ReasoningOrchestrator:
         self.analyst = AnalystAgent()
         self.synthesizer = SynthesizerAgent()
         self.scoring_pipeline = ScoringPipeline()
-        self.memory_manager = MemoryManager()
+        from backend.memory.platform import get_platform_memory
+        self.memory_manager = get_platform_memory()
         
         if HAS_LANGGRAPH:
             self.workflow = self._build_workflow()
@@ -151,123 +151,32 @@ class ReasoningOrchestrator:
                 await session.refresh(execution)
                 execution_id = execution.id
 
-        # Use LangGraph if available, fallback to Native Orchestration
-        import os
-        use_native = os.getenv("USE_NATIVE_ORCHESTRATION", "false").lower() == "true"
-        
-        if HAS_LANGGRAPH and not use_native:
-            logger.info("Executing Reasoning Swarm via LangGraph StateGraph")
-            try:
-                # Ensure the completed_task_ids list is initialized
-                if "completed_task_ids" not in state:
-                    state["completed_task_ids"] = []
+        if not HAS_LANGGRAPH:
+            logger.error("LangGraph is required for reasoning orchestrator but is not installed.")
+            raise RuntimeError("LangGraph missing")
 
-                # Execute the LangGraph workflow
-                final_state = await self.workflow.ainvoke(state)
-                
-                # Check if it was suspended (via AwaitApproval node or error)
-                if final_state.get("awaiting_approval"):
-                    await self._update_execution(execution_id, final_state, "suspended")
-                    return self._format_result(final_state, execution_id, "suspended")
-                
-                # Continue to Analysis & Evaluation checks using final_state
-                state = final_state
-                await self._update_execution(execution_id, state, "running")
-            except Exception as e:
-                logger.error(f"LangGraph execution failed: {e}")
-                state["errors"].append(str(e))
-                await self._update_execution(execution_id, state, "failed")
-                return self._format_result(state, execution_id, "failed")
-        else:
-            logger.warning("Executing via Native Orchestration Fallback")
-            # ── Step 1: Planning ──
-            if not state.get("plan"):
-                plan_update = await self.planner.run(state)
-                state.update(plan_update)
-                if state.get("errors"):
-                    await self._update_execution(execution_id, state, "failed")
-                    return self._format_result(state, execution_id, "failed")
-                await self._update_execution(execution_id, state, "running")
-
-            tasks = state["plan"].get("tasks", [])
-
-            # Ensure completed_task_ids list is in the state snapshot
+        logger.info("Executing Reasoning Swarm via LangGraph StateGraph")
+        try:
+            # Ensure the completed_task_ids list is initialized
             if "completed_task_ids" not in state:
                 state["completed_task_ids"] = []
-                if state.get("current_task_index", 0) > 0:
-                    # Add all tasks up to current_task_index as completed
-                    state["completed_task_ids"] = [t["id"] for t in tasks[:state["current_task_index"]]]
 
-            # ── Step 2: Research loop with DAG orchestration & suspend checks ──
-            while len(state["completed_task_ids"]) < len(tasks) and state.get("should_continue", True):
-                # 1. Identify tasks ready to run (dependencies satisfied)
-                completed_set = set(state["completed_task_ids"])
-                ready_tasks = []
-                for task in tasks:
-                    if task["id"] not in completed_set:
-                        deps = task.get("dependencies", [])
-                        if all(dep_id in completed_set for dep_id in deps):
-                            ready_tasks.append(task)
-
-                if not ready_tasks:
-                    logger.error("DAG Deadlock or cycle detected in reasoning plan!")
-                    state["errors"].append("DAG Deadlock or cycle detected in reasoning plan")
-                    break
-
-                # 2. Check if any ready tasks trigger manual gating and are not yet approved
-                needs_approval = False
-                for task in ready_tasks:
-                    desc = task.get("description", "").lower()
-                    if any(k in desc for k in ["approve", "confirm", "write"]) and not state.get("approved"):
-                        needs_approval = True
-                        break
-
-                if needs_approval:
-                    from backend.reasoning.schemas import get_approval_schema
-                    state["awaiting_approval"] = True
-                    state["current_task_index"] = len(state["completed_task_ids"])
-                    # Generate a suspend schema based on the first task needing approval
-                    task_descriptions = [t.get("description", "") for t in ready_tasks if any(k in t.get("description", "").lower() for k in ["approve", "confirm", "write"])]
-                    desc = task_descriptions[0] if task_descriptions else "Action requires approval"
-                    state["suspend_schema"] = get_approval_schema(desc)
-                    
-                    await self._update_execution(execution_id, state, "suspended")
-                    return self._format_result(state, execution_id, "suspended")
-
-                # 3. Execute all ready tasks in parallel
-                import asyncio
-                
-                async def run_single_task(task_obj):
-                    task_idx = tasks.index(task_obj)
-                    return await self.researcher.run(state, task_index=task_idx), task_obj["id"]
-
-                logger.info(f"Executing {len(ready_tasks)} tasks in parallel: {[t['description'] for t in ready_tasks]}")
-                results = await asyncio.gather(*(run_single_task(t) for t in ready_tasks))
-
-                # 4. Process results and update state
-                for research_update, task_id in results:
-                    if "raw_evidence" in research_update:
-                        state["raw_evidence"].extend(research_update["raw_evidence"])
-                    state["completed_task_ids"].append(task_id)
-
-                state["iterations"] = state.get("iterations", 0) + 1
-                state["current_task_index"] = len(state["completed_task_ids"])
-                await self._update_execution(execution_id, state, "running")
-                
-                if state["iterations"] >= state["max_iterations"]:
-                    break
-
-            # ── Step 3: Analysis ──
-            if not state.get("synthesized_findings") and not state.get("final_answer"):
-                analysis_update = await self.analyst.run(state)
-                state.update(analysis_update)
-                await self._update_execution(execution_id, state, "running")
-
-            # ── Step 4: Synthesis ──
-            if not state.get("final_answer"):
-                synthesis_update = await self.synthesizer.run(state)
-                state.update(synthesis_update)
-                await self._update_execution(execution_id, state, "running")
+            # Execute the LangGraph workflow
+            final_state = await self.workflow.ainvoke(state)
+            
+            # Check if it was suspended (via AwaitApproval node or error)
+            if final_state.get("awaiting_approval"):
+                await self._update_execution(execution_id, final_state, "suspended")
+                return self._format_result(final_state, execution_id, "suspended")
+            
+            # Continue to Analysis & Evaluation checks using final_state
+            state = final_state
+            await self._update_execution(execution_id, state, "running")
+        except Exception as e:
+            logger.error(f"LangGraph execution failed: {e}")
+            state["errors"].append(str(e))
+            await self._update_execution(execution_id, state, "failed")
+            return self._format_result(state, execution_id, "failed")
 
         # ── Step 5: Quality Evaluation (Mastra-inspired Evals) ──
         eval_result = None

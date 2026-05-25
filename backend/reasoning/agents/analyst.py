@@ -13,7 +13,7 @@ class AnalystAgent:
     Correlates evidence, tests hypotheses, and identifies causal links.
     """
 
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "groq/llama-3.3-70b-versatile"):
         self.client = LLMClient()
         self.model = model
 

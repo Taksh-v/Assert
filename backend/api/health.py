@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from backend.core.config import get_settings
 
 router = APIRouter(tags=["System"])
@@ -17,6 +17,13 @@ import logging
 router = APIRouter(tags=["System"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# optional prometheus exposition
+try:
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    _PROM_AVAILABLE = True
+except Exception:
+    _PROM_AVAILABLE = False
 
 @router.get("/health")
 async def health_check():
@@ -76,3 +83,12 @@ async def health_check():
         health["status"] = "degraded"
         
     return health
+
+
+@router.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint; returns 501 if prometheus_client unavailable."""
+    if not _PROM_AVAILABLE:
+        return Response(status_code=501, content="Prometheus client not installed")
+    data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)

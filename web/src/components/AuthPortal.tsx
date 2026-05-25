@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Sparkles, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
-import { setAuthToken, setCurrentUser, setActiveWorkspace, apiFetch, WorkspaceInfo } from "@/lib/auth";
+import { setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
   const [isLogin, setIsLogin] = useState(true);

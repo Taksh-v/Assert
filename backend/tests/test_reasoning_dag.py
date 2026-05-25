@@ -25,7 +25,7 @@ from backend.reasoning.orchestrator import ReasoningOrchestrator
 from backend.models.reasoning_execution import ReasoningExecution
 from sqlalchemy import select
 
-async def test_dag_parallel_workflow():
+async def test_dag_parallel_workflow(monkeypatch):
     print("🚀 Initializing test database for DAG verification...")
     await init_db()
     
@@ -68,8 +68,9 @@ async def test_dag_parallel_workflow():
             self.completions = MockCompletions()
 
     # Temporarily monkey-patch the client.chat property to return our parallel mock
-    LLMClient._client_init_failed = True
-    LLMClient.chat = property(lambda self: MockChat())
+    monkeypatch.setenv("USE_NATIVE_ORCHESTRATION", "true")
+    monkeypatch.setattr(LLMClient, "_client_init_failed", True, raising=False)
+    monkeypatch.setattr(LLMClient, "chat", property(lambda self: MockChat()))
     
     orchestrator = ReasoningOrchestrator()
     

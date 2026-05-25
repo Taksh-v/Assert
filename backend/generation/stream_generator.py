@@ -6,6 +6,7 @@ responses over Server-Sent Events (SSE).
 """
 import logging
 import json
+import os
 from typing import AsyncGenerator, List, Dict, Any
 from backend.generation.llm_client import LLMClient
 from backend.core.config import get_settings

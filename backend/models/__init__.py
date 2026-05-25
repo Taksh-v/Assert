@@ -16,6 +16,9 @@ from .reasoning_execution import ReasoningExecution
 from .failed_ingestion import FailedIngestion
 from .observation import Observation
 from .eval_score import EvalScore
+from .background_task import BackgroundTask
+from .sync_run import SyncRun
+from .run_ledger import RunLedgerMixin, RunStatus
 
 __all__ = [
     "User", 
@@ -31,5 +34,10 @@ __all__ = [
     "ReasoningExecution",
     "FailedIngestion",
     "Observation",
-    "EvalScore"
+    "EvalScore",
+    "BackgroundTask",
+    "SyncRun",
+    "RunLedgerMixin",
+    "RunStatus"
 ]
+

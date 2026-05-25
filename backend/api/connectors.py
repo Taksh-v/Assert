@@ -1,17 +1,18 @@
 import logging
-import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from backend.core.database import get_db, async_session
+from sqlalchemy import select
+from backend.core.database import get_db
 from backend.core.config import get_settings
 from backend.core.security import encrypt_config, decrypt_config
 from backend.api.users import get_current_user
 from backend.models.user import User
 from backend.models.workspace_member import WorkspaceMember
 from backend.models.connector import Connector, ConnectorType
+from backend.models.sync_run import SyncRun
+from backend.workers.sync_coordinator import ConnectorSyncCoordinator
 from pydantic import BaseModel, ConfigDict
 
 router = APIRouter(tags=["Connectors"])
@@ -92,6 +93,30 @@ class ConnectorCreate(BaseModel):
     config: Dict[str, Any]
 
 
+class SyncRunSummary(BaseModel):
+    id: str
+    status: str
+    triggered_by: str
+    stats: Dict[str, Any] = {}
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class SyncRunResponse(SyncRunSummary):
+    connector_id: str
+    workspace_id: str
+    selected_ids: Optional[List[str]] = None
+    task_id: Optional[str] = None
+
+
+class SyncTriggerResponse(BaseModel):
+    sync_run_id: str
+    status: str
+    message: str
+
+
 class ConnectorResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -103,9 +128,36 @@ class ConnectorResponse(BaseModel):
     created_at: datetime
     config_summary: Dict[str, Any] = {}
     document_count: int = 0
+    latest_sync: Optional[SyncRunSummary] = None
 
 
-def serialize_connector(connector: Connector) -> ConnectorResponse:
+def serialize_sync_run(sync_run: Optional[SyncRun]) -> Optional[SyncRunSummary]:
+    if not sync_run:
+        return None
+    return SyncRunSummary(
+        id=sync_run.id,
+        status=sync_run.status,
+        triggered_by=sync_run.triggered_by,
+        stats=sync_run.stats or {},
+        error=sync_run.error,
+        created_at=sync_run.created_at,
+        started_at=sync_run.started_at,
+        completed_at=sync_run.completed_at,
+    )
+
+
+def serialize_sync_run_response(sync_run: SyncRun) -> SyncRunResponse:
+    summary = serialize_sync_run(sync_run)
+    return SyncRunResponse(
+        **summary.model_dump(),
+        connector_id=sync_run.connector_id,
+        workspace_id=sync_run.workspace_id,
+        selected_ids=sync_run.selected_ids,
+        task_id=sync_run.task_id,
+    )
+
+
+def serialize_connector(connector: Connector, latest_sync: Optional[SyncRun] = None) -> ConnectorResponse:
     # Decrypt config for internal use, but safe summary filters it
     try:
         config = decrypt_config(connector.config)
@@ -126,7 +178,12 @@ def serialize_connector(connector: Connector) -> ConnectorResponse:
             for key, value in config.items()
             if key in safe_keys
         },
+        latest_sync=serialize_sync_run(latest_sync),
     )
+
+
+async def _latest_sync_for_connector(db: AsyncSession, connector_id: str) -> Optional[SyncRun]:
+    return await ConnectorSyncCoordinator().get_latest_sync_run(db, connector_id)
 
 
 @router.post("/connectors", response_model=ConnectorResponse)
@@ -156,7 +213,7 @@ async def create_connector(
         existing.config = encrypted_config
         existing.status = "active"
         await db.flush()
-        return serialize_connector(existing)
+        return serialize_connector(existing, await _latest_sync_for_connector(db, existing.id))
 
     new_connector = Connector(
         workspace_id=workspace_id,
@@ -184,7 +241,10 @@ async def list_connectors(
     result = await db.execute(stmt)
     connectors = result.scalars().all()
     
-    return [serialize_connector(connector) for connector in connectors]
+    responses = []
+    for connector in connectors:
+        responses.append(serialize_connector(connector, await _latest_sync_for_connector(db, connector.id)))
+    return responses
 
 
 @router.get("/connectors/{connector_id}", response_model=ConnectorResponse)
@@ -206,7 +266,7 @@ async def get_connector(
     # Verify access to the workspace
     await verify_workspace_access(connector.workspace_id, db, current_user)
 
-    return serialize_connector(connector)
+    return serialize_connector(connector, await _latest_sync_for_connector(db, connector.id))
 
 
 @router.delete("/connectors/{connector_id}")
@@ -243,7 +303,7 @@ async def discover_source_content(
     Blueprint Layer 15: Discovery Engine.
     Lists available items (pages, folders, channels) in the connected source.
     """
-    from backend.connectors.registry import connector_registry
+    from backend.connectors.registry import connector_factory
 
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
@@ -258,8 +318,7 @@ async def discover_source_content(
     connector_type = getattr(connector.type, "value", connector.type)
 
     try:
-        conn_class = connector_registry.get_connector(connector_type)
-        conn_impl = conn_class()
+        conn_impl = connector_factory.create(connector_type)
 
         # Use decrypted config for connection
         config = decrypt_config(connector.config)
@@ -276,7 +335,11 @@ async def discover_source_content(
         raise HTTPException(status_code=500, detail=f"Failed to browse source: {str(e)}")
 
 
-@router.post("/connectors/{connector_id}/sync")
+@router.post(
+    "/connectors/{connector_id}/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SyncTriggerResponse,
+)
 async def trigger_sync(
     connector_id: str, 
     request: Optional[Dict[str, Any]] = None, 
@@ -286,8 +349,6 @@ async def trigger_sync(
     """
     Trigger a sync, optionally for specific resource IDs.
     """
-    from backend.ingestion.pipeline import IngestionPipeline
-    
     stmt = select(Connector).where(Connector.id == connector_id)
     result = await db.execute(stmt)
     connector = result.scalars().first()
@@ -299,44 +360,55 @@ async def trigger_sync(
     await verify_workspace_access(connector.workspace_id, db, current_user)
     
     selected_ids = request.get("selected_ids") if request else None
-    
-    try:
-        pipeline = IngestionPipeline()
-    except Exception as e:
-        logger.error(f"Pipeline init failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Ingestion pipeline error: {str(e)}")
 
-    # Run the pipeline as a background task to avoid blocking the UI
-    async def run_in_background():
-        try:
-            logger.info(f"Starting background sync for connector {connector_id}")
-            await pipeline.run(connector_id, selected_ids=selected_ids)
-            
-            # Update status in a fresh session to avoid detached instance errors
-            async with async_session() as session:
-                stmt = update(Connector).where(Connector.id == connector_id).values(
-                    status="active",
-                    last_synced_at=datetime.utcnow()
-                )
-                await session.execute(stmt)
-                await session.commit()
-            logger.info(f"Background sync completed for connector {connector_id}")
-        except Exception as e:
-            logger.error(f"Background sync failed for {connector_id}: {e}")
-            async with async_session() as session:
-                stmt = update(Connector).where(Connector.id == connector_id).values(
-                    status="error",
-                    error_log={"last_error": str(e), "timestamp": datetime.utcnow().isoformat()}
-                )
-                await session.execute(stmt)
-                await session.commit()
+    from backend.workers.task_queue import enqueue_task
 
-    asyncio.create_task(run_in_background())
-    
+    coordinator = ConnectorSyncCoordinator()
+    sync_run, created = await coordinator.create_sync_run(
+        db,
+        connector,
+        selected_ids=selected_ids,
+        triggered_by="manual",
+    )
+    if created:
+        task_id = await enqueue_task("connector_sync", {"sync_run_id": sync_run.id}, db=db)
+        await coordinator.attach_task(db, sync_run, task_id)
+
     return {
-        "status": "success", 
-        "message": "Sync started in background. You can close this window and the brain will update shortly."
+        "sync_run_id": sync_run.id,
+        "status": sync_run.status,
+        "message": "Sync started" if created else "Sync already running",
     }
+
+
+@router.get("/connectors/{connector_id}/sync-runs/latest", response_model=Optional[SyncRunResponse])
+async def get_latest_connector_sync_run(
+    connector_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    stmt = select(Connector).where(Connector.id == connector_id)
+    connector = (await db.execute(stmt)).scalars().first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    await verify_workspace_access(connector.workspace_id, db, current_user)
+    sync_run = await ConnectorSyncCoordinator().get_latest_sync_run(db, connector_id)
+    return serialize_sync_run_response(sync_run) if sync_run else None
+
+
+@router.get("/sync-runs/{sync_run_id}", response_model=SyncRunResponse)
+async def get_sync_run(
+    sync_run_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    sync_run = (await db.execute(select(SyncRun).where(SyncRun.id == sync_run_id))).scalars().first()
+    if not sync_run:
+        raise HTTPException(status_code=404, detail="Sync run not found")
+
+    await verify_workspace_access(sync_run.workspace_id, db, current_user)
+    return serialize_sync_run_response(sync_run)
 
 
 @router.get("/oauth/authorize/{source_type}")
@@ -381,6 +453,8 @@ async def get_auth_url(
         }
     
     if source_type == "slack":
+        if settings.slack_bot_token and not settings.slack_client_id:
+            return {"direct_token": True, "configured": True}
         if not settings.slack_client_id:
             raise HTTPException(status_code=400, detail="Slack OAuth is not configured. Please set SLACK_CLIENT_ID in .env")
         scopes = "channels:history,channels:read,users:read"

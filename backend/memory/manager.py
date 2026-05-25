@@ -126,6 +126,37 @@ class MemoryManager:
             result = await session.execute(stmt)
             return len(result.scalars().all())
 
+    async def get_recent_observations(
+        self,
+        workspace_id: str,
+        user_id: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Return the most recent active observations as dicts for use in assembly and UI."""
+        async with async_session() as session:
+            stmt = select(Observation).where(
+                Observation.workspace_id == workspace_id,
+                Observation.is_active == True
+            )
+            if user_id:
+                stmt = stmt.where(Observation.user_id == user_id)
+            stmt = stmt.order_by(Observation.priority.desc(), Observation.created_at.desc()).limit(limit)
+
+            result = await session.execute(stmt)
+            observations = result.scalars().all()
+
+        return [
+            {
+                "id": obs.id,
+                "content": obs.content,
+                "priority": obs.priority,
+                "created_at": obs.created_at.isoformat() if obs.created_at else None,
+                "user_id": obs.user_id,
+                "category": obs.category,
+            }
+            for obs in observations
+        ]
+
     # ── Private helpers ──────────────────────────────────────
 
     async def _get_observation_log(

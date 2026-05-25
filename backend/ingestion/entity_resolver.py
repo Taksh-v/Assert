@@ -63,13 +63,14 @@ class EntityResolver:
             
             # 3. Semantic Match Check
             if not resolved_obj and existing_objects:
-                new_emb = self.embedder.embed([normalized_name])[0]
+                # Use async embedding to avoid blocking
+                new_emb = (await self.embedder.aembed([normalized_name]))[0]
                 best_score = 0
                 best_match = None
                 
                 for obj in existing_objects:
                     if obj.type != e_type: continue
-                    obj_emb = self.embedder.embed([obj.title])[0]
+                    obj_emb = (await self.embedder.aembed([obj.title]))[0]
                     score = self._cosine_similarity(new_emb, obj_emb)
                     if score > best_score:
                         best_score = score

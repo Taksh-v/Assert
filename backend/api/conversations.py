@@ -90,7 +90,8 @@ async def get_conversation(
     db: AsyncSession = Depends(get_db)
 ):
     """Get conversation details and messages."""
-    stmt = select(Conversation).where(Conversation.id == conversation_id)
+    from sqlalchemy.orm import selectinload
+    stmt = select(Conversation).options(selectinload(Conversation.messages)).where(Conversation.id == conversation_id)
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
     

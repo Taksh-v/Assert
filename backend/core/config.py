@@ -72,7 +72,7 @@ class Settings(BaseSettings):
 
     # ── LLM — Groq ──────────────────────────────────────
     groq_api_key: Optional[str] = Field(default=None)
-    groq_model: str = Field(default="llama-3.3-70b-versatile")
+    groq_model: str = Field(default="groq/llama-3.3-70b-versatile")
 
     # ── Embeddings ───────────────────────────────────────
     load_local_models: bool = Field(default=True, alias="ASSEST_LOAD_LOCAL_MODELS")
@@ -150,6 +150,18 @@ class Settings(BaseSettings):
         description="Interval in minutes between auto ingestion passes",
     )
 
+    # ── Metrics / Prometheus ───────────────────────────
+    enable_prometheus: bool = Field(
+        default=False,
+        description="Enable Prometheus metrics exposition and collection",
+    )
+
+    # ── Pilot Flags ─────────────────────────────────────
+    pilot_connectors: str = Field(
+        default="",
+        description="Comma-separated list of connector ids or connector types to pilot the new sync runner. Empty means run everywhere.",
+    )
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse comma-separated CORS origins into a list."""
@@ -166,6 +178,12 @@ class Settings(BaseSettings):
     @property
     def supabase_enabled(self) -> bool:
         return bool(self.supabase_url and (self.supabase_service_role_key or self.supabase_anon_key))
+
+    @property
+    def pilot_connectors_list(self) -> list[str]:
+        if not self.pilot_connectors:
+            return []
+        return [s.strip().lower() for s in self.pilot_connectors.split(",") if s.strip()]
 
     model_config = {
         "env_file": ".env",

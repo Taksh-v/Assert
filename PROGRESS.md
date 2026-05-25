@@ -1,4 +1,4 @@
-## Status: 🧠 Company Brain — Phases 1-3 Completed & Verified (Zero-Cost local path)
+## Status: 🧠 Company Brain — Phases 1-6 Completed & Verified (Zero-Cost local path)
 
 The Assest engine has been transformed into a production-grade Reasoning Infrastructure. All core cognitive layers (Sensory, Attention, Executive) are now running locally via LiteLLM/Ollama for $0 API cost.
 
@@ -20,7 +20,20 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] Resilience & Graceful Fallback: System maintains logic flow even when external components (like Langfuse) or proxies have version mismatches or connectivity issues.
 - [x] Tool-Call Discovery: Routing engine identifies when to use GitHub/Jira vs. Internal Knowledge.
 
-### 4. Phase 4: Stability & Production Consolidation — [COMPLETED]
+### 4. Phase 4: Query Resolution Types — [VERIFIED]
+- [x] Created `backend/query/resolution.py` defining structured `QueryResolutionPlan`, `RetrievalContext`, `ReasoningResult`, and `QueryResult` models.
+- [x] Refactored `QueryService` (`query_service.py`) to return typed `QueryResult` and use `QueryResolutionPlan` for routing, ensuring full dict-like backward compatibility for tests and client routes.
+
+### 5. Phase 5: Seal Async Knowledge Index Seam — [VERIFIED]
+- [x] Fixed `sqlite3.IntegrityError` in chunk persistence by explicitly assigning generated UUIDs to `Document.id` in `SQLDocumentStore` before session merge, preventing `None` ids from propagating to chunk records.
+- [x] Refactored `DefaultIndexAdapter` to natively utilize `async_upsert_batch` on the vector store when available.
+- [x] Updated `GraphExpansionEngine` to query the graph database asynchronously using `async_get_knowledge_cluster`.
+
+### 6. Phase 6: Frontend SyncRun Hooks — [VERIFIED]
+- [x] Created React custom hook `useSyncRunPolling` in `web/src/lib/syncRuns.ts` with abort-signal cleanup to manage sync polling cycles safely.
+- [x] Refactored `SourceSetupModal.tsx` and `connectors/page.tsx` to utilize `useSyncRunPolling`, eliminating memory leaks on unmount and silent timeout bugs.
+
+### 7. Phase 7: Stability & Production Consolidation — [COMPLETED]
 - [x] Final Groq/OpenAI SDK cleanup: Removed all direct external SDK dependencies.
 - [x] **Analytical Intelligence Bridge:** Integrated `WrenAITool` into the orchestrator to enable complex Text-to-SQL logic.
 - [x] **Semantic Search Activation:** Enabled real local embedding models by default, moving beyond simple hash searches.
@@ -29,10 +42,22 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Unified Health Check:** Implemented `/health` endpoint to monitor Sensory, Attention, and Executive layers.
 - [x] **One-Script Production Launch:** Optimized `run.sh` to orchestrate Docker infra and multi-process startup.
 
-## Original Task Reference (Mastra Integration)
-- [x] MCP Tool Registry & Tool Executor Agent
-- [x] SSE Token Streaming Response Pipeline
-- [x] Schema-driven suspend/resume workflows
-- [x] Background memory reflection and DLQ retry workers
-- [x] JWT Authentication & Dynamic Workspaces
-- [x] dlt/Airbyte Integration for Ingestion
+### 8. Phase 8: Architectural Consolidation & Interactive Cyber-Tech UI/UX Redesign — [VERIFIED]
+- [x] **Authentication Gate**: Wrapped `AppShell.tsx` layout with `AuthPortal` token-verification gate.
+- [x] **Dynamic Sidebar**: Replaced static sidebar links with live conversation fetching, start chat (+), and delete thread actions.
+- [x] **Redirect & Stream**: Updated home `page.tsx` to initialize new conversations and redirect to the thread page.
+- [x] **SSE Streaming query**: Migrated `[id]/page.tsx` to execute SSE streaming calls on `/api/query/stream`.
+- [x] **Swarm Reasoning Logs**: Added a real-time stepper rendering active reasoning statuses.
+- [x] **Thought Inspector**: Designed a toggleable side drawer presenting intent badges, Match Confidence gauges, and an animated SVG Knowledge Graph.
+- [x] **Codebase Cleansing**: Created `LEGACY.md` in `backend/agent/` to structure agent layers and denote deprecated files.
+- [x] **Run Ledger Consolidation**: Consolidated direct mixin state transition mutations inside `ConnectorSyncRunner` to utilize the unified `RunLedgerService` facade.
+- [x] **Production Build**: Verified that Next.js compiles production bundle successfully and all 72 pytest unit tests pass.
+
+### 9. Phase 9: Authentication Bypass & Stream Stability — [VERIFIED]
+- [x] **Login Page Bypass**: Set `isAuthenticated()` to unconditionally return `true` on the frontend, and configured automatic local state mock fallbacks.
+- [x] **Sign Out Removal**: Removed the "Sign Out" button in `Sidebar.tsx` to align with the login-free workspace experience.
+- [x] **Race Condition Fix**: Added `isConvLoading` synchronization in the conversation thread component to prevent incoming conversation loads from wiping out active optimistic query streams.
+- [x] **Eager Relationship Loading**: Configured `selectinload` for conversation messages in `/api/conversations/{conversation_id}` to resolve async SQLAlchemy lazy-loading exceptions.
+
+
+

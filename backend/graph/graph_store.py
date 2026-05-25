@@ -203,6 +203,10 @@ class GraphStore:
             return {"relationships": []}
         return self.get_knowledge_cluster(entity_name)
 
+    async def async_get_context(self, entity_name: str) -> Dict[str, Any]:
+        """Async wrapper for `get_context` to support async callers in retrieval flows."""
+        return await run_blocking(self.get_context, entity_name)
+
     def get_knowledge_cluster(self, entity_name: str) -> Dict[str, Any]:
         """
         Layer 10: Multi-hop Context Expansion.

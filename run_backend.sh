@@ -82,5 +82,14 @@ if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null ; then
     sleep 1
 fi
 
-# Start Uvicorn
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+# Start Background Worker
+echo "⚙️  Starting Background Worker Process..."
+python3 backend/worker_main.py &
+WORKER_PID=$!
+
+# Trap SIGINT and SIGTERM to kill the worker when the script exits
+trap "echo 'Stopping Background Worker...'; kill -TERM $WORKER_PID 2>/dev/null" EXIT
+
+# Start Uvicorn with a single worker to prevent SQLite locking issues
+echo "🚀 Starting Uvicorn Web Server (1 Worker for SQLite compatibility)..."
+python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --log-level info

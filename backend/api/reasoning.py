@@ -170,8 +170,8 @@ async def trigger_memory_reflection(
     """
     workspace_id = await verify_workspace_access(request.workspace_id, db, current_user)
 
-    from backend.memory.manager import MemoryManager
-    manager = MemoryManager()
+    from backend.memory.platform import get_platform_memory
+    manager = get_platform_memory()
     summary = await manager.trigger_reflection(workspace_id, user_id=current_user.id)
 
     return {

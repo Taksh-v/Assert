@@ -46,10 +46,28 @@ class VectorStore:
     Wrapper for Qdrant vector database.
     """
 
-    def __init__(self, collection_name: Optional[str] = None):
+    def __init__(self, collection_name: Optional[str] = None, client: Optional[object] = None):
+        """If `client` is provided, it will be used directly (dependency injection).
+
+        Otherwise the module-level `get_qdrant_client()` is used lazily to preserve
+        backward compatibility.
+        """
         self.collection_name = collection_name or settings.qdrant_collection_name
-        self.client = get_qdrant_client()
+        self._client = client
         self._models_cache = None
+
+    @property
+    def client(self):
+        # Preserve attribute-style access for existing callers.
+        if self._client is None:
+            self._client = get_qdrant_client()
+        return self._client
+
+    async def get_client_async(self):
+        """Async-friendly accessor that initializes the client off the event loop if needed."""
+        if self._client is None:
+            self._client = await get_qdrant_client_async()
+        return self._client
 
     @property
     def _models(self):
@@ -189,6 +207,17 @@ class VectorStore:
 
 
     search = retry_sync(max_attempts=3, initial_delay=0.05)(search)
+
+    async def async_search(
+        self,
+        workspace_id: str,
+        query_vector: List[float],
+        top_k: int = 5,
+        user_id: Optional[str] = None,
+        vector_name: str = "content",
+    ) -> List[Dict[str, Any]]:
+        """Async wrapper around the synchronous `search` method."""
+        return await asyncio.to_thread(self.search, workspace_id, query_vector, top_k, user_id, vector_name)
 
     def reciprocal_rank_fusion(
         self, 

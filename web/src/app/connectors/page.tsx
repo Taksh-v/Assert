@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Suspense, useState, useEffect, useMemo, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { 
   Search,
@@ -16,17 +16,24 @@ import {
 
 import SourceSetupModal from "@/components/SourceSetupModal";
 import { apiFetch, getActiveWorkspace } from "@/lib/auth";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { useSyncRunPolling } from "@/lib/syncRuns";
 
 interface Connector {
   id: string;
   name: string;
   type: string;
-  status: "active" | "inactive" | "error" | "pending";
+  status: "active" | "paused" | "error";
   last_synced_at?: string;
   config_summary?: Record<string, unknown>;
   document_count?: number;
+  latest_sync?: SyncRun | null;
+}
+
+interface SyncRun {
+  id: string;
+  status: "queued" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
+  stats?: Record<string, unknown>;
+  error?: string | null;
 }
 
 interface ConnectorMetadata {
@@ -72,6 +79,14 @@ const CONNECTOR_METADATA: Record<string, ConnectorMetadata> = {
 let globalConnectorsCache: Connector[] | null = null;
 
 export default function ConnectorsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ConnectorsContent />
+    </Suspense>
+  );
+}
+
+function ConnectorsContent() {
   const searchParams = useSearchParams();
   const [connectors, setConnectors] = useState<Connector[]>(globalConnectorsCache || []);
   const [isLoading, setIsLoading] = useState(!globalConnectorsCache);
@@ -79,6 +94,7 @@ export default function ConnectorsPage() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [setupSource, setSetupSource] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const { startPolling } = useSyncRunPolling();
 
   const fetchConnectors = useCallback(async () => {
     try {
@@ -103,15 +119,17 @@ export default function ConnectorsPage() {
     const connectorId = searchParams.get("connector_id");
 
     if (connected && connectorId) {
-      setNotification({ type: "success", message: `Successfully connected to ${CONNECTOR_METADATA[connected]?.name || connected}!` });
-      fetchConnectors();
+      queueMicrotask(() => {
+        setNotification({ type: "success", message: `Successfully connected to ${CONNECTOR_METADATA[connected]?.name || connected}!` });
+        void fetchConnectors();
+      });
       // Clean URL
       window.history.replaceState({}, "", "/connectors");
     }
   }, [searchParams, fetchConnectors]);
 
   useEffect(() => {
-    void fetchConnectors();
+    queueMicrotask(() => void fetchConnectors());
   }, [fetchConnectors]);
 
   // Auto-dismiss notifications
@@ -142,8 +160,23 @@ export default function ConnectorsPage() {
         body: JSON.stringify({}),
       });
       if (response.ok) {
-        setNotification({ type: "success", message: "Sync completed successfully!" });
+        const data = await response.json() as { sync_run_id: string; message?: string };
+        setNotification({ type: "success", message: data.message || "Sync started" });
         await fetchConnectors();
+        startPolling(data.sync_run_id, {
+          onSuccess: async (syncRun) => {
+            await fetchConnectors();
+            if (syncRun.status === "completed") {
+              setNotification({ type: "success", message: "Sync completed successfully" });
+            } else if (syncRun.status === "completed_with_errors") {
+              setNotification({ type: "success", message: "Sync completed with document errors" });
+            }
+          },
+          onError: async (errStr) => {
+            await fetchConnectors();
+            setNotification({ type: "error", message: errStr });
+          }
+        });
       } else {
         setNotification({ type: "error", message: "Sync failed. Check backend logs." });
       }
@@ -257,7 +290,10 @@ export default function ConnectorsPage() {
               const instance = connectors.find(c => c.type === type);
               const isActive = instance?.status === "active";
               const isError = instance?.status === "error";
-              const workspaceName = instance?.config_summary?.workspace_name || instance?.config_summary?.team_name;
+              const syncStatus = instance?.latest_sync?.status;
+              const isSyncing = syncStatus === "queued" || syncStatus === "running";
+              const workspaceNameValue = instance?.config_summary?.workspace_name || instance?.config_summary?.team_name;
+              const workspaceName = typeof workspaceNameValue === "string" ? workspaceNameValue : "";
 
               return (
                 <div 
@@ -273,13 +309,20 @@ export default function ConnectorsPage() {
                     </div>
                     
                     <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
-                      isActive 
+                      isSyncing
+                        ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                        : isActive 
                         ? "bg-green-500/10 text-green-400 border border-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.2)]" 
                         : isError
                         ? "bg-red-500/10 text-red-400 border border-red-500/20"
                         : "bg-zinc-800/50 text-zinc-600 border border-white/5"
                     }`}>
-                      {isActive ? (
+                      {isSyncing ? (
+                        <>
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          Syncing
+                        </>
+                      ) : isActive ? (
                         <>
                           <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                           Connected
@@ -303,11 +346,11 @@ export default function ConnectorsPage() {
                     <p className="text-xs text-zinc-500 font-medium leading-relaxed line-clamp-2">
                       {meta.description}
                     </p>
-                    {workspaceName && (
+                    {workspaceName ? (
                       <p className="text-[10px] text-blue-400/60 font-bold truncate">
-                        {String(workspaceName)}
+                        {workspaceName}
                       </p>
-                    )}
+                    ) : null}
                   </div>
 
                   <div className="mt-auto pt-8 flex items-center justify-between">
@@ -316,7 +359,12 @@ export default function ConnectorsPage() {
                         {isActive ? "Last Sync" : "Status"}
                       </span>
                       <span className="text-[10px] font-bold text-zinc-400 flex items-center gap-1">
-                        {isActive ? (
+                        {isSyncing ? (
+                          <>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            Running
+                          </>
+                        ) : isActive ? (
                           <>
                             <Clock className="w-3 h-3" />
                             {formatLastSync(instance?.last_synced_at)}
@@ -332,6 +380,7 @@ export default function ConnectorsPage() {
                         <>
                           <button 
                             onClick={(e) => { e.stopPropagation(); resyncConnector(instance!.id); }}
+                            disabled={isSyncing}
                             className="h-10 w-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors border border-white/5"
                             title="Re-sync"
                           >

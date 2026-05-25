@@ -106,7 +106,8 @@ class Retriever:
         try:
             potential_entities = [w for w in question.split() if w[0].isupper()]
             for ent in potential_entities:
-                related = self.graph_store.get_context(ent).get("relationships", [])
+                cluster = await self.graph_store.async_get_context(ent)
+                related = cluster.get("relationships", [])
                 if related:
                     graph_context.extend(related)
         except Exception as ge:
@@ -116,15 +117,20 @@ class Retriever:
         hyde_answer = await self._generate_hyde_answer(question)
         logger.info(f"Generated HyDE context for query expansion")
         
-        # 4. Vector Search (Semantic)
-        question_embedding = self.embedder.embed([hyde_answer])[0]
-        vector_results = self.vector_store.search(
+        # 4. Vector Search (Semantic) — use async embedder to avoid blocking
+        question_embedding = (await self.embedder.aembed([hyde_answer]))[0]
+        vector_results = await self.vector_store.async_search(
             workspace_id=workspace_id,
             query_vector=question_embedding,
             top_k=top_k * 2, # Get more for fusion
             user_id=user_id,
             vector_name=vector_target
         )
+
+
+        # Post-filter results for permissions at retrieval layer
+        from backend.retrieval.security import apply_security_filter
+        vector_results = apply_security_filter(vector_results, user_id, settings.is_development)
         
         # 5. Keyword Search (BM25 style via Postgres)
         keyword_results = []
@@ -156,10 +162,8 @@ class Retriever:
                 ]
 
         # 6. Reciprocal Rank Fusion (RRF)
-        combined_results = self.vector_store.reciprocal_rank_fusion(
-            vector_results=vector_results,
-            keyword_results=keyword_results
-        )
+        from backend.retrieval.fusion import reciprocal_rank_fusion
+        combined_results = reciprocal_rank_fusion(vector_results=vector_results, keyword_results=keyword_results)
         
         # 7. Multi-Signal Reranking (Metadata, Tier, Recency Boosted)
         # The Ranker will now automatically use the temporal metadata

@@ -76,6 +76,9 @@ backend.ingestion.pipeline.PIIScrubber = MockPIIScrubber
 class MockEmbedder:
     def embed_multi(self, chunks, title, summary):
         return [{"content": [0.0]*384, "title": [0.0]*384, "summary": [0.0]*384} for _ in chunks]
+
+    async def aembed_multi(self, chunks, title, summary):
+        return self.embed_multi(chunks, title, summary)
 backend.ingestion.pipeline.Embedder = MockEmbedder
 
 # 3. Mock EntityExtractor
@@ -94,6 +97,8 @@ backend.ingestion.pipeline.DocumentClassifier = MockDocumentClassifier
 backend.ingestion.pipeline.VectorStore.upsert_batch = MagicMock()
 backend.ingestion.pipeline.GraphStore = MagicMock()
 backend.ingestion.pipeline.SlackConnector = MockSlackConnector
+from backend.connectors.registry import connector_registry
+connector_registry.register("slack", MockSlackConnector)
 
 # Now import core elements
 from backend.core.database import init_db, close_db, async_session

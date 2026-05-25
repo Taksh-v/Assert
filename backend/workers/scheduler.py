@@ -7,18 +7,22 @@ Automates:
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from uuid import uuid4
-from sqlalchemy import select, delete, update, or_
+from datetime import datetime
+from sqlalchemy import select
 
 from backend.core.database import async_session
 from backend.core.config import get_settings
 from backend.models.connector import ConnectorStatus
-from backend.memory.manager import MemoryManager
 from backend.models.connector import Connector
-from backend.models.connector_sync_state import ConnectorSyncState
 from backend.models.failed_ingestion import FailedIngestion
-from backend.ingestion.pipeline import IngestionPipeline
+from backend.workers.task_queue import enqueue_task, process_tasks
+from backend.workers.sync_coordinator import ConnectorSyncCoordinator
+import backend.workers.handlers  # noqa: F401 - registers handlers
+try:
+    # Backwards-compatibility: some tests patch this symbol on the scheduler module.
+    from backend.ingestion.pipeline import IngestionPipeline  # type: ignore
+except Exception:
+    IngestionPipeline = None
 
 logger = logging.getLogger(__name__)
 
@@ -27,22 +31,46 @@ class BackgroundScheduler:
     Lightweight async scheduler running in the background of the FastAPI lifecycle.
     """
     def __init__(self):
-        self.memory_manager = MemoryManager()
-        self._ingestion_pipeline = None
+        from backend.memory.platform import get_platform_memory
+        self.memory_manager = get_platform_memory()
+        self.sync_coordinator = ConnectorSyncCoordinator()
         self.settings = get_settings()
         self._tasks = []
         self._running = False
+        self._ingestion_pipeline = None
+
+    def _get_ingestion_pipeline(self):
+        """Lazily construct and return an `IngestionPipeline` instance.
+
+        Tests may patch `backend.workers.scheduler.IngestionPipeline`, so prefer the
+        module-level symbol when available to allow mock injection.
+        """
+        if self._ingestion_pipeline:
+            return self._ingestion_pipeline
+
+        try:
+            if IngestionPipeline:
+                self._ingestion_pipeline = IngestionPipeline()
+                return self._ingestion_pipeline
+        except Exception:
+            pass
+
+        try:
+            from backend.ingestion.pipeline import IngestionPipeline as _IP
+            self._ingestion_pipeline = _IP()
+            return self._ingestion_pipeline
+        except Exception:
+            return None
 
     def start(self):
         """Start all scheduled background tasks."""
-        if self._running:
-            return
         self._running = True
         logger.info("Starting background scheduler...")
         
         # Add tasks to event loop
         self._tasks.append(asyncio.create_task(self._memory_reflection_loop()))
         self._tasks.append(asyncio.create_task(self._dlq_retry_loop()))
+        self._tasks.append(asyncio.create_task(process_tasks()))
         # Auto-ingest loop (runs every hour by default)
         if getattr(self.settings, "enable_auto_ingest", True):
             self._tasks.append(asyncio.create_task(self._auto_ingest_loop()))
@@ -131,11 +159,16 @@ class BackgroundScheduler:
                             
                             selected_ids = [source_id] if (source_id and source_id != "unknown") else None
                             
-                            # Re-run pipeline for this connector
-                            await self._get_ingestion_pipeline().run(
-                                connector_id=connector.id,
-                                selected_ids=selected_ids
-                            )
+                            async with async_session() as sync_session:
+                                sync_run, _ = await self.sync_coordinator.create_sync_run(
+                                    sync_session,
+                                    connector,
+                                    selected_ids=selected_ids,
+                                    triggered_by="dlq_retry",
+                                )
+                                await sync_session.commit()
+
+                            await self.sync_coordinator.execute_sync_run(sync_run.id)
                             logger.info(f"Auto-Scheduler: Successfully re-processed {record.source_url} from DLQ.")
                             # Delete from DLQ on success
                             await session.delete(record)
@@ -184,14 +217,26 @@ class BackgroundScheduler:
                     logger.info("Auto-Scheduler: No active connectors to ingest.")
 
                 for connector in connectors:
-                    lock_owner = await self._acquire_connector_lock(connector)
-                    if not lock_owner:
-                        logger.info(f"Auto-Scheduler: Connector {connector.id} already ingesting; skipping.")
-                        continue
+                    async with async_session() as session:
+                        sync_run, created = await self.sync_coordinator.create_sync_run(
+                            session,
+                            connector,
+                            selected_ids=None,
+                            triggered_by="auto",
+                        )
+                        if not created:
+                            logger.info(f"Auto-Scheduler: Connector {connector.id} already has sync run {sync_run.id}; skipping.")
+                            await session.commit()
+                            continue
 
-                    # Kick off ingestion in background
-                    task = asyncio.create_task(self._run_connector_ingest(connector, lock_owner))
-                    self._tasks.append(task)
+                        task_id = await enqueue_task(
+                            "connector_sync",
+                            {"sync_run_id": sync_run.id},
+                            db=session,
+                        )
+                        await self.sync_coordinator.attach_task(session, sync_run, task_id)
+                        await session.commit()
+                        logger.info(f"Auto-Scheduler: Enqueued sync run {sync_run.id} for connector {connector.id}")
 
             except Exception as e:
                 logger.error(f"Auto-Scheduler error in auto-ingest loop: {e}")
@@ -204,94 +249,3 @@ class BackgroundScheduler:
             return int(value or 0)
         except Exception:
             return 0
-
-    def _get_ingestion_pipeline(self) -> IngestionPipeline:
-        """Lazily initialize the ingestion pipeline to keep app startup light."""
-        if self._ingestion_pipeline is None:
-            self._ingestion_pipeline = IngestionPipeline()
-        return self._ingestion_pipeline
-
-    async def _acquire_connector_lock(self, connector: Connector) -> str | None:
-        """Acquire a lease in ConnectorSyncState so only one ingestion run works on a connector."""
-        lease_owner = str(uuid4())
-        now = datetime.utcnow()
-        lease_expires_at = now + timedelta(minutes=max(70, getattr(self.settings, "auto_ingest_interval_minutes", 60) + 10))
-
-        async with async_session() as session:
-            stmt = select(ConnectorSyncState).where(
-                ConnectorSyncState.connector_id == connector.id,
-                ConnectorSyncState.workspace_id == connector.workspace_id,
-            )
-            result = await session.execute(stmt)
-            state = result.scalars().first()
-
-            if state and state.is_running and state.lock_expires_at and state.lock_expires_at > now:
-                return None
-
-            if not state:
-                state = ConnectorSyncState(
-                    connector_id=connector.id,
-                    workspace_id=connector.workspace_id,
-                    is_running=True,
-                    lock_owner=lease_owner,
-                    lock_acquired_at=now,
-                    lock_expires_at=lease_expires_at,
-                )
-                session.add(state)
-            else:
-                state.is_running = True
-                state.lock_owner = lease_owner
-                state.lock_acquired_at = now
-                state.lock_expires_at = lease_expires_at
-
-            await session.commit()
-            return lease_owner
-
-    async def _release_connector_lock(self, connector: Connector, lock_owner: str, success: bool, error: str | None = None):
-        """Release a previously acquired connector lease if we still own it."""
-        async with async_session() as session:
-            stmt = select(ConnectorSyncState).where(
-                ConnectorSyncState.connector_id == connector.id,
-                ConnectorSyncState.workspace_id == connector.workspace_id,
-            )
-            result = await session.execute(stmt)
-            state = result.scalars().first()
-
-            if not state or state.lock_owner != lock_owner:
-                return
-
-            state.is_running = False
-            state.lock_owner = None
-            state.lock_acquired_at = None
-            state.lock_expires_at = None
-            if error:
-                state.last_error = error
-            elif success:
-                state.last_error = None
-            await session.commit()
-
-    async def _run_connector_ingest(self, connector: Connector, lock_owner: str):
-        """Run ingestion for a single connector and update its status safely."""
-        connector_id = connector.id
-        logger.info(f"Auto-Scheduler: Running auto-ingest for connector {connector_id}")
-        success = False
-        error_message = None
-
-        try:
-            stats = await self._get_ingestion_pipeline().run(connector_id=connector_id, selected_ids=None)
-            logger.info(f"Auto-Scheduler: Completed auto-ingest for connector {connector_id} with stats={stats}")
-            success = True
-
-        except Exception as e:
-            error_message = str(e)
-            logger.error(f"Auto-Scheduler: Auto-ingest failed for {connector_id}: {e}")
-            async with async_session() as session:
-                await session.execute(
-                    update(Connector)
-                    .where(Connector.id == connector_id)
-                    .values(status="error", error_log={"last_error": str(e), "timestamp": datetime.utcnow().isoformat()})
-                )
-                await session.commit()
-
-        finally:
-            await self._release_connector_lock(connector, lock_owner, success=success, error=error_message)
