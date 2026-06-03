@@ -27,6 +27,8 @@ class ReasoningExecution(RunLedgerMixin, Base):
     
     # JSON dump of the ReasoningState dict
     state_snapshot = Column(JSON, nullable=True)
+    # Track originating request id for end-to-end correlation (SSE / API)
+    request_id = Column(String, nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

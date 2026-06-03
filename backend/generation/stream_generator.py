@@ -7,7 +7,7 @@ responses over Server-Sent Events (SSE).
 import logging
 import json
 import os
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, List, Dict, Any, Optional
 from backend.generation.llm_client import LLMClient
 from backend.core.config import get_settings
 
@@ -23,11 +23,15 @@ class StreamGenerator:
         self.llm_client = LLMClient(model_type=model_type)
         self.model = self.llm_client.model
 
+    def _event(self, payload: Dict[str, Any]) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
     async def stream_chat(
         self,
         messages: List[Dict[str, str]],
         model: str = None,
-        temperature: float = 0.3
+        temperature: float = 0.3,
+        request_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completions using LiteLLM and SSE.
@@ -40,6 +44,15 @@ class StreamGenerator:
         os.environ["LANGFUSE_PUBLIC_KEY"] = settings.langfuse_public_key or ""
         os.environ["LANGFUSE_SECRET_KEY"] = settings.langfuse_secret_key or ""
         os.environ["LANGFUSE_HOST"] = settings.langfuse_host
+
+        yield self._event(
+            {
+                "type": "status",
+                "status": "Connecting to model stream...",
+                "phase": "streaming",
+                **({"request_id": request_id} if request_id else {}),
+            }
+        )
         
         if settings.litellm_proxy_url:
             litellm.api_base = settings.litellm_proxy_url
@@ -55,18 +68,18 @@ class StreamGenerator:
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
                     token = chunk.choices[0].delta.content
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                    yield self._event({"type": "token", "token": token, **({"request_id": request_id} if request_id else {})})
             
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield self._event({"type": "done", **({"request_id": request_id} if request_id else {})})
             
         except Exception as e:
             logger.error(f"LiteLLM Streaming failed: {e}")
-            
-            # Mock streaming fallback on failure
-            logger.info("StreamGenerator: Using Mock Streaming fallback")
-            mock_text = "This is a mock streaming response from the Assest Company Brain. The LLM Gateway failed or is not configured."
-            for word in mock_text.split(" "):
-                yield f"data: {json.dumps({'type': 'token', 'token': word + ' '})}\n\n"
-                import asyncio
-                await asyncio.sleep(0.05)
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield self._event(
+                {
+                    "type": "error",
+                    "error": str(e),
+                    "message": f"LLM streaming failed: {str(e)}",
+                    **({"request_id": request_id} if request_id else {}),
+                }
+            )
+            yield self._event({"type": "done", **({"request_id": request_id} if request_id else {})})

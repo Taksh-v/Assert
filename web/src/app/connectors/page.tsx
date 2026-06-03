@@ -15,8 +15,9 @@ import {
 } from "lucide-react";
 
 import SourceSetupModal from "@/components/SourceSetupModal";
-import { apiFetch, getActiveWorkspace } from "@/lib/auth";
+import { apiFetch, getActiveWorkspace, ensureDefaultWorkspace } from "@/lib/auth";
 import { useSyncRunPolling } from "@/lib/syncRuns";
+import { parseUTCDate } from "@/lib/date";
 
 interface Connector {
   id: string;
@@ -95,11 +96,16 @@ function ConnectorsContent() {
   const [setupSource, setSetupSource] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const { startPolling } = useSyncRunPolling();
+  const activeWorkspace = getActiveWorkspace();
 
   const fetchConnectors = useCallback(async () => {
     try {
       const activeWs = getActiveWorkspace();
-      const workspaceId = activeWs?.id || "default-workspace";
+      if (!activeWs?.id) {
+        setConnectors([]);
+        return;
+      }
+      const workspaceId = activeWs.id;
       const response = await apiFetch(`/api/connectors?workspace_id=${workspaceId}`);
       if (response.ok) {
         const data = await response.json() as Connector[];
@@ -129,7 +135,11 @@ function ConnectorsContent() {
   }, [searchParams, fetchConnectors]);
 
   useEffect(() => {
-    queueMicrotask(() => void fetchConnectors());
+    async function init() {
+      await ensureDefaultWorkspace();
+      void fetchConnectors();
+    }
+    queueMicrotask(() => void init());
   }, [fetchConnectors]);
 
   // Auto-dismiss notifications
@@ -188,7 +198,7 @@ function ConnectorsContent() {
   const formatLastSync = (isoString?: string) => {
     if (!isoString) return "Never";
     try {
-      const date = new Date(isoString);
+      const date = parseUTCDate(isoString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffMins = Math.floor(diffMs / 60000);
@@ -236,16 +246,22 @@ function ConnectorsContent() {
       )}
 
       <div className="max-w-7xl mx-auto p-12 space-y-12 relative z-10">
+        {!activeWorkspace?.id && (
+          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm font-bold text-amber-300">
+            No active workspace was found. Sign in again before connecting sources.
+          </div>
+        )}
+
         {/* Header Section */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
           <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-black uppercase tracking-widest text-blue-400">
-              <ShieldCheck className="w-3 h-3" />
-              Live Enterprise Connectors
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-black uppercase tracking-widest text-blue-400">
+                <ShieldCheck className="w-3 h-3" />
+              Workspace Connectors
             </div>
             <h1 className="text-6xl font-black tracking-tighter leading-none">
-              Knowledge <span className="text-zinc-600">Silos</span><br/>
-              <span className="gradient-text">Unified.</span>
+              Connect <span className="text-zinc-600">your</span><br/>
+              <span className="gradient-text">sources.</span>
             </h1>
           </div>
 
@@ -397,11 +413,12 @@ function ConnectorsContent() {
                       )}
                       <button 
                         onClick={() => setSetupSource(type)}
+                        disabled={!activeWorkspace?.id}
                         className={`h-10 px-6 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2 ${
                           isActive
                             ? "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/5"
                             : "bg-white text-black hover:bg-blue-500 hover:text-white shadow-xl shadow-white/5"
-                        }`}
+                        } disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-black`}
                       >
                         {isActive ? (
                           <>
@@ -423,7 +440,7 @@ function ConnectorsContent() {
           </div>
         )}
 
-        {/* Pro Security Footer */}
+        {/* Operational Footer */}
         <div className="bg-white/[0.02] border border-white/5 rounded-[2.5rem] p-12 flex flex-col md:flex-row items-center justify-between gap-12 relative overflow-hidden group">
            <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-blue-500/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-1000" />
            <div className="space-y-6 relative z-10">
@@ -431,21 +448,21 @@ function ConnectorsContent() {
                  <div className="h-12 w-12 rounded-2xl bg-zinc-900 border border-white/10 flex items-center justify-center">
                     <ShieldCheck className="w-6 h-6 text-blue-500" />
                  </div>
-                 <h2 className="text-2xl font-black tracking-tight">Enterprise Trust Engine</h2>
+                 <h2 className="text-2xl font-black tracking-tight">Connector Operations</h2>
               </div>
               <p className="text-sm text-zinc-500 font-medium max-w-xl leading-relaxed">
-                 Assest Brain uses hardware-level encryption and zero-knowledge indexing. Your raw data never leaves your environment; only vectorized semantic intelligence is stored.
+                 Connector configs are stored server-side and sync status is reported from backend runs. Keep this page focused on sources that are actually connected to the active workspace.
               </p>
            </div>
            <div className="flex gap-8 items-center relative z-10">
               <div className="text-center">
-                 <p className="text-2xl font-black text-white">256</p>
-                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">AES Bits</p>
+                 <p className="text-2xl font-black text-white">{connectors.length}</p>
+                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Configured</p>
               </div>
               <div className="h-10 w-[1px] bg-white/10" />
               <div className="text-center">
-                 <p className="text-2xl font-black text-white">SOC2</p>
-                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Compliance</p>
+                 <p className="text-2xl font-black text-white">{connectors.filter(c => c.latest_sync?.status === "running" || c.latest_sync?.status === "queued").length}</p>
+                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Syncing</p>
               </div>
               <div className="h-10 w-[1px] bg-white/10" />
               <div className="text-center">
@@ -460,7 +477,7 @@ function ConnectorsContent() {
         <SourceSetupModal 
           type={setupSource}
           metadata={CONNECTOR_METADATA[setupSource]}
-          workspaceId={getActiveWorkspace()?.id || "default-workspace"}
+          workspaceId={activeWorkspace?.id || ""}
           onClose={() => setSetupSource(null)}
           onConnect={() => { fetchConnectors(); setNotification({ type: "success", message: "Connector synced successfully!" }); }}
         />

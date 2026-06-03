@@ -31,6 +31,21 @@ async def main():
     # 1. Initialize DB
     await init_db()
     logger.info("✅ Database connected for worker process")
+
+    # 1.1 Auto-create Qdrant vector collections
+    try:
+        from backend.core.vector_store import initialize_qdrant_collections
+        initialize_qdrant_collections()
+        logger.info("✅ Qdrant collections initialized for worker process")
+    except Exception as e:
+        logger.error(f"⚠️ Qdrant collection initialization failed: {e}")
+
+    # 1.5 Clean up zombie sync runs from previous boots
+    try:
+        from backend.workers.cleanup import cleanup_zombie_runs
+        await cleanup_zombie_runs()
+    except Exception as e:
+        logger.error(f"⚠️ Failed to run zombie sync cleanup: {e}")
     
     # 2. Start Slack Bot
     slack_bot_task = None

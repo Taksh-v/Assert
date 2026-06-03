@@ -66,4 +66,6 @@ htmlcov/
 *.bak
 *.tmp
 
+AI_SYSTEM_v2/
+
 *.md

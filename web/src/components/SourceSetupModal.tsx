@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import { useSyncRunPolling } from "@/lib/syncRuns";
+import { parseUTCDate } from "@/lib/date";
 
 interface SourceMetadata {
   name: string;
@@ -20,13 +21,6 @@ interface DiscoveredItem {
   description?: string;
   display_type?: string;
   member_count?: number;
-}
-
-interface SyncRun {
-  id: string;
-  status: "queued" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
-  stats?: Record<string, unknown>;
-  error?: string | null;
 }
 
 interface SourceSetupModalProps {
@@ -327,7 +321,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const formatTimeAgo = (isoString?: string) => {
     if (!isoString) return "";
     try {
-      const date = new Date(isoString);
+      const date = parseUTCDate(isoString);
       const now = new Date();
       const diffMs = now.getTime() - date.getTime();
       const diffMins = Math.floor(diffMs / 60000);
@@ -615,17 +609,17 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         <div className="px-10 py-8 bg-white/[0.02] border-t border-white/5 flex flex-wrap items-center justify-center gap-6 text-[10px] font-black text-zinc-600 uppercase tracking-widest">
           <div className="flex items-center gap-2">
             <Shield className="w-3 h-3 text-green-500" />
-            <span>SOC2 Certified</span>
+            <span>Workspace Scoped</span>
           </div>
           <div className="h-1 w-1 rounded-full bg-zinc-800" />
           <div className="flex items-center gap-2">
             <Lock className="w-3 h-3 text-blue-500" />
-            <span>AES-256 Bit</span>
+            <span>Encrypted Config</span>
           </div>
           <div className="h-1 w-1 rounded-full bg-zinc-800" />
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-3 h-3 text-primary" />
-            <span>Zero Data Retention</span>
+            <span>Selectable Sync</span>
           </div>
         </div>
       </div>

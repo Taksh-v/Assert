@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Sparkles, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
-import { setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
+import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
   const [isLogin, setIsLogin] = useState(true);
@@ -12,8 +12,6 @@ export default function AuthPortal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,7 +31,7 @@ export default function AuthPortal() {
         params.append("username", email);
         params.append("password", password);
 
-        const response = await fetch(`${API_URL}/api/login`, {
+        const response = await apiFetch("/api/login", {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -51,7 +49,7 @@ export default function AuthPortal() {
         setAuthToken(token);
 
         // 2. Fetch User Profile Info & Workspaces
-        const userRes = await fetch(`${API_URL}/api/users/me`, {
+        const userRes = await apiFetch("/api/users/me", {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -67,7 +65,7 @@ export default function AuthPortal() {
         });
 
         // Fetch workspaces
-        const workspaceRes = await fetch(`${API_URL}/api/workspaces`, {
+        const workspaceRes = await apiFetch("/api/workspaces", {
           headers: { Authorization: `Bearer ${token}` },
         });
 
@@ -76,20 +74,14 @@ export default function AuthPortal() {
           if (workspaces && workspaces.length > 0) {
             setActiveWorkspace(workspaces[0]);
           } else {
-            // Fallback default workspace if somehow empty
-            setActiveWorkspace({
-              id: "default-workspace",
-              name: `${userData.full_name || "User"}'s Workspace`,
-              slug: "workspace-default",
-              role: "owner",
-            });
+            throw new Error("No workspace is available for this account.");
           }
         }
 
         setSuccess("Success! Logging in...");
       } else {
         // Call Registration API
-        const response = await fetch(`${API_URL}/api/register`, {
+        const response = await apiFetch("/api/register", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -278,7 +270,7 @@ export default function AuthPortal() {
 
         {/* Footer */}
         <p className="text-center text-[10px] font-medium text-zinc-600 uppercase tracking-widest">
-          Hardware-Level Encryption • Zero-Knowledge Vector Indexing
+          Workspace Authentication • Connector-Scoped Access
         </p>
       </div>
     </div>

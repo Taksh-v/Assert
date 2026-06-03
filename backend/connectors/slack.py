@@ -88,6 +88,19 @@ class SlackConnector(BaseConnector):
             return error.response.get("error") == "not_in_channel"
         return "not_in_channel" in str(error)
 
+    def _ensure_channel_joined(self, client: WebClient, channel_id: str, channel_name: str) -> bool:
+        try:
+            logger.info(f"Attempting to join Slack channel #{channel_name} ({channel_id}) programmatically...")
+            client.conversations_join(channel=channel_id)
+            logger.info(f"Successfully joined Slack channel #{channel_name}")
+            return True
+        except Exception as join_err:
+            logger.warning(
+                f"Failed to join Slack channel #{channel_name} ({channel_id}) programmatically: {join_err}. "
+                f"Please invite the Slack app to the channel manually."
+            )
+            return False
+
     async def connect(self, config: Dict[str, Any]) -> Any:
         """Connect using OAuth access_token or direct bot token."""
         token = config.get("access_token")
@@ -159,13 +172,10 @@ class SlackConnector(BaseConnector):
                 message_texts = []
 
                 if channel.get("is_member") is False:
-                    unreadable_channels += 1
-                    logger.warning(
-                        "Skipping Slack channel #%s because the bot/user token is not a member. "
-                        "Invite the app to the channel and retry.",
-                        channel_name,
-                    )
-                    continue
+                    joined = self._ensure_channel_joined(client, channel_id, channel_name)
+                    if not joined:
+                        unreadable_channels += 1
+                        continue
                 
                 try:
                     messages_resource = get_messages(client, channel_id, since)
@@ -179,15 +189,29 @@ class SlackConnector(BaseConnector):
                     readable_channels += 1
                 except Exception as e:
                     if self._is_not_in_channel_error(e):
-                        unreadable_channels += 1
-                        logger.warning(
-                            "Skipping Slack channel #%s because Slack returned not_in_channel. "
-                            "Invite the app to the channel and retry.",
-                            channel_name,
-                        )
+                        logger.info(f"Slack returned not_in_channel for #{channel_name}. Retrying after join attempt...")
+                        joined = self._ensure_channel_joined(client, channel_id, channel_name)
+                        if joined:
+                            try:
+                                messages_resource = get_messages(client, channel_id, since)
+                                for msg in messages_resource:
+                                    user = msg.get("user", "Unknown")
+                                    text = msg.get("text", "")
+                                    ts = msg.get("ts", "")
+                                    if text.strip():
+                                        timestamp = datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+                                        message_texts.insert(0, f"[{timestamp}] <@{user}>: {text}")
+                                readable_channels += 1
+                            except Exception as retry_err:
+                                logger.warning(f"DLT failed to fetch messages for #{channel_name} even after joining: {retry_err}")
+                                unreadable_channels += 1
+                                continue
+                        else:
+                            unreadable_channels += 1
+                            continue
+                    else:
+                        logger.warning(f"DLT failed to fetch messages for #{channel_name}: {e}")
                         continue
-                    logger.warning(f"DLT failed to fetch messages for #{channel_name}: {e}")
-                    continue
 
                 if message_texts:
                     content = f"# Slack Channel: #{channel_name}\n\n" + "\n".join(message_texts)
@@ -207,12 +231,8 @@ class SlackConnector(BaseConnector):
         except SlackChannelPermissionError:
             raise
         except Exception as e:
-            logger.error(f"Slack connection failed ({e}). Falling back to Mock Data.")
-            # Mock Fallback
-            mock_channels = [("C1", "general"), ("C2", "engineering")]
-            for cid, name in mock_channels:
-                content = f"# Slack Channel: #{name}\n\n[2024-05-21 10:00] <@U1>: Hello team!\n[2024-05-21 10:05] <@U2>: Any updates on the project?"
-                yield self._format_raw_doc(cid, name, content, 2)
+            logger.error(f"Slack connection failed: {e}")
+            raise ConnectionError(f"Slack sync failed: {str(e)}") from e
 
     def _format_raw_doc(self, channel_id: str, channel_name: str, content: str, msg_count: int) -> RawDocument:
         content_hash = hashlib.sha256(content.encode()).hexdigest()

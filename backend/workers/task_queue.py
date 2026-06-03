@@ -86,7 +86,8 @@ async def _process_single_task(session: AsyncSession, task: BackgroundTask, max_
 
     task.status = "processing"
     task.updated_at = datetime.utcnow()
-    await session.flush()
+    # Commit immediately to release database locks before running potentially long-running handlers
+    await session.commit()
 
     try:
         logger.info(f"Processing task {task.id} (type: {task.task_type})")

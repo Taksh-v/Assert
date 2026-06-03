@@ -45,11 +45,15 @@ class Settings(BaseSettings):
     qdrant_host: str = Field(default="localhost")
     qdrant_port: int = Field(default=6333)
     qdrant_collection_name: str = Field(default="assest_knowledge_dev")
+    qdrant_episodes_collection_name: str = Field(default="assest_episodes_dev")
     qdrant_mode: str = Field(
         default="local",
         description="'local' for file-based (dev), 'server' for remote Qdrant, 'memory' for ephemeral",
     )
     qdrant_path: str = Field(default="./data/qdrant")
+    # Qdrant performance tuning
+    qdrant_upsert_batch_size: int = Field(default=256, description="Preferred batch size when upserting points to Qdrant")
+    qdrant_write_concurrency: int = Field(default=2, description="Number of concurrent threads to use for large upsert operations")
 
     # ── Redis ────────────────────────────────────────────
     redis_url: str = Field(default="redis://localhost:6379/0")
@@ -64,6 +68,13 @@ class Settings(BaseSettings):
     openrouter_app_name: str = Field(default="Assest Brain")
     openrouter_fast_model: str = Field(default="openrouter/google/gemini-2.0-flash-lite:free")
     openrouter_smart_model: str = Field(default="openrouter/meta-llama/llama-3.1-8b-instruct:free")
+    # Optional comma-separated fallback models for OpenRouter (tried in order)
+    openrouter_fallback_models: str = Field(
+        default="openrouter/z-ai/glm-4.5-air:free",
+        description="Comma-separated OpenRouter model ids to try as fallbacks",
+    )
+    openrouter_retry_attempts: int = Field(default=3, description="Number of retry attempts per model")
+    openrouter_retry_backoff_base: float = Field(default=0.5, description="Base backoff in seconds")
 
     # ── Langfuse Observability ──────────────────────────
     langfuse_public_key: Optional[str] = Field(default="pk-lf-public", alias="LANGFUSE_PUBLIC_KEY")
@@ -154,6 +165,24 @@ class Settings(BaseSettings):
     enable_prometheus: bool = Field(
         default=False,
         description="Enable Prometheus metrics exposition and collection",
+    )
+    prometheus_port: int = Field(
+        default=8001,
+        description="Port to expose Prometheus metrics on when enabled",
+    )
+
+    # ── Startup Validation Flags ───────────────────────
+    strict_model_validation: bool = Field(
+        default=False,
+        description="If true, fail startup when LLM model validation warnings are present",
+    )
+    perform_llm_ping: bool = Field(
+        default=False,
+        description="If true, perform a live ping test against the primary model during /api/llm/health checks.",
+    )
+    active_ping_on_startup: bool = Field(
+        default=False,
+        description="If true, perform a live ping test against the primary model during startup validation.",
     )
 
     # ── Pilot Flags ─────────────────────────────────────

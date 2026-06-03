@@ -1,3 +1,4 @@
+import pytest
 from pydantic import BaseModel, Field, ValidationError
 from backend.agent.tools.base import BaseTool
 from backend.agent.tools.github import GetLatestCommitsTool, GetRepoIssuesTool
@@ -31,38 +32,39 @@ def test_base_tool_definition():
     assert "title" not in params["properties"]["required_str"]
 
 
-def test_base_tool_execution_success():
+@pytest.mark.asyncio
+async def test_base_tool_execution_success():
     tool = DummyTool()
     # Pass valid arguments
-    result = tool.execute(required_str="hello", optional_int=100)
+    result = await tool.execute(required_str="hello", optional_int=100)
     assert result == "Executed with: hello and 100"
 
     # Pass only required argument (defaults should kick in)
-    result_default = tool.execute(required_str="world")
+    result_default = await tool.execute(required_str="world")
     assert result_default == "Executed with: world and 42"
 
 
-def test_base_tool_execution_failure():
+@pytest.mark.asyncio
+async def test_base_tool_execution_failure():
     tool = DummyTool()
     # Pass invalid argument types
     try:
-        tool.execute(required_str=123, optional_int="not-an-int")
+        await tool.execute(required_str=123, optional_int="not-an-int")
         raise AssertionError("Expected ValueError was not raised")
     except ValueError as e:
         assert "Invalid inputs for tool" in str(e)
     
     # Missing required argument
     try:
-        tool.execute(optional_int=10)
+        await tool.execute(optional_int=10)
         raise AssertionError("Expected ValueError was not raised")
     except ValueError as e:
         assert "Field required" in str(e) or "required_str" in str(e)
 
 
 def test_github_tool_definitions():
-    # Pass dummy token
-    commits_tool = GetLatestCommitsTool(token="mock-token")
-    issues_tool = GetRepoIssuesTool(token="mock-token")
+    commits_tool = GetLatestCommitsTool()
+    issues_tool = GetRepoIssuesTool()
 
     commit_def = commits_tool.get_tool_definition()
     assert commit_def["function"]["name"] == "get_latest_commits"
@@ -72,11 +74,3 @@ def test_github_tool_definitions():
     assert issue_def["function"]["name"] == "get_repo_issues"
     assert "repo_name" in issue_def["function"]["parameters"]["required"]
     assert "state" in issue_def["function"]["parameters"]["properties"]
-
-if __name__ == "__main__":
-    print("🧪 Running BaseTool and GithubTool tests...")
-    test_base_tool_definition()
-    test_base_tool_execution_success()
-    test_base_tool_execution_failure()
-    test_github_tool_definitions()
-    print("✅ All tests passed successfully!")

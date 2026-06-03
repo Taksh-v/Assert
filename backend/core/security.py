@@ -51,6 +51,34 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, settings.app_secret_key, algorithm=ALGORITHM)
     return encoded_jwt
 
+import secrets
+
+def create_oauth_state(workspace_id: str) -> str:
+    """Create a signed JWT containing the workspace_id for use as the OAuth state parameter.
+    Includes a random nonce so each token is unique (prevents replay).
+    Expires in 10 minutes — more than enough for an OAuth flow.
+    """
+    payload = {
+        "workspace_id": workspace_id,
+        "nonce": secrets.token_hex(16),
+    }
+    return create_access_token(payload, expires_delta=timedelta(minutes=10))
+
+
+def verify_oauth_state(state: str) -> str:
+    """Verify the signed OAuth state JWT and return the workspace_id.
+    Raises ValueError if the state is invalid or expired.
+    """
+    try:
+        payload = jwt.decode(state, settings.app_secret_key, algorithms=[ALGORITHM])
+        workspace_id = payload.get("workspace_id")
+        if not workspace_id:
+            raise ValueError("Missing workspace_id in state")
+        return workspace_id
+    except Exception as e:
+        raise ValueError(f"OAuth state verification failed: {e}")
+
+
 def encrypt_config(config: dict) -> str:
     """Encrypt a configuration dictionary to a string."""
     try:
@@ -72,9 +100,10 @@ def decrypt_config(encrypted_config: str) -> dict:
         return json.loads(decrypted_data.decode())
     except Exception as e:
         logger.error(f"Decryption failed: {e}")
-        # If decryption fails, it might be unencrypted (legacy)
-        # For security, we should probably fail, but during migration we might allow it
-        try:
-            return json.loads(encrypted_config)
-        except:
-            raise ValueError("Failed to decrypt connector configuration")
+        # SECURITY: Do NOT fall back to parsing as plain JSON.
+        # If decryption fails, the config is corrupted or tampered with.
+        raise ValueError(
+            "Failed to decrypt connector configuration. "
+            "The config may be corrupted or the encryption key may have changed. "
+            "Re-authenticate the connector to fix this."
+        )

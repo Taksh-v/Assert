@@ -1,3 +1,10 @@
+import sys
+from unittest.mock import MagicMock
+sys.modules["groq"] = MagicMock()
+sys.modules["sentence_transformers"] = MagicMock()
+sys.modules["presidio_analyzer"] = MagicMock()
+sys.modules["presidio_anonymizer"] = MagicMock()
+
 import pytest
 
 from backend.agents.harness import TestHarness

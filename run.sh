@@ -69,14 +69,32 @@ echo -e "${CYAN}─────────────────────�
 echo -e "${BLUE}🐳 Checking Infrastructure (Docker)...${NC}"
 if command -v docker-compose &> /dev/null; then
     (cd infrastructure && docker-compose up -d)
-    echo -e "   ✅ Docker containers verified."
+    echo -e "   ✅ Docker containers starting/running."
+    
+    # Wait for critical infrastructure (Postgres and Qdrant)
+    echo -e "   ⏳ Waiting for Postgres readiness..."
+    READY=0
+    for _ in $(seq 1 30); do
+        if docker exec assest-postgres pg_isready -U postgres -d langfuse >/dev/null 2>&1; then
+            READY=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$READY" -eq 1 ]]; then
+        echo -e "   ✅ Postgres is ready."
+    else
+        echo -e "   ⚠️  Postgres health check failed (continuing anyway)..."
+    fi
 else
     echo -e "   ⚠️  docker-compose not found. Ensure containers (Qdrant, Redis, Postgres) are running."
 fi
 
 # ── Verify imports before starting ─────────────────
-echo -e "${BLUE}🔍 Verifying critical imports...${NC}"
+echo -e "${BLUE}🔍 Verifying critical dependencies...${NC}"
+# Use importlib.util to check existence without full import execution where possible
 $PYTHON_EXEC - <<'PYCHECK'
+import importlib.util
 import sys
 failed = []
 checks = [
@@ -94,56 +112,68 @@ checks = [
     ("spacy",                "Spacy"),
 ]
 for mod, label in checks:
-    try:
-        __import__(mod)
+    if importlib.util.find_spec(mod) is not None:
         print(f"   ✅ {label}")
-    except ImportError as e:
-        print(f"   ⚠️  {label} — {e}")
+    else:
+        print(f"   ⚠️  {label} — Not found")
         failed.append(label)
 
 if failed:
-    print(f"\n   ⚠️  Missing critical packages: {', '.join(failed)}")
-    print("   Try: pip install <package-name> --break-system-packages")
+    print(f"\n   ⚠️  Missing packages: {', '.join(failed)}")
+    print("   Try: pip install -r backend/requirements.txt")
 PYCHECK
 
 echo -e "${CYAN}────────────────────────────────────────${NC}"
 
-# ── Clean up port 8000 ─────────────────────────────
+# ── Clean up ports 8000 & 3000 ─────────────────────
 if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
     echo -e "${YELLOW}⚠️  Port 8000 in use — clearing...${NC}"
     lsof -ti:8000 | xargs kill -9 2>/dev/null || true
-    sleep 1
 fi
+
+if lsof -Pi :3000 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  Port 3000 in use — clearing...${NC}"
+    lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+fi
+sleep 1
 
 # ── Start Backend ──────────────────────────────────
 echo -e "${BLUE}🚀 Starting Backend (FastAPI on :8000)...${NC}"
 
-# Reuse the dedicated backend startup script so the backend uses the same
-# dependency checks and interpreter selection as manual backend launches.
+# Reuse the dedicated backend startup script
 set -m
 ./run_backend.sh > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 set +m
 
 # Wait for the backend health endpoint before starting the frontend.
-echo -e "${BLUE}⏳ Waiting for backend health on :8000...${NC}"
+echo -e "${BLUE}⏳ Waiting for backend to wake up...${NC}"
 READY=0
-for _ in $(seq 1 60); do
-    if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+for i in $(seq 1 90); do
+    if curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; then
         READY=1
         break
+    fi
+    if (( i % 10 == 0 )); then
+        echo -e "   ...still waiting ($i/90s)..."
     fi
     sleep 1
 done
 
 if [[ "$READY" -ne 1 ]]; then
-    echo -e "${RED}❌ Backend did not become healthy. See logs/backend.log${NC}"
+    echo -e "${RED}❌ Backend failed to start within 90s. See logs/backend.log${NC}"
     exit 1
 fi
-echo -e "${GREEN}✅ Backend is healthy.${NC}"
+echo -e "${GREEN}✅ Backend is live.${NC}"
 
 # ── Start Frontend ─────────────────────────────────
 echo -e "${BLUE}🚀 Starting Frontend (Next.js on :3000)...${NC}"
+
+if [[ ! -d "web/node_modules" ]]; then
+    echo -e "${YELLOW}⚠️  node_modules missing in /web — installing...${NC}"
+    (cd web && npm install --silent)
+    echo -e "   ✅ Dependencies installed."
+fi
 
 set -m
 (cd web && npm run dev -- -p 3000) > logs/frontend.log 2>&1 &

@@ -25,6 +25,11 @@ try:
 except Exception:
     _PROM_AVAILABLE = False
 
+@router.get("/health/live")
+async def liveness_check():
+    """Simple liveness check for startup synchronization."""
+    return {"status": "alive", "timestamp": asyncio.get_event_loop().time()}
+
 @router.get("/health")
 async def health_check():
     """
@@ -44,8 +49,9 @@ async def health_check():
 
     # 1. Check Executive Layer (LLM Proxy)
     try:
+        # Just check if we can instantiate the client (it's fast)
+        # We avoid a real ping here to keep it fast
         client = LLMClient()
-        # Non-blocking check for local proxy
         health["layers"]["executive"]["status"] = "connected"
     except Exception:
         health["layers"]["executive"]["status"] = "offline"
@@ -53,6 +59,7 @@ async def health_check():
     # 2. Check Attention Layer (Vector Store)
     try:
         vs = VectorStore()
+        # Non-blocking check for connection
         if vs.client:
             health["layers"]["attention"]["status"] = "connected"
         else:
@@ -62,8 +69,9 @@ async def health_check():
 
     # 3. Check Memory Layer (Postgres)
     try:
+        # Use a short timeout for the DB check
         async with async_session() as session:
-            await session.execute(text("SELECT 1"))
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=2.0)
             health["layers"]["memory"]["status"] = "connected"
     except Exception:
         health["layers"]["memory"]["status"] = "offline"
@@ -71,7 +79,7 @@ async def health_check():
     # 4. Check Cache Layer (Redis)
     try:
         import redis.asyncio as redis
-        r = redis.from_url(settings.redis_url)
+        r = redis.from_url(settings.redis_url, socket_timeout=2.0, socket_connect_timeout=2.0)
         await r.ping()
         health["layers"]["cache"]["status"] = "connected"
         await r.close()

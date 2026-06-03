@@ -10,8 +10,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState<boolean>(false);
 
   useEffect(() => {
-    setMounted(true);
-    setAuth(isAuthenticated());
+    queueMicrotask(() => {
+      setMounted(true);
+      setAuth(isAuthenticated());
+    });
 
     const handleAuthChange = () => {
       setAuth(isAuthenticated());
@@ -40,4 +42,3 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

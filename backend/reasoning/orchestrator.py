@@ -1,15 +1,72 @@
 import logging
+from typing import Dict, Any, Callable, List
+
+logger = logging.getLogger(__name__)
+
+
+class Planner:
+    """Simple planner that turns a user intent into agent tasks.
+
+    This is intentionally minimal for an MVP; later it will produce
+    structured plans with subtasks, goals, and priorities.
+    """
+
+    def plan(self, user_intent: str) -> List[Dict[str, Any]]:
+        # For MVP return two tasks targeting agent_a and agent_b.
+        return [
+            {"agent": "agent_a", "input": user_intent},
+            {"agent": "agent_b", "input": user_intent},
+        ]
+
+
+class Dispatcher:
+    """Dispatches planned tasks to registered agent handlers."""
+
+    def __init__(self, agents: Dict[str, Callable[[Any], Any]]):
+        self.agents = agents
+
+    def dispatch(self, task: Dict[str, Any]) -> Any:
+        agent_name = task["agent"]
+        if agent_name not in self.agents:
+            raise KeyError(f"Unknown agent {agent_name}")
+        handler = self.agents[agent_name]
+        return handler(task["input"])
+
+
+class Orchestrator:
+    """Coordinates planning and dispatch, returns aggregated results."""
+
+    def __init__(self, planner: Planner, dispatcher: Dispatcher):
+        self.planner = planner
+        self.dispatcher = dispatcher
+
+    def orchestrate(self, user_intent: str) -> Dict[str, Any]:
+        tasks = self.planner.plan(user_intent)
+        results: Dict[str, Any] = {}
+        for t in tasks:
+            try:
+                res = self.dispatcher.dispatch(t)
+                results.setdefault(t["agent"], []).append(res)
+            except Exception as e:
+                logger.exception("Agent task failed")
+                results.setdefault(t["agent"], []).append({"error": str(e)})
+        return results
+
+
+__all__ = ["Planner", "Dispatcher", "Orchestrator"]
+import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
-from sqlalchemy import select, update
+from sqlalchemy import select
 from backend.core.database import async_session
 from backend.models.reasoning_execution import ReasoningExecution
 from backend.reasoning.state import ReasoningState
 from backend.reasoning.agents.planner import PlannerAgent
 from backend.reasoning.agents.researcher import ResearcherAgent
-from backend.reasoning.agents.analyst import AnalystAgent
 from backend.reasoning.agents.synthesizer import SynthesizerAgent
 from backend.evals.pipeline import ScoringPipeline
+from backend.core.langfuse_wrapper import start_run, end_run, log_event
+from backend.run_ledger.service import RunLedgerService
 
 try:
     from langgraph.graph import StateGraph, END
@@ -29,7 +86,6 @@ class ReasoningOrchestrator:
     def __init__(self):
         self.planner = PlannerAgent()
         self.researcher = ResearcherAgent()
-        self.analyst = AnalystAgent()
         self.synthesizer = SynthesizerAgent()
         self.scoring_pipeline = ScoringPipeline()
         from backend.memory.platform import get_platform_memory
@@ -44,16 +100,19 @@ class ReasoningOrchestrator:
         builder = StateGraph(ReasoningState)
         builder.add_node("planner", self.planner.run)
         builder.add_node("researcher", self.researcher.run)
-        builder.add_node("analyst", self.analyst.run)
         builder.add_node("synthesizer", self.synthesizer.run)
         builder.set_entry_point("planner")
         builder.add_edge("planner", "researcher")
+        def route_researcher(state: ReasoningState):
+            if state.get("awaiting_approval"):
+                return END
+            return "researcher" if state.get("should_continue") else "synthesizer"
+
         builder.add_conditional_edges(
             "researcher",
-            lambda x: "analyst" if not x["should_continue"] else "researcher",
-            {"researcher": "researcher", "analyst": "analyst"}
+            route_researcher,
+            {"researcher": "researcher", "synthesizer": "synthesizer", END: END}
         )
-        builder.add_edge("analyst", "synthesizer")
         builder.add_edge("synthesizer", END)
         return builder.compile()
 
@@ -85,6 +144,7 @@ class ReasoningOrchestrator:
         query: str,
         workspace_id: str,
         execution_id: Optional[str] = None,
+        request_id: Optional[str] = None,
         user_input: Optional[str] = None,
         user_id: Optional[str] = None,
         max_iterations: int = 5
@@ -93,7 +153,14 @@ class ReasoningOrchestrator:
         Runs the reasoning swarm durably. Persists state checkpoints to PostgreSQL.
         Supports workflow suspension (e.g. awaiting human-in-the-loop approval) and resumption.
         """
-        logger.info(f"Durable run requested. execution_id={execution_id}, query='{query[:30]}...'")
+        logger.info(f"Durable run requested. execution_id={execution_id}, request_id={request_id}, query='{query[:30]}...'")
+        # start a langfuse run (best-effort) for this durable execution
+        lf_run = None
+        try:
+            lf_run = start_run(request_id=request_id, metadata={"query": query, "workspace_id": workspace_id})
+            log_event(lf_run, "execution_started", {"execution_id": execution_id, "request_id": request_id})
+        except Exception:
+            lf_run = None
         
         async with async_session() as session:
             if execution_id:
@@ -124,6 +191,7 @@ class ReasoningOrchestrator:
                 state = {
                     "query": query,
                     "workspace_id": workspace_id,
+                    "request_id": request_id,
                     "user_id": user_id,
                     "plan": {},
                     "current_task_index": 0,
@@ -167,6 +235,14 @@ class ReasoningOrchestrator:
             # Check if it was suspended (via AwaitApproval node or error)
             if final_state.get("awaiting_approval"):
                 await self._update_execution(execution_id, final_state, "suspended")
+                try:
+                    log_event(lf_run, "execution_suspended", {"execution_id": execution_id, "request_id": request_id})
+                except Exception:
+                    pass
+                try:
+                    end_run(lf_run, status="suspended")
+                except Exception:
+                    pass
                 return self._format_result(final_state, execution_id, "suspended")
             
             # Continue to Analysis & Evaluation checks using final_state
@@ -176,6 +252,14 @@ class ReasoningOrchestrator:
             logger.error(f"LangGraph execution failed: {e}")
             state["errors"].append(str(e))
             await self._update_execution(execution_id, state, "failed")
+            try:
+                log_event(lf_run, "execution_failed", {"execution_id": execution_id, "request_id": request_id, "error": str(e)})
+            except Exception:
+                pass
+            try:
+                end_run(lf_run, status="error")
+            except Exception:
+                pass
             return self._format_result(state, execution_id, "failed")
 
         # ── Step 5: Quality Evaluation (Mastra-inspired Evals) ──
@@ -221,17 +305,32 @@ class ReasoningOrchestrator:
             logger.warning(f"Memory observation store failed (non-blocking): {e}")
 
         await self._update_execution(execution_id, state, "completed")
+        try:
+            log_event(lf_run, "execution_completed", {"execution_id": execution_id, "request_id": request_id, "status": "completed"})
+        except Exception:
+            pass
+        try:
+            end_run(lf_run, status="ok")
+        except Exception:
+            pass
         return self._format_result(state, execution_id, "completed")
 
     async def _update_execution(self, execution_id: str, state: Dict[str, Any], status: str):
         async with async_session() as session:
-            stmt = update(ReasoningExecution).where(ReasoningExecution.id == execution_id).values(
-                status=status,
-                current_task_index=state["current_task_index"],
-                state_snapshot=state,
-                updated_at=datetime.utcnow()
-            )
-            await session.execute(stmt)
+            # Load the run record, set transient fields (state snapshot, index),
+            # then delegate canonical state transition to RunLedgerService.finish_run
+            result = await session.execute(select(ReasoningExecution).where(ReasoningExecution.id == execution_id))
+            run = result.scalars().first()
+            if not run:
+                raise ValueError(f"Reasoning execution {execution_id} not found")
+
+            # Persist the orchestration state payload and task index on the run
+            run.state_snapshot = state
+            run.current_task_index = state.get("current_task_index", getattr(run, "current_task_index", 0))
+            run.updated_at = datetime.utcnow()
+
+            # Use the RunLedgerService facade to perform the canonical lifecycle transition
+            await RunLedgerService.finish_run(session, ReasoningExecution, execution_id, status)
             await session.commit()
 
     def _format_result(self, state: Dict[str, Any], execution_id: str, status: str) -> Dict[str, Any]:

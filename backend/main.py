@@ -46,6 +46,14 @@ settings = get_settings()
 
 from backend.bot.slack import AssestSlackBot
 from backend.workers.scheduler import BackgroundScheduler
+from backend.core.llm_impl import validate_models_on_startup
+from backend.core.metrics import LLM_CALLS_TOTAL, LLM_CALL_DURATION_SECONDS
+from backend.core.config import get_settings
+
+try:
+    from prometheus_client import start_http_server
+except Exception:
+    start_http_server = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,6 +65,36 @@ async def lifespan(app: FastAPI):
     # 1. Initialize DB
     await init_db()
     print("   ✅ Database tables created")
+
+    # 1.1 Auto-create Qdrant vector collections
+    try:
+        from backend.core.vector_store import initialize_qdrant_collections
+        initialize_qdrant_collections()
+        print("   ✅ Qdrant collections initialized")
+    except Exception as e:
+        print(f"   ⚠️  Qdrant collection initialization failed: {e}")
+
+    # 1.6 Start Prometheus metrics endpoint if enabled
+    if settings.enable_prometheus and start_http_server:
+        prom_port = settings.prometheus_port
+        try:
+            start_http_server(prom_port)
+            print(f"   ✅ Prometheus metrics endpoint started on :{prom_port}")
+        except Exception as e:
+            print(f"   ⚠️  Failed to start Prometheus metrics endpoint: {e}")
+
+    # 1.5 Validate LLM model configuration (warnings only)
+    try:
+        warnings = await validate_models_on_startup()
+        if warnings:
+            for w in warnings:
+                print(f"   ⚠️  LLM config warning: {w}")
+            # If strict validation is enabled, fail fast to surface config issues
+            if settings.strict_model_validation:
+                print("   ❌ Strict model validation enabled — aborting startup due to LLM config warnings")
+                sys.exit(1)
+    except Exception:
+        print("   ⚠️  LLM startup validation failed (see logs)")
     
     yield
 
@@ -88,8 +126,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Rate Limiting ──────────────────────────────────────
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # ── Routers ─────────────────────────────────────────────
 app.include_router(health_router)
+app.include_router(health_router, prefix="/api")
 # app.include_router(webhooks_router)
 
 from backend.api.query import router as query_router
@@ -99,6 +147,10 @@ from backend.api.auth import router as auth_router
 from backend.api.conversations import router as conversations_router
 from backend.api.users import router as users_router
 from backend.api.reasoning import router as reasoning_router
+from backend.api.llm import router as llm_router
+from backend.api.orchestrator import router as orchestrator_router
+from backend.api.orchestrator_durable import router as orchestrator_durable_router
+from backend.api.memory import router as memory_router
 
 app.include_router(query_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
@@ -107,6 +159,10 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(conversations_router)
 app.include_router(reasoning_router, prefix="/api")
+app.include_router(llm_router, prefix="/api")
+app.include_router(orchestrator_router, prefix="/api")
+app.include_router(orchestrator_durable_router, prefix="/api")
+app.include_router(memory_router, prefix="/api")
 
 
 

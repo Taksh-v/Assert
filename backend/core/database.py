@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy import text
+from sqlalchemy import text, event
 from sqlalchemy.orm import DeclarativeBase
 from backend.core.config import get_settings
 
@@ -18,13 +18,25 @@ settings = get_settings()
 # SQLite needs connect_args for async; PostgreSQL does not
 _connect_args = {}
 if settings.database_url.startswith("sqlite"):
-    _connect_args = {"check_same_thread": False}
+    _connect_args = {
+        "check_same_thread": False,
+        "timeout": 60,
+    }
 
 engine = create_async_engine(
     settings.database_url,
     echo=settings.sql_echo,
     connect_args=_connect_args,
 )
+
+# Enable WAL mode for SQLite to prevent database lock errors
+if settings.database_url.startswith("sqlite"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 # ── Session Factory ─────────────────────────────────────
 async_session = async_sessionmaker(

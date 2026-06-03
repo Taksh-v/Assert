@@ -20,8 +20,57 @@ sys.modules["presidio_analyzer"] = MagicMock()
 sys.modules["presidio_anonymizer"] = MagicMock()
 
 import os
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_e2e.db")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_e2e.db"
 os.environ.setdefault("GROQ_API_KEY", "")
+
+import litellm
+# Mock completions to avoid network/API calls in test
+mock_response = MagicMock()
+mock_response.choices = [
+    MagicMock(
+        message=MagicMock(content="Mocked answer for test_e2e_query")
+    )
+]
+litellm.completion = MagicMock(return_value=mock_response)
+
+# Mock acompletion for stream test and regular completions
+async def mock_acompletion(*args, **kwargs):
+    if kwargs.get("stream"):
+        class AsyncGen:
+            def __init__(self):
+                self.done = False
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                if self.done:
+                    raise StopAsyncIteration
+                self.done = True
+                class MockChunk:
+                    class Choice:
+                        class Delta:
+                            content = "Mocked token"
+                        delta = Delta()
+                    choices = [Choice()]
+                return MockChunk()
+        return AsyncGen()
+    else:
+        class MockResponse:
+            class Choice:
+                class Message:
+                    content = '{"intent": "quick_lookup", "reasoning": "mocked", "scope": "specific", "temporal": "none"}'
+                message = Message()
+            choices = [Choice()]
+        return MockResponse()
+
+litellm.acompletion = mock_acompletion
+
+from backend.core.vector_store import VectorStore
+VectorStore.search = MagicMock(return_value=[])
+
+async def mock_async_search(*args, **kwargs):
+    return []
+
+VectorStore.async_search = mock_async_search
 
 from fastapi.testclient import TestClient
 from backend.main import app

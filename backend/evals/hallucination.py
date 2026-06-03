@@ -72,12 +72,16 @@ Output ONLY valid JSON:
 }}"""
 
         try:
+            model_name = settings.groq_model
+            if model_name.startswith("groq/"):
+                model_name = model_name.replace("groq/", "", 1)
+
             response = self.client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": "You are a strict hallucination detector. Output ONLY valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                model=settings.groq_model,
+                model=model_name,
                 temperature=0,
                 response_format={"type": "json_object"}
             )

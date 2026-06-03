@@ -7,6 +7,7 @@ saving tokens and latency for simple requests.
 """
 import logging
 import json
+import re
 from enum import Enum
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -77,18 +78,29 @@ Output ONLY valid JSON matching this schema:
                     {"role": "user", "content": prompt}
                 ],
                 model=settings.openrouter_smart_model,
-                temperature=0,
-                response_format={"type": "json_object"}
+                temperature=0
             )
             
-            data = json.loads(response.choices[0].message.content)
-            intent_str = data.get("intent", "deep_analysis")
+            content = response.choices[0].message.content or ""
+            
+            # Try to load directly first
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                # Robust regex fallback to extract JSON block
+                match = re.search(r"\{.*\}", content, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                else:
+                    raise ValueError("No JSON block found in LLM response")
+            
+            intent_str = data.get("intent", "quick_lookup")
             
             # Map string back to Enum safely
             try:
                 intent_enum = QueryIntent(intent_str)
             except ValueError:
-                intent_enum = QueryIntent.DEEP_ANALYSIS
+                intent_enum = QueryIntent.QUICK_LOOKUP
                 
             return IntentClassification(
                 intent=intent_enum,
@@ -97,8 +109,9 @@ Output ONLY valid JSON matching this schema:
             )
             
         except Exception as e:
-            logger.warning(f"Supervisor LLM classification failed: {e}. Defaulting to DEEP_ANALYSIS.")
+            logger.warning(f"Supervisor LLM classification failed: {e}. Defaulting to QUICK_LOOKUP.")
             return IntentClassification(
-                intent=QueryIntent.DEEP_ANALYSIS,
+                intent=QueryIntent.QUICK_LOOKUP,
                 reasoning=f"Error parsing LLM response: {e}"
             )
+

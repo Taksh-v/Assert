@@ -8,7 +8,8 @@ Tests:
 """
 import sys
 import asyncio
-from unittest.mock import MagicMock, AsyncMock
+import json
+from unittest.mock import MagicMock, AsyncMock, patch
 
 # ── Mock external dependencies for offline testing ──
 mock_passlib = MagicMock()
@@ -104,19 +105,21 @@ async def test_platform_features():
     print("── TEST 3: SSE Chat Streaming ──")
     streamer = StreamGenerator()
     prompt = [{"role": "user", "content": "hello"}]
-    
-    events = []
-    async for event in streamer.stream_chat(prompt):
-        events.append(event)
-        
+
+    with patch("backend.generation.stream_generator.litellm.acompletion", AsyncMock(side_effect=RuntimeError("boom"))):
+        events = []
+        async for event in streamer.stream_chat(prompt, request_id="req-123"):
+            events.append(json.loads(event.strip()[6:].strip()))
+
     print(f"   Received {len(events)} streaming events.")
-    print(f"   First event: {events[0].strip()}")
-    print(f"   Last event: {events[-1].strip()}")
-    
-    assert len(events) > 0
-    assert "type" in events[0]
-    assert "done" in events[-1]
-    print("   ✅ StreamGenerator output matches SSE protocol format.\n")
+    print(f"   First event type: {events[0]['type']}")
+    print(f"   Last event type: {events[-1]['type']}")
+
+    event_types = [event["type"] for event in events]
+    assert "status" in event_types
+    assert "error" in event_types
+    assert event_types[-1] == "done"
+    print("   ✅ StreamGenerator emits structured status, error, token, and done events.\n")
 
     print("🎉 All Sprint 3 Platform integration tests passed!")
 

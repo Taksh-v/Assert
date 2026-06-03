@@ -19,6 +19,7 @@ from .eval_score import EvalScore
 from .background_task import BackgroundTask
 from .sync_run import SyncRun
 from .run_ledger import RunLedgerMixin, RunStatus
+from .episode import Episode
 
 __all__ = [
     "User", 
@@ -38,6 +39,7 @@ __all__ = [
     "BackgroundTask",
     "SyncRun",
     "RunLedgerMixin",
-    "RunStatus"
+    "RunStatus",
+    "Episode"
 ]
 

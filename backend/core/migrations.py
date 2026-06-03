@@ -66,6 +66,10 @@ async def ensure_sqlite_dev_columns(conn):
             "conversation_id": "VARCHAR",
             "feedback": "VARCHAR DEFAULT 'NULL'",
             "response_time_ms": "INTEGER",
+            "request_id": "VARCHAR",
+            "faithfulness_score": "FLOAT",
+            "relevance_score": "FLOAT",
+            "eval_reasoning": "TEXT",
         },
         "knowledge_objects": {
             "title": "VARCHAR",
@@ -106,6 +110,7 @@ async def ensure_sqlite_dev_columns(conn):
             "stats": "JSON",
             "started_at": "DATETIME",
             "completed_at": "DATETIME",
+            "request_id": "VARCHAR",
         }
     }
 

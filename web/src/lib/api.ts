@@ -16,19 +16,14 @@ export interface AskQuestionPayload {
   conversation_id?: string;
 }
 
+import { apiFetch } from "./auth";
+
 /**
  * Sends a question to the Assest backend.
  */
 export async function askQuestion(payload: AskQuestionPayload): Promise<QueryResponse> {
-  // Using localhost:8000 for local dev
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  
-  const response = await fetch(`${API_URL}/api/query`, {
+  const response = await apiFetch("/api/query", {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': process.env.NEXT_PUBLIC_API_KEY || 'assest_secret_key',
-    },
     body: JSON.stringify({
       question: payload.question,
       workspace_id: payload.workspace_id,

@@ -1,0 +1,25 @@
+# Assest Model Routing Policy
+version: "1.0"
+
+default_model: smart_model
+
+rules:
+  - name: "High Sensitivity"
+    condition: "context.sensitivity == 'high'"
+    model: "company_brain_fast_model" # Local/Private
+    reason: "Sensitivity is high, routing to private/local model."
+
+  - name: "Short & Fast"
+    condition: "context.latency_sensitive and len(context.query.split()) <= 10"
+    model: "openrouter_fast_model"
+    reason: "Short, latency-sensitive query, using fast model."
+
+  - name: "Cost Limited"
+    condition: "context.cost_limit"
+    model: "openrouter_fast_model"
+    reason: "Cost limit enabled, using cheaper model."
+
+  - name: "Default Smart"
+    condition: "true"
+    model: "openrouter_smart_model"
+    reason: "Using high-accuracy model by default."

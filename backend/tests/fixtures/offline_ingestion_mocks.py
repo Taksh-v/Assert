@@ -69,4 +69,14 @@ def offline_ingestion_mocks(monkeypatch):
     import backend.ingestion.classifier as clf_mod
     monkeypatch.setattr(clf_mod, "DocumentClassifier", MockDocumentClassifier, raising=False)
 
+    # Patch factory module to ensure IngestionPipelineFactory uses mocks
+    try:
+        import backend.ingestion.factory as factory_mod
+        monkeypatch.setattr(factory_mod, "PIIScrubber", MockPIIScrubber, raising=False)
+        monkeypatch.setattr(factory_mod, "Embedder", MockEmbedder, raising=False)
+        monkeypatch.setattr(factory_mod, "EntityExtractor", MockEntityExtractor, raising=False)
+        monkeypatch.setattr(factory_mod, "DocumentClassifier", MockDocumentClassifier, raising=False)
+    except Exception:
+        pass
+
     yield

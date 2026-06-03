@@ -36,6 +36,11 @@ class MessageResponse(BaseModel):
     answer: Optional[str]
     sources: List[dict]
     created_at: datetime
+    faithfulness_score: Optional[float] = None
+    relevance_score: Optional[float] = None
+    eval_reasoning: Optional[str] = None
+    response_time_ms: Optional[int] = None
+
 
 
 class ConversationResponse(BaseModel):

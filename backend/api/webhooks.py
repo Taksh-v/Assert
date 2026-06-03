@@ -58,8 +58,14 @@ async def slack_webhook(
     if data.get("type") == "url_verification":
         return {"challenge": data.get("challenge")}
     
-    # 2. Security Check (Production)
-    # await verify_slack_signature(request, x_slack_signature, x_slack_request_timestamp)
+    # 2. Security Check — verify the request is genuinely from Slack
+    try:
+        await verify_slack_signature(request, x_slack_signature, x_slack_request_timestamp)
+    except HTTPException:
+        raise  # Re-raise the 401 to the caller
+    except Exception as e:
+        logger.error(f"Slack signature verification error: {e}")
+        raise HTTPException(status_code=401, detail="Signature verification failed")
     
     # 3. Handle Events
     event = data.get("event", {})

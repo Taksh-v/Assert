@@ -11,10 +11,11 @@ export interface WorkspaceInfo {
   role: string;
 }
 
+import { getBrowserApiBasePath } from "./config";
+
 const TOKEN_KEY = "assest_auth_token";
 const USER_KEY = "assest_auth_user";
 const WORKSPACE_KEY = "assest_auth_workspace";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Custom event name for auth changes so React components can re-render
 export const AUTH_CHANGE_EVENT = "assest_auth_change";
@@ -27,7 +28,7 @@ function triggerAuthChange() {
 
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY) || "default-mock-token";
+  return localStorage.getItem(TOKEN_KEY);
 }
 
 export function setAuthToken(token: string) {
@@ -38,13 +39,7 @@ export function setAuthToken(token: string) {
 export function getCurrentUser(): UserInfo | null {
   if (typeof window === "undefined") return null;
   const userStr = localStorage.getItem(USER_KEY);
-  if (!userStr) {
-    return {
-      id: "default-user",
-      email: "default-user@example.com",
-      full_name: "Default User"
-    };
-  }
+  if (!userStr) return null;
   try {
     return JSON.parse(userStr) as UserInfo;
   } catch {
@@ -60,14 +55,7 @@ export function setCurrentUser(user: UserInfo) {
 export function getActiveWorkspace(): WorkspaceInfo | null {
   if (typeof window === "undefined") return null;
   const wsStr = localStorage.getItem(WORKSPACE_KEY);
-  if (!wsStr) {
-    return {
-      id: "default-workspace",
-      name: "Default Workspace",
-      slug: "default-workspace",
-      role: "owner"
-    };
-  }
+  if (!wsStr) return null;
   try {
     return JSON.parse(wsStr) as WorkspaceInfo;
   } catch {
@@ -88,7 +76,47 @@ export function signOut() {
 }
 
 export function isAuthenticated(): boolean {
+  // PHASE 9: Unconditional bypass for login-free workspace experience
   return true;
+}
+
+/**
+ * Ensures that an active workspace is set in local storage.
+ * If none exists, fetches from /api/workspaces and sets the first one.
+ */
+export async function ensureDefaultWorkspace(): Promise<WorkspaceInfo | null> {
+  const current = getActiveWorkspace();
+  if (current?.id) return current;
+
+  try {
+    const res = await apiFetch("/workspaces");
+    if (!res.ok) return null;
+    const workspaces = await res.json();
+    if (workspaces && workspaces.length > 0) {
+      const defaultWs = {
+        id: workspaces[0].id,
+        name: workspaces[0].name,
+        slug: workspaces[0].slug,
+        role: "owner"
+      };
+      setActiveWorkspace(defaultWs);
+      return defaultWs;
+    }
+  } catch (err) {
+    console.error("Failed to auto-select workspace:", err);
+  }
+  return null;
+}
+
+function toBackendProxyPath(path: string) {
+  if (path.startsWith("http")) {
+    return path;
+  }
+
+  const apiBasePath = getBrowserApiBasePath();
+  const backendPath = path.startsWith("/api/") ? path.slice(4) : path;
+  const normalizedPath = backendPath.startsWith("/") ? backendPath : `/${backendPath}`;
+  return `${apiBasePath}${normalizedPath}`;
 }
 
 /**
@@ -97,7 +125,7 @@ export function isAuthenticated(): boolean {
  */
 export async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const token = getAuthToken();
-  const url = path.startsWith("http") ? path : `${API_URL}${path}`;
+  const url = toBackendProxyPath(path);
 
   const headers = new Headers(options.headers || {});
   if (token) {

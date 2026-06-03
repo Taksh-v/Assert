@@ -71,7 +71,33 @@ class SQLDocumentStore:
                 return VersionPlan()
 
             if hasattr(raw_doc, "content_hash") and existing_doc.content_hash == raw_doc.content_hash:
-                return VersionPlan(should_skip=True)
+                # Verify that chunks actually exist — a previous partial failure
+                # may have written the document metadata but failed before persisting
+                # chunks / embeddings, leaving the system in a permanently stuck state.
+                chunk_count_stmt = select(DBChunk.id).where(
+                    DBChunk.document_id == existing_doc.id,
+                    DBChunk.is_active == True,
+                ).limit(1)
+                chunk_res = await session.execute(chunk_count_stmt)
+                has_chunks = chunk_res.scalars().first() is not None
+
+                if has_chunks:
+                    return VersionPlan(should_skip=True)
+
+                # Chunks missing — treat existing metadata as stale and force
+                # a clean re-ingestion by deactivating the zombie record.
+                import logging
+                _logger = logging.getLogger(__name__)
+                _logger.warning(
+                    f"Document '{existing_doc.id}' has matching content_hash but "
+                    f"zero active chunks; deactivating stale record and forcing re-ingestion."
+                )
+                existing_doc.is_active = False
+                await session.commit()
+                return VersionPlan(
+                    current_version=existing_doc.version + 1,
+                    previous_document_id=existing_doc.id,
+                )
 
             existing_doc.is_active = False
             await session.execute(

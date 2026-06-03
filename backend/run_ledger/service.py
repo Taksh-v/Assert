@@ -51,7 +51,8 @@ class RunLedgerService:
         elif status == RunStatus.CANCELLED:
             run.mark_cancelled()
         elif status == RunStatus.RUNNING:
-            run.mark_started()
+            if run.canonical_status != RunStatus.RUNNING:
+                run.mark_started()
         elif status == RunStatus.SUSPENDED:
             run.mark_suspended()
         else:

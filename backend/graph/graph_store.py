@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import List, Dict, Any, Optional
 from backend.core.config import get_settings
 from backend.core.async_utils import run_blocking
@@ -6,6 +7,42 @@ from backend.core.retry import retry_sync
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Strict allowlist pattern for Cypher identifiers (labels, relationship types).
+# Only alphanumeric characters and underscores are allowed.
+_SAFE_CYPHER_IDENT = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
+
+# Known-good labels produced by the entity categorisation logic below.
+_ALLOWED_LABELS = frozenset({
+    "Entity", "Employee", "Team", "OrgUnit", "API", "Repository",
+    "Database", "Service", "Customer", "Product", "BizEntity",
+    "Incident", "SOP", "Meeting", "Process",
+})
+
+# Known-good relationship types used in ingestion.
+_ALLOWED_RELATIONSHIPS = frozenset({
+    "MENTIONS", "WORKS_ON", "OWNED_BY", "RELATED_TO", "DEPENDS_ON",
+    "COLLABORATES", "MANAGES", "REPORTS_TO", "USES", "CONTAINS",
+    "REPORTED",
+})
+
+
+def _sanitize_cypher_identifier(value: str, allowed: frozenset, fallback: str) -> str:
+    """Validate a Cypher identifier against an allowlist and safe regex.
+
+    Returns *fallback* and logs a warning when the value is not recognised.
+    This completely prevents Cypher injection via LLM-generated entities.
+    """
+    if value in allowed:
+        return value
+    # Secondary gate: even if a new value appears, it must be purely alphanumeric.
+    if _SAFE_CYPHER_IDENT.match(value):
+        logger.info("Cypher identifier '%s' not in allowlist but passes regex — allowing", value)
+        return value
+    logger.warning(
+        "Blocked unsafe Cypher identifier '%s' — using fallback '%s'", value, fallback
+    )
+    return fallback
 
 
 class GraphStore:
@@ -25,13 +62,30 @@ class GraphStore:
         if not self.driver:
             try:
                 from neo4j import GraphDatabase  # lazy import
-                self.driver = GraphDatabase.driver(
-                    self.uri, 
-                    auth=(self.user, self.password)
-                )
-                # Verify connection
-                self.driver.verify_connectivity()
-                logger.info(f"Connected to Memgraph at {self.uri}")
+                # Use a short connection timeout so tests and environments without
+                # a running Memgraph fail fast instead of blocking for long TCP timeouts.
+                try:
+                    self.driver = GraphDatabase.driver(
+                        self.uri,
+                        auth=(self.user, self.password),
+                        connection_timeout=1,
+                    )
+                except TypeError:
+                    # Older neo4j-driver versions may not accept connection_timeout
+                    self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
+
+                # Verify connectivity but tolerate failures quickly
+                try:
+                    self.driver.verify_connectivity()
+                    logger.info(f"Connected to Memgraph at {self.uri}")
+                except Exception as e:
+                    logger.error(f"Failed to verify Memgraph connectivity: {e}")
+                    # Close and unset driver so callers treat graph as unavailable
+                    try:
+                        self.driver.close()
+                    except Exception:
+                        pass
+                    self.driver = None
             except ImportError:
                 logger.warning("neo4j driver not available — graph features disabled")
             except Exception as e:
@@ -182,6 +236,9 @@ class GraphStore:
                 # 1. Create/Merge specialized node
                 # 2. Link Document to Entity
                 # 3. Store confidence and weight
+                # SECURITY: Sanitize label and relationship to prevent Cypher injection
+                label = _sanitize_cypher_identifier(label, _ALLOWED_LABELS, "Entity")
+                relationship = _sanitize_cypher_identifier(relationship, _ALLOWED_RELATIONSHIPS, "MENTIONS")
                 query = f"""
                 MATCH (d:Document {{id: $doc_id}})
                 MERGE (e:{label} {{name: $name}})

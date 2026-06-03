@@ -1,17 +1,35 @@
 import logging
+import secrets
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse, HTMLResponse
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.config import get_settings
 from backend.core.database import get_db
+from backend.core.security import create_access_token, create_oauth_state, verify_oauth_state
 from backend.api.users import get_current_user
 from backend.models.user import User
+from jose import jwt, JWTError
+from datetime import timedelta
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _create_oauth_state(workspace_id: str) -> str:
+    """Create a signed JWT containing the workspace_id for use as the OAuth state parameter."""
+    return create_oauth_state(workspace_id)
+
+
+def _verify_oauth_state(state: str) -> str:
+    """Verify the signed OAuth state JWT and return the workspace_id."""
+    try:
+        return verify_oauth_state(state)
+    except ValueError as e:
+        logger.warning(f"OAuth state verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state token")
 
 
 # ── Helper: Create or update connector with OAuth tokens ──────
@@ -33,12 +51,7 @@ async def _upsert_oauth_connector(source_type: str, workspace_id: str, config: d
         workspace = result.scalars().first()
         
         if not workspace:
-            if workspace_id == "default-workspace":
-                workspace = Workspace(name="Default Workspace", slug="default-workspace")
-                session.add(workspace)
-                await session.flush()
-            else:
-                raise Exception(f"Workspace {workspace_id} not found")
+            raise Exception(f"Workspace {workspace_id} not found. Create it first via POST /api/workspaces.")
         
         resolved_w_id = workspace.id
 
@@ -192,12 +205,13 @@ async def notion_login(workspace_id: str):
     if not settings.notion_client_id:
         raise HTTPException(status_code=500, detail="Notion OAuth not configured")
         
+    state_token = _create_oauth_state(workspace_id)
     auth_url = (
         f"https://api.notion.com/v1/oauth/authorize"
         f"?owner=user&client_id={settings.notion_client_id}"
         f"&redirect_uri={settings.notion_redirect_uri}"
         f"&response_type=code"
-        f"&state={workspace_id}"
+        f"&state={state_token}"
     )
     return RedirectResponse(auth_url)
 
@@ -208,7 +222,8 @@ async def notion_callback(code: str, state: str, request: Request):
     if not code:
         return HTMLResponse(_oauth_error_html("notion", "Missing authorization code"), status_code=400)
     
-    workspace_id = state
+    # SECURITY: Verify the signed state token to prevent CSRF
+    workspace_id = _verify_oauth_state(state)
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -258,13 +273,14 @@ async def google_login(workspace_id: str):
     if not settings.google_client_id:
         raise HTTPException(status_code=500, detail="Google OAuth not configured")
         
+    state_token = _create_oauth_state(workspace_id)
     auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={settings.google_client_id}"
         f"&redirect_uri={settings.google_redirect_uri}"
         f"&response_type=code"
         f"&scope={settings.google_scopes}"
-        f"&state={workspace_id}"
+        f"&state={state_token}"
         f"&access_type=offline&prompt=consent"
     )
     return RedirectResponse(auth_url)
@@ -276,7 +292,8 @@ async def google_callback(code: str, state: str):
     if not code:
         return HTMLResponse(_oauth_error_html("google_drive", "Missing authorization code"), status_code=400)
     
-    workspace_id = state
+    # SECURITY: Verify the signed state token to prevent CSRF
+    workspace_id = _verify_oauth_state(state)
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -326,13 +343,14 @@ async def slack_login(workspace_id: str):
     if not settings.slack_client_id:
         raise HTTPException(status_code=500, detail="Slack OAuth not configured")
     
+    state_token = _create_oauth_state(workspace_id)
     scopes = "channels:history,channels:read,users:read"
     auth_url = (
         f"https://slack.com/oauth/v2/authorize"
         f"?client_id={settings.slack_client_id}"
         f"&scope={scopes}"
         f"&redirect_uri={settings.slack_redirect_uri}"
-        f"&state={workspace_id}"
+        f"&state={state_token}"
     )
     return RedirectResponse(auth_url)
 
@@ -349,7 +367,8 @@ async def slack_callback(code: str, state: str):
             detail="Slack OAuth is not configured. Please set SLACK_CLIENT_SECRET in .env",
         )
     
-    workspace_id = state
+    # SECURITY: Verify the signed state token to prevent CSRF
+    workspace_id = _verify_oauth_state(state)
     
     async with httpx.AsyncClient() as client:
         response = await client.post(

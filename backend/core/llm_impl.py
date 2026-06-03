@@ -2,11 +2,75 @@ import logging
 import litellm
 import os
 import json
-from typing import Optional, List, Dict, Any
+import random
+import time
+import asyncio
+import uuid
+from typing import Optional, List, Dict, Any, AsyncGenerator
 from backend.core.config import get_settings
+from dataclasses import dataclass
+from backend.core.metrics import record_llm_call
+from backend.core.langfuse_wrapper import start_run, end_run, log_event
+from backend.observability.telemetry import tracer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@dataclass
+class LLMHealthReport:
+    provider: str
+    model: Optional[str]
+    fallback_models: List[str]
+    warnings: List[str]
+    strict_validation_enabled: bool
+    active_check: Optional[Dict[str, Any]] = None
+
+
+class CircuitBreaker:
+    """Simple circuit breaker to avoid hammering failing providers.
+    
+    Only trips on server-side errors (5xx) and rate limits (429).
+    Client errors (400, 401, 403, 404) are the caller's fault and
+    should NOT trip the breaker.
+    """
+
+    def __init__(self, failure_threshold: int = 3, reset_timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.failure_count = 0
+        self.opened_at = None
+
+    def record_failure(self, exception: Exception = None):
+        import time
+
+        # Only count provider-side failures toward the circuit breaker threshold.
+        if exception is not None:
+            err_str = str(exception).lower()
+            status_code = getattr(exception, "status_code", None)
+            # Detect 4xx client errors — these should NOT trip the breaker
+            if status_code and 400 <= status_code < 500 and status_code != 429:
+                return
+            # Heuristic: detect "400" or "bad request" in error strings from litellm
+            if any(marker in err_str for marker in ["400", "bad request", "invalid", "authentication"]):
+                if "429" not in err_str and "rate" not in err_str:
+                    return
+
+        self.failure_count += 1
+        if self.failure_count >= self.failure_threshold:
+            self.opened_at = time.time()
+
+    def is_open(self) -> bool:
+        import time
+
+        if self.opened_at is None:
+            return False
+        if time.time() - self.opened_at > self.reset_timeout:
+            # reset
+            self.failure_count = 0
+            self.opened_at = None
+            return False
+        return True
 
 # Setup safe callbacks if langfuse available
 try:
@@ -53,14 +117,46 @@ class SharedLLMClient:
         # normalize provider-specific model names
         self._normalize_model()
 
+        # resilience primitives
+        self.circuit = CircuitBreaker(failure_threshold=3, reset_timeout=60)
+        # prepare fallback list from settings (string -> list)
+        raw = getattr(settings, "openrouter_fallback_models", "") or ""
+        self.openrouter_fallback_models = [s.strip() for s in raw.split(",") if s.strip()]
+        # Build fallback policy
+        self.fallback_policy = FallbackPolicy(primary=self.model, fallbacks=self.openrouter_fallback_models or [])
+
+
     def _detect_provider(self) -> str:
-        if getattr(settings, "openrouter_api_key", None):
-            return "openrouter"
-        if getattr(settings, "groq_api_key", None):
-            return "groq"
-        if getattr(settings, "litellm_proxy_url", None):
-            return "proxy"
-        return "local"
+        return detect_llm_provider()
+
+    async def ping(self) -> Dict[str, Any]:
+        """Perform a lightweight live test against the primary model."""
+        start = time.time()
+        model = self._resolve_model_for_provider(self.model)
+        try:
+            extra_kwargs: Dict[str, Any] = {}
+            if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
+                extra_kwargs["api_key"] = settings.openrouter_api_key
+            elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
+                extra_kwargs["api_key"] = settings.groq_api_key
+            elif self.provider == "proxy":
+                extra_kwargs["api_key"] = "sk-local-brain"
+
+            api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
+
+            # Very short completion for ping
+            await litellm.acompletion(
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                max_tokens=1,
+                api_base=api_base,
+                **extra_kwargs,
+            )
+            latency = (time.time() - start) * 1000
+            return {"status": "success", "latency_ms": latency, "model": model}
+        except Exception as e:
+            logger.warning("LLM ping failed for model %s: %s", model, e)
+            return {"status": "error", "error": str(e), "model": model}
 
     def _normalize_model(self) -> None:
         # simple normalization to ensure model strings match provider expectations
@@ -87,44 +183,199 @@ class SharedLLMClient:
 
     async def chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:
         """Async chat completion using litellm's async API where available."""
-        try:
-            model = self._resolve_model_for_provider(self.model)
-            api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
-            extra_kwargs: Dict[str, Any] = {}
-            if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
-                extra_kwargs["api_key"] = settings.openrouter_api_key
-            elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
-                extra_kwargs["api_key"] = settings.groq_api_key
-            elif self.provider == "proxy":
-                extra_kwargs["api_key"] = "sk-local-brain"
-
-            response = await litellm.acompletion(
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                model=model,
-                temperature=temperature,
-                api_base=api_base,
-                **extra_kwargs,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            err_str = str(e)
-            logger.warning(f"Async LLM completion failed: {e}")
-            # Retry with a cheaper/default OpenRouter model if endpoint not found
-            if self.provider == "openrouter" and ("No endpoints found" in err_str or "NotFoundError" in err_str):
-                try:
-                    fallback_model = settings.openrouter_fast_model
-                    logger.info(f"Retrying async completion with fallback model: {fallback_model}")
-                    response = await litellm.acompletion(
-                        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                        model=fallback_model,
-                        temperature=temperature,
-                        api_base=settings.openrouter_api_base,
-                        api_key=(settings.openrouter_api_key if getattr(settings, "openrouter_api_key", None) else None),
-                    )
-                    return response.choices[0].message.content
-                except Exception as e2:
-                    logger.warning(f"Fallback async completion also failed: {e2}")
+        call_id = str(uuid.uuid4())
+        logger.info("LLM call start: call_id=%s provider=%s model=%s", call_id, self.provider, self.model)
+        # Check circuit breaker
+        if self.circuit.is_open():
+            logger.warning("Circuit open for provider %s — skipping LLM call (call_id=%s)", self.provider, call_id)
             return ""
+
+        # Build ordered model list to try using fallback policy
+        primary = self._resolve_model_for_provider(self.model)
+        # regenerate fallback policy in case model resolution changed
+        self.fallback_policy = FallbackPolicy(primary=primary, fallbacks=self.openrouter_fallback_models)
+        models_to_try: List[str] = []
+        if self.provider == "openrouter":
+            # use policy ordered list then ensure fast model is last resort
+            models_to_try = self.fallback_policy.ordered()
+            if settings.openrouter_fast_model and settings.openrouter_fast_model not in models_to_try:
+                models_to_try.append(settings.openrouter_fast_model)
+        else:
+            models_to_try = [primary]
+
+        api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
+        attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
+        base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
+
+        for model in models_to_try:
+            for attempt in range(attempts_per_model):
+                try:
+                    extra_kwargs: Dict[str, Any] = {}
+                    if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
+                        extra_kwargs["api_key"] = settings.openrouter_api_key
+                    elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
+                        extra_kwargs["api_key"] = settings.groq_api_key
+                    elif self.provider == "proxy":
+                        extra_kwargs["api_key"] = "sk-local-brain"
+
+                    logger.info("Attempting LLM call provider=%s model=%s attempt=%s call_id=%s", self.provider, model, attempt, call_id)
+                    # start langfuse run (best-effort)
+                    lf_run = start_run(request_id=call_id, metadata={"provider": self.provider, "model": model})
+                    with tracer.start_as_current_span("llm.chat_completion") as span:
+                        span.set_attribute("request_id", call_id)
+                        span.set_attribute("provider", self.provider)
+                        span.set_attribute("model", model)
+                        span.set_attribute("model_type", self.model_type)
+                        span.set_attribute("attempt", attempt)
+                        start = time.time()
+                        response = await litellm.acompletion(
+                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                            model=model,
+                            temperature=temperature,
+                            api_base=api_base,
+                            **extra_kwargs,
+                        )
+                        duration = time.time() - start
+                        span.set_attribute("duration_ms", duration * 1000.0)
+                    # record metrics (best-effort)
+                    try:
+                        record_llm_call(self.provider, model, "success", duration)
+                    except Exception:
+                        pass
+                    try:
+                        log_event(lf_run, "llm_call_success", {"duration": duration, "provider": self.provider, "model": model})
+                    except Exception:
+                        pass
+                    try:
+                        end_run(lf_run, status="ok")
+                    except Exception:
+                        pass
+                    return response.choices[0].message.content
+                except Exception as e:
+                    err_str = str(e)
+                    duration = time.time() - start if 'start' in locals() else 0.0
+                    try:
+                        record_llm_call(self.provider, model, "error", duration)
+                    except Exception:
+                        pass
+                    try:
+                        log_event(lf_run if 'lf_run' in locals() else None, "llm_call_error", {"error": err_str, "provider": self.provider, "model": model, "duration": duration})
+                    except Exception:
+                        pass
+                    try:
+                        end_run(lf_run if 'lf_run' in locals() else None, status="error")
+                    except Exception:
+                        pass
+                    logger.warning("LLM attempt failed for model=%s attempt=%s call_id=%s: %s", model, attempt, call_id, e)
+                    self.circuit.record_failure(e)
+                    # if last attempt for this model, break to try next model
+                    if attempt >= attempts_per_model - 1:
+                        break
+                    # exponential backoff with jitter
+                    backoff = base_backoff * (2 ** attempt) + random.uniform(0, base_backoff)
+                    await asyncio.sleep(backoff)
+
+        # All attempts failed
+        logger.error("LLM all attempts failed call_id=%s provider=%s models=%s", call_id, self.provider, models_to_try)
+        return ""
+
+    async def chat_completion_stream(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> AsyncGenerator[str, None]:
+        """Async chat completion streaming using litellm's stream=True API."""
+        call_id = str(uuid.uuid4())
+        logger.info("LLM stream start: call_id=%s provider=%s model=%s", call_id, self.provider, self.model)
+        
+        if self.circuit.is_open():
+            logger.warning("Circuit open for provider %s — skipping LLM stream (call_id=%s)", self.provider, call_id)
+            return
+
+        primary = self._resolve_model_for_provider(self.model)
+        self.fallback_policy = FallbackPolicy(primary=primary, fallbacks=self.openrouter_fallback_models)
+        models_to_try: List[str] = []
+        if self.provider == "openrouter":
+            models_to_try = self.fallback_policy.ordered()
+            if settings.openrouter_fast_model and settings.openrouter_fast_model not in models_to_try:
+                models_to_try.append(settings.openrouter_fast_model)
+        else:
+            models_to_try = [primary]
+
+        api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
+        attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
+        base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
+
+        for model in models_to_try:
+            for attempt in range(attempts_per_model):
+                try:
+                    extra_kwargs: Dict[str, Any] = {}
+                    if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
+                        extra_kwargs["api_key"] = settings.openrouter_api_key
+                    elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
+                        extra_kwargs["api_key"] = settings.groq_api_key
+                    elif self.provider == "proxy":
+                        extra_kwargs["api_key"] = "sk-local-brain"
+
+                    logger.info("Attempting LLM stream provider=%s model=%s attempt=%s call_id=%s", self.provider, model, attempt, call_id)
+                    lf_run = start_run(request_id=call_id, metadata={"provider": self.provider, "model": model})
+                    
+                    with tracer.start_as_current_span("llm.chat_completion_stream") as span:
+                        span.set_attribute("request_id", call_id)
+                        span.set_attribute("provider", self.provider)
+                        span.set_attribute("model", model)
+                        span.set_attribute("model_type", self.model_type)
+                        span.set_attribute("attempt", attempt)
+                        start = time.time()
+                        
+                        response = await litellm.acompletion(
+                            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                            model=model,
+                            temperature=temperature,
+                            api_base=api_base,
+                            stream=True,
+                            **extra_kwargs,
+                        )
+                        
+                        async for chunk in response:
+                            if chunk.choices and chunk.choices[0].delta.content:
+                                yield chunk.choices[0].delta.content
+                                
+                        duration = time.time() - start
+                        span.set_attribute("duration_ms", duration * 1000.0)
+                        
+                    try:
+                        record_llm_call(self.provider, model, "success", duration)
+                    except Exception:
+                        pass
+                    try:
+                        log_event(lf_run, "llm_call_success", {"duration": duration, "provider": self.provider, "model": model})
+                    except Exception:
+                        pass
+                    try:
+                        end_run(lf_run, status="ok")
+                    except Exception:
+                        pass
+                    return  # Success, exit the retry loops
+                except Exception as e:
+                    err_str = str(e)
+                    duration = time.time() - start if 'start' in locals() else 0.0
+                    try:
+                        record_llm_call(self.provider, model, "error", duration)
+                    except Exception:
+                        pass
+                    try:
+                        log_event(lf_run if 'lf_run' in locals() else None, "llm_call_error", {"error": err_str, "provider": self.provider, "model": model, "duration": duration})
+                    except Exception:
+                        pass
+                    try:
+                        end_run(lf_run if 'lf_run' in locals() else None, status="error")
+                    except Exception:
+                        pass
+                    logger.warning("LLM stream attempt failed for model=%s attempt=%s call_id=%s: %s", model, attempt, call_id, e)
+                    self.circuit.record_failure(e)
+                    if attempt >= attempts_per_model - 1:
+                        break
+                    backoff = base_backoff * (2 ** attempt) + random.uniform(0, base_backoff)
+                    await asyncio.sleep(backoff)
+
+        logger.error("LLM all stream attempts failed call_id=%s provider=%s models=%s", call_id, self.provider, models_to_try)
 
     @property
     def chat(self):
@@ -153,30 +404,159 @@ class SharedLLMClient:
                     elif self.outer.provider == "proxy":
                         extra_kwargs["api_key"] = "sk-local-brain"
 
-                    try:
-                        return litellm.completion(model=model, *args, **extra_kwargs)
-                    except Exception as e:
-                        err = str(e)
-                        logger.warning(f"Sync LLM completion failed: {e}")
-                        # Retry with fallback OpenRouter model when available
-                        if self.outer.provider == "openrouter" and ("No endpoints found" in err or "NotFoundError" in err):
-                            try:
-                                fb_model = settings.openrouter_fast_model
-                                logger.info(f"Retrying sync completion with fallback model: {fb_model}")
-                                if getattr(settings, "openrouter_api_key", None):
-                                    extra_kwargs["api_key"] = settings.openrouter_api_key
-                                litellm.api_base = settings.openrouter_api_base
-                                return litellm.completion(model=fb_model, *args, **extra_kwargs)
-                            except Exception as e3:
-                                logger.warning(f"Fallback sync completion also failed: {e3}")
-                        # Provide a minimal mock-like response to keep callers robust in tests/dev
-                        class MockResp:
-                            def __init__(self, content):
-                                self.choices = [type('Choice', (), {'message': type('Message', (), {'content': content})()})]
+                    # Sync path: attempt primary + fallbacks with basic backoff
+                    models_to_try = [model]
+                    if self.outer.provider == "openrouter":
+                        models_to_try.extend(self.outer.openrouter_fallback_models)
+                        if settings.openrouter_fast_model not in models_to_try:
+                            models_to_try.append(settings.openrouter_fast_model)
 
-                        return MockResp("")
+                    attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
+                    base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
+
+                    last_exception = RuntimeError("All LLM completion attempts failed.")
+                    for m in models_to_try:
+                        for attempt in range(attempts_per_model):
+                            try:
+                                if self.outer.provider == "openrouter":
+                                    extra_kwargs["api_key"] = settings.openrouter_api_key if getattr(settings, "openrouter_api_key", None) else None
+                                    litellm.api_base = settings.openrouter_api_base
+                                logger.info("Sync LLM attempt provider=%s model=%s attempt=%s", self.outer.provider, m, attempt)
+                                return litellm.completion(model=m, *args, **extra_kwargs)
+                            except Exception as e:
+                                logger.warning("Sync LLM attempt failed for model=%s attempt=%s: %s", m, attempt, e)
+                                last_exception = e
+                                if attempt >= attempts_per_model - 1:
+                                    break
+                                backoff = base_backoff * (2 ** attempt) + random.uniform(0, base_backoff)
+                                time.sleep(backoff)
+
+                    raise last_exception
 
             def __init__(self):
                 self.completions = self.Completions(client)
 
         return Chat()
+
+
+@dataclass
+class FallbackPolicy:
+    """Simple policy describing primary + ordered fallbacks."""
+    primary: str
+    fallbacks: List[str]
+
+    def ordered(self) -> List[str]:
+        out = [self.primary] + [f for f in self.fallbacks if f != self.primary]
+        return out
+
+
+def detect_llm_provider() -> str:
+    if getattr(settings, "openrouter_api_key", None):
+        return "openrouter"
+    if getattr(settings, "groq_api_key", None):
+        return "groq"
+    if getattr(settings, "litellm_proxy_url", None):
+        return "proxy"
+    return "local"
+
+
+def build_config_hygiene_warnings() -> list[str]:
+    """Warn on clearly unsafe or placeholder config values.
+
+    This is intentionally shallow: it does not inspect `.env` contents on disk,
+    only the active runtime settings object.
+    """
+    warnings: list[str] = []
+
+    if getattr(settings, "app_secret_key", "") in {
+        "change-me-to-a-random-64-char-string",
+        "change-me",
+        "",
+    }:
+        warnings.append("app_secret_key is using a placeholder value; set a strong random secret before production")
+
+    if getattr(settings, "langfuse_public_key", None) == "pk-lf-public":
+        warnings.append("langfuse_public_key is using the sample placeholder value")
+
+    if getattr(settings, "langfuse_secret_key", None) == "sk-lf-secret":
+        warnings.append("langfuse_secret_key is using the sample placeholder value")
+
+    if getattr(settings, "slack_signing_secret", None) == "assest_slack_secret":
+        warnings.append("slack_signing_secret is using a sample placeholder value")
+
+    return warnings
+
+
+async def validate_models_on_startup() -> list[str]:
+    """Validate configured LLM providers and models at startup.
+
+    This does lightweight checks and returns warnings — it does not fail startup.
+    """
+    report = await build_llm_health_report(perform_ping=settings.active_ping_on_startup)
+
+    for warning in report.warnings:
+        logger.warning("Startup model validation: %s", warning)
+
+    if report.active_check and report.active_check.get("status") == "error":
+        logger.error("LLM startup active check failed: %s", report.active_check.get("error"))
+        # We add active check errors to the warnings list so they are visible to main.py
+        report.warnings.append(f"Active connectivity check failed: {report.active_check.get('error')}")
+
+    return report.warnings
+
+
+async def build_llm_health_report(perform_ping: bool = False) -> LLMHealthReport:
+    """Build a structured health report for the current LLM configuration.
+
+    The report is shared by startup validation and the `/api/llm/health` endpoint.
+    It intentionally performs only configuration-level checks unless perform_ping is True.
+    """
+    warnings: list[str] = []
+
+    try:
+        provider = detect_llm_provider()
+    except Exception:
+        provider = "unknown"
+
+    model: Optional[str] = None
+    fallback_models: list[str] = []
+
+    try:
+        if getattr(settings, "openrouter_api_key", None):
+            model = settings.openrouter_smart_model
+            fallback_models = [s.strip() for s in (settings.openrouter_fallback_models or "").split(",") if s.strip()]
+            if not getattr(settings, "openrouter_fast_model", None):
+                warnings.append("openrouter_fast_model is not configured")
+            if "meta-llama" in (settings.openrouter_smart_model or ""):
+                warnings.append("openrouter_smart_model references meta-llama — verify account access to this model")
+        elif getattr(settings, "groq_api_key", None):
+            model = settings.groq_model
+            if not getattr(settings, "groq_model", None):
+                warnings.append("groq_api_key present but groq_model not set")
+        elif getattr(settings, "litellm_proxy_url", None):
+            model = settings.company_brain_fast_model
+        else:
+            warnings.append("No LLM provider configured; using local fallback behavior")
+    except Exception as e:
+        logger.warning("Model validation check failed: %s", e)
+        warnings.append(f"Model validation check failed: {e}")
+
+    warnings.extend(build_config_hygiene_warnings())
+
+    # Cross-check settings mismatches that often lead to 404/permission failures
+    if getattr(settings, "openrouter_api_key", None) is None and getattr(settings, "openrouter_smart_model", None):
+        warnings.append("openrouter_smart_model configured but openrouter_api_key missing")
+
+    active_check = None
+    if perform_ping:
+        client = SharedLLMClient()
+        active_check = await client.ping()
+
+    return LLMHealthReport(
+        provider=provider,
+        model=model,
+        fallback_models=fallback_models,
+        warnings=warnings,
+        strict_validation_enabled=bool(getattr(settings, "strict_model_validation", False)),
+        active_check=active_check,
+    )

@@ -13,6 +13,7 @@ class MockConnector:
         self.workspace_id = "ws-1"
         self.type = SimpleNamespace(value="slack")
         self.config = "encrypted-config"
+        self.status = "active"
 
 class MockDoc:
     def __init__(self, title, content):

@@ -56,7 +56,6 @@ from backend.models.reasoning_execution import ReasoningExecution
 from sqlalchemy import select
 
 @patch("backend.reasoning.agents.planner.LLMClient", MockLLMClient)
-@patch("backend.reasoning.agents.analyst.LLMClient", MockLLMClient)
 @patch("backend.reasoning.agents.synthesizer.LLMClient", MockLLMClient)
 async def test_durable_workflow_lifecycle():
     print("🚀 Initializing test database...")
@@ -138,7 +137,6 @@ async def test_durable_workflow_lifecycle():
         
     assert "planner_agent" in log_content, "Expected planner_agent span in trace log"
     assert "researcher_agent" in log_content, "Expected researcher_agent span in trace log"
-    assert "analyst_agent" in log_content, "Expected analyst_agent span in trace log"
     assert "synthesizer_agent" in log_content, "Expected synthesizer_agent span in trace log"
     print("   ✅ Telemetry spans successfully logged in logs/telemetry.log.")
     

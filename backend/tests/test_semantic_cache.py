@@ -121,6 +121,10 @@ async def test_query_service_integration_hit(mock_vector_store, mock_embedder):
 
 @pytest.mark.asyncio
 async def test_query_service_integration_miss(mock_vector_store, mock_embedder):
+    from backend.query.resolution import ResponseTier
+    from backend.query.adaptive_router import RouteDecision
+    from backend.query.generator import Answer
+
     db = AsyncMock(spec=AsyncSession)
     service = QueryService(db)
     
@@ -130,32 +134,35 @@ async def test_query_service_integration_miss(mock_vector_store, mock_embedder):
     # Mock cache miss
     mock_vector_store.search.return_value = []
     
-    # Mock SupervisorAgent and QuickRetrieverAgent
-    with patch("backend.query.query_service.SupervisorAgent") as MockSupervisor, \
-         patch("backend.query.query_service.QuickRetrieverAgent") as MockAgent:
-        
-        mock_supervisor = MockSupervisor.return_value
-        mock_supervisor.classify_intent = AsyncMock(return_value=MagicMock(intent=QueryIntent.QUICK_LOOKUP))
-        
-        mock_agent = MockAgent.return_value
-        mock_agent.execute = AsyncMock(return_value={
-            "answer": "Fresh Answer",
-            "sources": ["source1"],
-            "confidence": 0.9
-        })
-        
-        # Mock db.execute for conversation update
-        mock_conv = MagicMock(spec=Conversation)
-        db.execute.return_value = MagicMock(scalar_one=MagicMock(return_value=mock_conv))
-        
-        result = await service.execute_query(
-            question="new question",
-            workspace_id="ws_1",
-            user_id="user_1"
-        )
-        
-        assert result["answer"] == "Fresh Answer"
-        assert result["metadata"]["method"] == "quick_retriever"
-        
-        # Verify set_cache was called (upsert_batch in mock_vector_store)
-        assert mock_vector_store.upsert_batch.called
+    # Mock routing decision
+    service.router.route = AsyncMock(return_value=RouteDecision(
+        tier=ResponseTier.FAST_RAG,
+        intent=QueryIntent.QUICK_LOOKUP,
+        rationale="test"
+    ))
+    
+    # Mock fast RAG path
+    service._fast_rag_path = AsyncMock(return_value=Answer(
+        answer_text="Fresh Answer",
+        sources=[{"title": "source1", "url": ""}],
+        grounding_score=0.9,
+        response_tier=ResponseTier.FAST_RAG.value
+    ))
+    
+    # Mock db.execute for conversation update
+    mock_conv = MagicMock(spec=Conversation)
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = mock_conv
+    db.execute.return_value = mock_result
+    
+    result = await service.execute_query(
+        question="new question",
+        workspace_id="ws_1",
+        user_id="user_1"
+    )
+    
+    assert result["answer"] == "Fresh Answer"
+    assert result["metadata"]["method"] == "fast_rag_crag"
+    
+    # Verify set_cache was called (upsert_batch in mock_vector_store)
+    assert mock_vector_store.upsert_batch.called

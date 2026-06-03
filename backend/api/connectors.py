@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.core.database import get_db
 from backend.core.config import get_settings
-from backend.core.security import encrypt_config, decrypt_config
+from backend.core.security import encrypt_config, decrypt_config, create_oauth_state
 from backend.api.users import get_current_user
 from backend.models.user import User
 from backend.models.workspace_member import WorkspaceMember
@@ -38,12 +38,7 @@ async def verify_workspace_access(
     workspace = result.scalars().first()
     
     if not workspace:
-        if workspace_id == "default-workspace":
-            workspace = Workspace(name="Default Workspace", slug="default-workspace")
-            db.add(workspace)
-            await db.flush()
-        else:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        raise HTTPException(status_code=404, detail="Workspace not found. Create it first via POST /api/workspaces.")
     
     # Check membership
     stmt = select(WorkspaceMember).where(
@@ -78,13 +73,7 @@ async def resolve_workspace_id(db: AsyncSession, workspace_ref: str) -> str:
     if workspace:
         return workspace.id
 
-    if workspace_ref == "default-workspace":
-        workspace = Workspace(name="Default Workspace", slug="default-workspace")
-        db.add(workspace)
-        await db.flush()
-        return workspace.id
-
-    raise HTTPException(status_code=404, detail="Workspace not found")
+    raise HTTPException(status_code=404, detail="Workspace not found. Create it first via POST /api/workspaces.")
 
 
 class ConnectorCreate(BaseModel):
@@ -430,7 +419,7 @@ async def get_auth_url(
                 f"?client_id={settings.notion_client_id}"
                 f"&response_type=code&owner=user"
                 f"&redirect_uri={settings.notion_redirect_uri}"
-                f"&state={workspace_id or 'default-workspace'}"
+                f"&state={create_oauth_state(workspace_id or 'default-workspace')}"
             ),
             "configured": True,
         }
@@ -447,7 +436,7 @@ async def get_auth_url(
                 f"&response_type=code"
                 f"&scope={scope}"
                 f"&access_type=offline&prompt=consent"
-                f"&state={workspace_id or 'default-workspace'}"
+                f"&state={create_oauth_state(workspace_id or 'default-workspace')}"
             ),
             "configured": True,
         }
@@ -464,7 +453,7 @@ async def get_auth_url(
                 f"?client_id={settings.slack_client_id}"
                 f"&scope={scopes}"
                 f"&redirect_uri={settings.slack_redirect_uri}"
-                f"&state={workspace_id or 'default-workspace'}"
+                f"&state={create_oauth_state(workspace_id or 'default-workspace')}"
             ),
             "configured": True,
         }

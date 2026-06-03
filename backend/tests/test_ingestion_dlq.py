@@ -121,23 +121,19 @@ async def test_ingestion_dlq_routing():
         from sqlalchemy import delete
         await session.execute(delete(Document).where(Document.workspace_id == workspace_id))
         await session.execute(delete(FailedIngestion).where(FailedIngestion.workspace_id == workspace_id))
+        await session.execute(delete(Connector).where(Connector.id == connector_id))
         await session.commit()
         
-        # Check if connector already exists
-        stmt = select(Connector).where(Connector.id == connector_id)
-        existing = (await session.execute(stmt)).scalars().first()
-        
-        if not existing:
-            connector = Connector(
-                id=connector_id,
-                workspace_id=workspace_id,
-                type=ConnectorType.SLACK,
-                config={},  # Encrypted configuration empty dict
-                status=ConnectorStatus.ACTIVE
-            )
-            session.add(connector)
-            await session.commit()
-            print("   ✅ Mock connector inserted into DB.")
+        connector = Connector(
+            id=connector_id,
+            workspace_id=workspace_id,
+            type=ConnectorType.SLACK,
+            config={},  # Encrypted configuration empty dict
+            status=ConnectorStatus.ACTIVE
+        )
+        session.add(connector)
+        await session.commit()
+        print("   ✅ Mock connector inserted into DB.")
             
     # 2. Run the Ingestion Pipeline
     print("🟢 Executing Ingestion Pipeline...")

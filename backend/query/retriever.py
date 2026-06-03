@@ -4,6 +4,7 @@ from backend.core.config import get_settings
 from backend.ingestion.embedder import Embedder
 from backend.core.vector_store import VectorStore
 from backend.core.llm_client import LLMClient
+from backend.observability.telemetry import tracer
 
 from backend.core.database import async_session
 from sqlalchemy import select, or_
@@ -53,21 +54,27 @@ class Retriever:
         Return ONLY valid JSON:
         {{"scope": "broad|specific", "temporal": "latest|historical|none"}}
         """
-        try:
-            res = await self.llm.chat_completion("You are a search intent classifier.", prompt)
-            if "```json" in res:
-                res = res.split("```json")[1].split("```")[0].strip()
-            elif "```" in res:
-                res = res.split("```")[1].split("```")[0].strip()
-            
-            import json
-            data = json.loads(res)
-            return {
-                "scope": data.get("scope", "specific"),
-                "temporal": data.get("temporal", "none")
-            }
-        except Exception:
-            return {"scope": "specific", "temporal": "none"}
+        with tracer.start_as_current_span("retrieval.intent") as span:
+            span.set_attribute("question", question[:200])
+            try:
+                res = await self.llm.chat_completion("You are a search intent classifier.", prompt)
+                if "```json" in res:
+                    res = res.split("```json")[1].split("```")[0].strip()
+                elif "```" in res:
+                    res = res.split("```")[1].split("```")[0].strip()
+
+                import json
+                data = json.loads(res)
+                out = {
+                    "scope": data.get("scope", "specific"),
+                    "temporal": data.get("temporal", "none")
+                }
+                span.set_attribute("scope", out["scope"])
+                span.set_attribute("temporal", out["temporal"])
+                return out
+            except Exception as e:
+                span.record_exception(e)
+                return {"scope": "specific", "temporal": "none"}
 
     async def _generate_hyde_answer(self, question: str) -> str:
         """
@@ -82,108 +89,123 @@ class Retriever:
         
         Hypothetical Answer:
         """
-        try:
-            return await self.llm.chat_completion("You are a helpful document simulator.", prompt)
-        except Exception:
-            return question
+        with tracer.start_as_current_span("retrieval.hyde") as span:
+            span.set_attribute("question", question[:200])
+            try:
+                result = await self.llm.chat_completion("You are a helpful document simulator.", prompt)
+                span.set_attribute("hyde_length", len(result))
+                return result
+            except Exception as e:
+                span.record_exception(e)
+                return question
 
     async def search(self, question: str, workspace_id: str, top_k: int = 5, user_id: Optional[str] = None) -> List[RetrievalResult]:
         """
         Perform hybrid + graph search, rerank, and return top results.
         """
         logger.info(f"Augmented temporal searching for: {question}")
+        with tracer.start_as_current_span("retrieval.search") as span:
+            span.set_attribute("workspace_id", workspace_id)
+            span.set_attribute("top_k", top_k)
+            span.set_attribute("user_id", user_id or "")
         
-        # 1. Intent Detection (Scope + Temporal)
-        intent_data = await self._detect_intent(question)
-        scope = intent_data["scope"]
-        temporal = intent_data["temporal"]
+            # 1. Intent Detection (Scope + Temporal)
+            intent_data = await self._detect_intent(question)
+            scope = intent_data["scope"]
+            temporal = intent_data["temporal"]
         
-        vector_target = "title" if scope == "broad" else "content"
-        logger.info(f"Intent detected: {scope}, Temporal: {temporal} (Targeting: {vector_target})")
+            vector_target = "title" if scope == "broad" else "content"
+            logger.info(f"Intent detected: {scope}, Temporal: {temporal} (Targeting: {vector_target})")
         
-        # 2. Graph Search (Relationships - Layer 10)
-        graph_context = []
-        try:
-            potential_entities = [w for w in question.split() if w[0].isupper()]
-            for ent in potential_entities:
-                cluster = await self.graph_store.async_get_context(ent)
-                related = cluster.get("relationships", [])
-                if related:
-                    graph_context.extend(related)
-        except Exception as ge:
-            logger.warning(f"Graph retrieval failed: {ge}")
+            # 2. Graph Search (Relationships - Layer 10)
+            graph_context = []
+            try:
+                potential_entities = [w for w in question.split() if w[0].isupper()]
+                for ent in potential_entities:
+                    cluster = await self.graph_store.async_get_context(ent)
+                    related = cluster.get("relationships", [])
+                    if related:
+                        graph_context.extend(related)
+                span.set_attribute("graph_context_count", len(graph_context))
+            except Exception as ge:
+                logger.warning(f"Graph retrieval failed: {ge}")
+                span.record_exception(ge)
         
-        # 3. HyDE (Hypothetical Document Embedding - Layer 12)
-        hyde_answer = await self._generate_hyde_answer(question)
-        logger.info(f"Generated HyDE context for query expansion")
+            # 3. HyDE (Hypothetical Document Embedding - Layer 12)
+            hyde_answer = await self._generate_hyde_answer(question)
+            logger.info(f"Generated HyDE context for query expansion")
         
-        # 4. Vector Search (Semantic) — use async embedder to avoid blocking
-        question_embedding = (await self.embedder.aembed([hyde_answer]))[0]
-        vector_results = await self.vector_store.async_search(
-            workspace_id=workspace_id,
-            query_vector=question_embedding,
-            top_k=top_k * 2, # Get more for fusion
-            user_id=user_id,
-            vector_name=vector_target
-        )
+            # 4. Vector Search (Semantic) — use async embedder to avoid blocking
+            with tracer.start_as_current_span("retrieval.vector_search") as vspan:
+                question_embedding = (await self.embedder.aembed([hyde_answer]))[0]
+                vector_results = await self.vector_store.async_search(
+                    workspace_id=workspace_id,
+                    query_vector=question_embedding,
+                    top_k=top_k * 2, # Get more for fusion
+                    user_id=user_id,
+                    vector_name=vector_target
+                )
+                vspan.set_attribute("vector_results_count", len(vector_results))
 
 
-        # Post-filter results for permissions at retrieval layer
-        from backend.retrieval.security import apply_security_filter
-        vector_results = apply_security_filter(vector_results, user_id, settings.is_development)
+            # Post-filter results for permissions at retrieval layer
+            from backend.retrieval.security import apply_security_filter
+            vector_results = apply_security_filter(vector_results, user_id, settings.is_development)
         
-        # 5. Keyword Search (BM25 style via Postgres)
-        keyword_results = []
-        async with async_session() as session:
-            keywords = question.split()
-            filters = [DBChunk.content.ilike(f"%{kw}%") for kw in keywords if len(kw) > 3]
-            
-            if filters:
-                stmt = select(DBChunk).where(
-                    DBChunk.workspace_id == workspace_id,
-                    or_(*filters)
-                ).limit(20)
-                res = await session.execute(stmt)
-                db_chunks = res.scalars().all()
-                
-                keyword_results = [
-                    {
-                        "chunk_id": c.id,
-                        "text": c.content,
-                        "metadata": {
-                            "title": c.document_title,
-                            "source_url": c.source_url,
-                            "content_tier": c.tier,
-                            "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
-                            "heading_path": c.heading_path or []
+            # 5. Keyword Search (BM25 style via Postgres)
+            keyword_results = []
+            async with async_session() as session:
+                keywords = question.split()
+                filters = [DBChunk.content.ilike(f"%{kw}%") for kw in keywords if len(kw) > 3]
+
+                if filters:
+                    stmt = select(DBChunk).where(
+                        DBChunk.workspace_id == workspace_id,
+                        or_(*filters)
+                    ).limit(20)
+                    res = await session.execute(stmt)
+                    db_chunks = res.scalars().all()
+
+                    keyword_results = [
+                        {
+                            "chunk_id": c.id,
+                            "text": c.content,
+                            "metadata": {
+                                "title": c.document_title,
+                                "source_url": c.source_url,
+                                "content_tier": c.tier,
+                                "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
+                                "heading_path": c.heading_path or []
+                            }
                         }
-                    }
-                    for c in db_chunks
-                ]
+                        for c in db_chunks
+                    ]
+            span.set_attribute("keyword_results_count", len(keyword_results))
 
-        # 6. Reciprocal Rank Fusion (RRF)
-        from backend.retrieval.fusion import reciprocal_rank_fusion
-        combined_results = reciprocal_rank_fusion(vector_results=vector_results, keyword_results=keyword_results)
+            # 6. Reciprocal Rank Fusion (RRF)
+            from backend.retrieval.fusion import reciprocal_rank_fusion
+            combined_results = reciprocal_rank_fusion(vector_results=vector_results, keyword_results=keyword_results)
         
-        # 7. Multi-Signal Reranking (Metadata, Tier, Recency Boosted)
-        # The Ranker will now automatically use the temporal metadata
-        multi_signal_results = self.ranker.rerank(combined_results, question, top_k=15)
+            # 7. Multi-Signal Reranking (Metadata, Tier, Recency Boosted)
+            # The Ranker will now automatically use the temporal metadata
+            multi_signal_results = self.ranker.rerank(combined_results, question, top_k=15)
         
-        # 8. Cross-Encoder Reranking (Final decision)
-        if self.reranker:
-            final_ranked = self.reranker.rerank(question, multi_signal_results, top_k=top_k)
-        else:
-            final_ranked = multi_signal_results[:top_k]
+            # 8. Cross-Encoder Reranking (Final decision)
+            if self.reranker:
+                final_ranked = self.reranker.rerank(question, multi_signal_results, top_k=top_k)
+            else:
+                final_ranked = multi_signal_results[:top_k]
+            span.set_attribute("final_results_count", len(final_ranked))
         
-        # 9. Map to RetrievalResult
-        return [
-            RetrievalResult(
-                chunk_id=res.get("chunk_id", "unknown"),
-                content=res.get("text", ""),
-                source_url=res.get("metadata", {}).get("source_url", ""),
-                title=res.get("metadata", {}).get("title", "Untitled"),
-                score=res.get("cross_encoder_score", res.get("final_rank_score", res.get("score", 0.0))),
-                metadata=res.get("metadata", {})
-            )
-            for res in final_ranked
-        ]
+            # 9. Map to RetrievalResult
+            return [
+                RetrievalResult(
+                    chunk_id=res.get("chunk_id", "unknown"),
+                    content=res.get("text", ""),
+                    source_url=res.get("metadata", {}).get("source_url", ""),
+                    title=res.get("metadata", {}).get("title", "Untitled"),
+                    score=res.get("cross_encoder_score", res.get("final_rank_score", res.get("score", 0.0))),
+                    metadata=res.get("metadata", {})
+                )
+                for res in final_ranked
+            ]

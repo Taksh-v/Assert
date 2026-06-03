@@ -117,12 +117,8 @@ class NotionConnector(BaseConnector):
                 
                 yield self._format_raw_doc(page_id, title, content, result, last_edited)
         except Exception as e:
-            logger.error(f"Notion connection failed ({e}). Falling back to Mock Data.")
-            # Mock Fallback
-            mock_id = "mock-notion-page-1"
-            title = "Mock Project Roadmap"
-            content = "<h1>Project Brain Roadmap</h1><p>Step 1: Setup Infrastructure</p><p>Step 2: Connect Data</p>"
-            yield self._format_raw_doc(mock_id, title, content, {}, datetime.utcnow())
+            logger.error(f"Notion connection failed: {e}")
+            raise ConnectionError(f"Notion sync failed: {str(e)}") from e
 
     def _format_raw_doc(self, page_id: str, title: str, content: str, raw_metadata: Dict, modified_at: datetime) -> RawDocument:
         content_hash = hashlib.sha256(content.encode()).hexdigest()

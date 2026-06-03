@@ -124,7 +124,8 @@ async def test_direct_query():
         query_module.verify_workspace_access = AsyncMock(return_value="ws-123")
         
         response = await query_knowledge_base(
-            request=request,
+            request=None,
+            query_req=request,
             db=session,
             current_user=user
         )
@@ -146,7 +147,8 @@ async def test_direct_query():
         
         # This will route to DEEP_ANALYSIS, start durable execution, and log to DB
         response = await query_knowledge_base(
-            request=request,
+            request=None,
+            query_req=request,
             db=session,
             current_user=user
         )

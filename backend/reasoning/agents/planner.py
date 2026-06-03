@@ -23,6 +23,9 @@ class PlannerAgent:
         """
         Analyze the query and generate a multi-step reasoning plan.
         """
+        if state.get("plan"):
+            logger.info("Plan already exists in state. Skipping planning.")
+            return {}
         query = state["query"]
         logger.info(f"Planning reasoning for: {query}")
 
