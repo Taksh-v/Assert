@@ -9,6 +9,9 @@ from backend.models.query_log import QueryLog
 from backend.models.workspace import Workspace
 from pydantic import BaseModel
 from datetime import datetime
+from backend.api.users import get_current_user
+from backend.models.user import User
+from backend.api.connectors import verify_workspace_access
 
 router = APIRouter(prefix="/api/conversations", tags=["Conversations"])
 logger = logging.getLogger(__name__)
@@ -63,10 +66,11 @@ class ConversationCreate(BaseModel):
 @router.get("", response_model=List[ConversationResponse])
 async def list_conversations(
     workspace_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """List all conversations for a workspace."""
-    resolved_workspace_id = await resolve_workspace_id(db, workspace_id)
+    resolved_workspace_id = await verify_workspace_access(workspace_id, db, current_user)
     stmt = select(Conversation).where(Conversation.workspace_id == resolved_workspace_id).order_by(desc(Conversation.updated_at))
     result = await db.execute(stmt)
     return result.scalars().all()
@@ -75,10 +79,11 @@ async def list_conversations(
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
     request: ConversationCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Create a new conversation thread."""
-    workspace_id = await resolve_workspace_id(db, request.workspace_id)
+    workspace_id = await verify_workspace_access(request.workspace_id, db, current_user)
     new_conv = Conversation(
         workspace_id=workspace_id,
         title=request.title
@@ -92,7 +97,8 @@ async def create_conversation(
 @router.get("/{conversation_id}", response_model=ConversationDetailResponse)
 async def get_conversation(
     conversation_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Get conversation details and messages."""
     from sqlalchemy.orm import selectinload
@@ -103,13 +109,15 @@ async def get_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
+    await verify_workspace_access(conversation.workspace_id, db, current_user)
     return conversation
 
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(
     conversation_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Delete a conversation thread."""
     stmt = select(Conversation).where(Conversation.id == conversation_id)
@@ -119,6 +127,7 @@ async def delete_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
+    await verify_workspace_access(conversation.workspace_id, db, current_user)
     await db.delete(conversation)
     await db.commit()
     return {"status": "success"}

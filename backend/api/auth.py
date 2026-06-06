@@ -11,6 +11,8 @@ from backend.api.users import get_current_user
 from backend.models.user import User
 from jose import jwt, JWTError
 from datetime import timedelta
+from backend.api.connectors import verify_workspace_access
+
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -451,8 +453,14 @@ async def slack_callback(code: str, state: str):
 
 
 @router.post("/slack/direct")
-async def slack_direct(workspace_id: str, current_user: User = Depends(get_current_user)):
+async def slack_direct(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Create or update a Slack connector from the configured bot token."""
+    await verify_workspace_access(workspace_id, db, current_user)
+
     if not settings.slack_bot_token:
         raise HTTPException(
             status_code=400,

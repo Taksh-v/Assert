@@ -7,6 +7,8 @@ from backend.core.database import get_db
 from backend.api.users import get_current_user
 from backend.models.user import User
 from backend.memory.episodic import EpisodicMemoryService
+from backend.api.connectors import verify_workspace_access
+
 
 router = APIRouter(prefix="/memory", tags=["Memory"])
 
@@ -33,6 +35,7 @@ async def create_episode(
     current_user: User = Depends(get_current_user)
 ):
     """Record a new interaction episode."""
+    await verify_workspace_access(request.workspace_id, db, current_user)
     service = EpisodicMemoryService(db)
     episode = await service.record_episode(
         workspace_id=request.workspace_id,
@@ -55,6 +58,7 @@ async def search_episodes(
     current_user: User = Depends(get_current_user)
 ):
     """Search for similar episodes in the current workspace."""
+    await verify_workspace_access(workspace_id, db, current_user)
     service = EpisodicMemoryService(db)
     results = await service.query_similar(
         workspace_id=workspace_id,

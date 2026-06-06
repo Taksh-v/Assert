@@ -191,3 +191,116 @@ async def test_get_current_user_production_unauthorized():
         assert excinfo.value.status_code == 401
         assert "Invalid or missing authentication token" in excinfo.value.detail
 
+
+def test_conversations_auth_and_bola():
+    """Verify that conversation routes enforce authentication and workspace BOLA checks."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.api.conversations import router as conv_router
+    from backend.api.users import get_current_user
+    from backend.api.connectors import verify_workspace_access
+    from backend.models.user import User
+
+    app = FastAPI()
+    app.include_router(conv_router)
+    client = TestClient(app)
+
+    # 1. Unauthenticated: get_current_user should block
+    # Override settings.is_development to False to simulate production validation
+    with patch("backend.api.users.settings") as mock_settings:
+        mock_settings.is_development = False
+        mock_settings.app_secret_key = "test-secret"
+        
+        resp = client.get("/api/conversations?workspace_id=ws123")
+        assert resp.status_code == 401
+
+    # 2. Authenticated but unauthorized (BOLA)
+    # We override get_current_user to return a dummy user, but mock verify_workspace_access to raise 403
+    async def mock_user_dep():
+        return User(id="u123", email="user@example.com")
+
+    app.dependency_overrides[get_current_user] = mock_user_dep
+
+    with patch("backend.api.conversations.verify_workspace_access") as mock_verify:
+        from fastapi import HTTPException
+        mock_verify.side_effect = HTTPException(status_code=403, detail="Workspace access forbidden")
+        
+        resp = client.get("/api/conversations?workspace_id=ws123")
+        assert resp.status_code == 403
+        assert "Workspace access forbidden" in resp.json()["detail"]
+
+
+def test_memory_and_slack_direct_bola():
+    """Verify that memory and slack direct endpoints enforce workspace BOLA checks."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.api.memory import router as memory_router
+    from backend.api.auth import router as auth_router
+    from backend.api.users import get_current_user
+    from backend.models.user import User
+
+    app = FastAPI()
+    app.include_router(memory_router)
+    app.include_router(auth_router)
+    client = TestClient(app)
+
+    async def mock_user_dep():
+        return User(id="u123", email="user@example.com")
+
+    app.dependency_overrides[get_current_user] = mock_user_dep
+
+    # Test create memory episode BOLA
+    with patch("backend.api.memory.verify_workspace_access") as mock_verify_mem:
+        from fastapi import HTTPException
+        mock_verify_mem.side_effect = HTTPException(status_code=403, detail="Workspace access forbidden")
+        
+        resp = client.post("/memory/episodes", json={
+            "workspace_id": "ws123",
+            "title": "Title",
+            "summary": "Summary",
+            "interaction": "Interaction",
+            "outcome": "Outcome"
+        })
+        assert resp.status_code == 403
+
+    # Test search memory episodes BOLA
+    with patch("backend.api.memory.verify_workspace_access") as mock_verify_mem:
+        from fastapi import HTTPException
+        mock_verify_mem.side_effect = HTTPException(status_code=403, detail="Workspace access forbidden")
+        
+        resp = client.get("/memory/episodes/search?workspace_id=ws123&query=test")
+        assert resp.status_code == 403
+
+    # Test slack direct connector BOLA
+    with patch("backend.api.auth.verify_workspace_access") as mock_verify_auth:
+        from fastapi import HTTPException
+        mock_verify_auth.side_effect = HTTPException(status_code=403, detail="Workspace access forbidden")
+        
+        resp = client.post("/auth/slack/direct?workspace_id=ws123")
+        assert resp.status_code == 403
+
+
+def test_webhooks_signature_validation():
+    """Verify that webhooks reject requests with invalid or missing signatures."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.api.webhooks import router as webhooks_router
+
+    app = FastAPI()
+    app.include_router(webhooks_router)
+    client = TestClient(app)
+
+    # 1. Notion webhook - missing signature
+    resp = client.post("/webhooks/notion", json={"event": "update"})
+    assert resp.status_code == 401
+    assert "signature" in resp.json()["detail"].lower()
+
+    # 2. Notion webhook - invalid signature
+    resp = client.post("/webhooks/notion?secret=wrong", json={"event": "update"})
+    assert resp.status_code == 401
+
+    # 3. Slack webhook - missing headers
+    resp = client.post("/webhooks/slack", json={"event": "message"})
+    assert resp.status_code == 401
+
+

@@ -265,3 +265,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Domain-Strict Truth Resolution**: Enhanced `resolve_weights` in `backend/query/truth_resolver.py` by ensuring proper scheme prepending and strict `urllib.parse` domain authority scaling, preventing document spoofing.
 - [x] **Single-Use OAuth Nonce Store**: Mapped a new `UsedNonce` database model in `backend/models/used_nonce.py` and modified `verify_oauth_state` in `backend/core/security.py` to check for and record nonces asynchronously upon verification, preventing token reuse.
 - [x] **Verification**: Added comprehensive unit tests in `backend/tests/test_cognitive_response.py` verifying both single-use nonce validation and production authorization limits. Ran the complete backend test suite, resulting in 100% pass rate.
+
+### 38. Phase 38: Webhook Validation & BOLA Access Control Hardening — [VERIFIED]
+- [x] **Conversations BOLA Protection**: Secured all GET, POST, and DELETE conversation endpoints in `backend/api/conversations.py` by enforcing authentication and workspace membership access verification.
+- [x] **Slack Direct Access Securing**: Hardened `/slack/direct` endpoint in `backend/api/auth.py` by verifying workspace membership before allowing mapping of slack bot tokens.
+- [x] **Episodic Memory Access Securing**: Secured `/memory/episodes` and `/memory/episodes/search` routes in `backend/api/memory.py` by verifying active workspace access permissions.
+- [x] **Webhook Signature Hardening**: Implemented Notion signature validation (`X-Notion-Signature` header or query parameter `secret` verification) and resolved Slack signature fallback checks in `backend/api/webhooks.py`.
+- [x] **Security Test Verification**: Added unit test coverage for webhook signature validation, conversation BOLA protection, memory BOLA protection, and slack direct BOLA. Verified that the complete test suite runs and passes cleanly.

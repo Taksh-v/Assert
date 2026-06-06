@@ -2,6 +2,7 @@ import logging
 import hashlib
 import hmac
 import time
+from typing import Optional
 from fastapi import APIRouter, Request, Header, BackgroundTasks, HTTPException
 from backend.ingestion.pipeline import IngestionPipeline
 from backend.core.config import get_settings
@@ -26,7 +27,7 @@ async def verify_slack_signature(request: Request, x_slack_signature: str, x_sla
     sig_basestring = f"v0:{x_slack_request_timestamp}:{request_body.decode('utf-8')}"
     
     # Slack signing secret should be in env
-    slack_signing_secret = getattr(settings, "slack_signing_secret", "assest_slack_secret")
+    slack_signing_secret = getattr(settings, "slack_signing_secret", None) or "assest_slack_secret"
     
     my_signature = "v0=" + hmac.new(
         slack_signing_secret.encode("utf-8"),
@@ -36,6 +37,16 @@ async def verify_slack_signature(request: Request, x_slack_signature: str, x_sla
     
     if not hmac.compare_digest(my_signature, x_slack_signature):
         raise HTTPException(status_code=401, detail="Invalid Slack signature")
+
+
+async def verify_notion_signature(request: Request, x_notion_signature: Optional[str] = None):
+    """
+    Verify that the request is coming from a trusted Notion proxy or integration.
+    """
+    notion_secret = getattr(settings, "notion_client_secret", None) or "assest_notion_secret"
+    secret = x_notion_signature or request.query_params.get("secret")
+    if not secret or secret != notion_secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing Notion webhook signature")
 
 
 from backend.core.database import async_session
@@ -91,10 +102,15 @@ async def slack_webhook(
 
 
 @router.post("/notion")
-async def notion_webhook(request: Request, background_tasks: BackgroundTasks):
+async def notion_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    x_notion_signature: Optional[str] = Header(None, alias="X-Notion-Signature")
+):
     """
     Handles real-time Notion page updates.
     """
+    await verify_notion_signature(request, x_notion_signature)
     data = await request.json()
     logger.info(f"Received Notion webhook: {data}")
     
