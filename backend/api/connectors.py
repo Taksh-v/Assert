@@ -49,6 +49,12 @@ async def verify_workspace_access(
     membership = result.scalars().first()
     
     if not membership:
+        if not settings.is_development:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied. You are not a member of this workspace."
+            )
+            
         from backend.models.workspace_member import WorkspaceRole
         membership = WorkspaceMember(
             workspace_id=workspace.id,

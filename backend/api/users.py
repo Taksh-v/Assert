@@ -55,6 +55,14 @@ async def get_current_user(
         except JWTError:
             pass
 
+    # In production, do not fall back. Force authenticated access.
+    if not settings.is_development:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Fallback to the first user in the database
     stmt = select(User).order_by(User.created_at.asc())
     result = await db.execute(stmt)

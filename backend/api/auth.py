@@ -23,10 +23,10 @@ def _create_oauth_state(workspace_id: str) -> str:
     return create_oauth_state(workspace_id)
 
 
-def _verify_oauth_state(state: str) -> str:
+async def _verify_oauth_state(state: str) -> str:
     """Verify the signed OAuth state JWT and return the workspace_id."""
     try:
-        return verify_oauth_state(state)
+        return await verify_oauth_state(state)
     except ValueError as e:
         logger.warning(f"OAuth state verification failed: {e}")
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state token")
@@ -94,33 +94,54 @@ def _oauth_success_html(source_type: str, connector_id: str) -> str:
         <title>Connected!</title>
         <style>
             body {{
-                background: #020617;
-                color: white;
-                font-family: 'Inter', system-ui, sans-serif;
+                background: #09090b;
+                color: #f8fafc;
+                font-family: system-ui, -apple-system, sans-serif;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 height: 100vh;
                 margin: 0;
+                overflow: hidden;
             }}
             .card {{
                 text-align: center;
                 padding: 3rem;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 2rem;
+                background: rgba(24, 24, 27, 0.4);
+                border: 1px solid rgba(63, 63, 70, 0.4);
+                border-radius: 1.5rem;
                 max-width: 400px;
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                backdrop-filter: blur(12px);
             }}
-            .icon {{ font-size: 3rem; margin-bottom: 1rem; }}
-            h2 {{ margin: 0 0 0.5rem; font-size: 1.5rem; }}
-            p {{ color: #94A3B8; font-size: 0.875rem; margin: 0; }}
+            .icon-wrapper {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 4rem;
+                height: 4rem;
+                margin: 0 auto 1.5rem;
+                background: #09090b;
+                border: 1px solid rgba(16, 185, 129, 0.2);
+                border-radius: 1rem;
+                color: #10b981;
+                box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
+            }}
+            h2 {{ margin: 0 0 0.5rem; font-size: 1.25rem; font-weight: 600; }}
+            p {{ color: #a1a1aa; font-size: 0.875rem; margin: 0 0 1rem; }}
+            .subtext {{ color: #71717a; font-size: 0.75rem; font-family: monospace; text-transform: uppercase; letter-spacing: 0.05em; }}
         </style>
     </head>
     <body>
         <div class="card">
-            <div class="icon">✅</div>
-            <h2>Successfully Connected!</h2>
-            <p>You can close this window. Redirecting back...</p>
+            <div class="icon-wrapper">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+            </div>
+            <h2>Connection Complete</h2>
+            <p>Successfully authorized your application.</p>
+            <div class="subtext">This window will close automatically...</div>
         </div>
         <script>
             // Send message to opener (parent) window
@@ -153,31 +174,51 @@ def _oauth_error_html(source_type: str, error: str) -> str:
         <title>Connection Failed</title>
         <style>
             body {{
-                background: #020617;
-                color: white;
-                font-family: 'Inter', system-ui, sans-serif;
+                background: #09090b;
+                color: #f8fafc;
+                font-family: system-ui, -apple-system, sans-serif;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 height: 100vh;
                 margin: 0;
+                overflow: hidden;
             }}
             .card {{
                 text-align: center;
                 padding: 3rem;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(239,68,68,0.3);
-                border-radius: 2rem;
+                background: rgba(24, 24, 27, 0.4);
+                border: 1px solid rgba(244, 63, 94, 0.2);
+                border-radius: 1.5rem;
                 max-width: 400px;
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                backdrop-filter: blur(12px);
             }}
-            .icon {{ font-size: 3rem; margin-bottom: 1rem; }}
-            h2 {{ margin: 0 0 0.5rem; font-size: 1.5rem; color: #EF4444; }}
-            p {{ color: #94A3B8; font-size: 0.875rem; margin: 0; }}
+            .icon-wrapper {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 4rem;
+                height: 4rem;
+                margin: 0 auto 1.5rem;
+                background: #09090b;
+                border: 1px solid rgba(244, 63, 94, 0.2);
+                border-radius: 1rem;
+                color: #f43f5e;
+                box-shadow: 0 0 20px rgba(244, 63, 94, 0.1);
+            }}
+            h2 {{ margin: 0 0 0.5rem; font-size: 1.25rem; font-weight: 600; color: #f43f5e; }}
+            p {{ color: #a1a1aa; font-size: 0.875rem; margin: 0; }}
         </style>
     </head>
     <body>
         <div class="card">
-            <div class="icon">❌</div>
+            <div class="icon-wrapper">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </div>
             <h2>Connection Failed</h2>
             <p>{error}</p>
         </div>
@@ -223,7 +264,7 @@ async def notion_callback(code: str, state: str, request: Request):
         return HTMLResponse(_oauth_error_html("notion", "Missing authorization code"), status_code=400)
     
     # SECURITY: Verify the signed state token to prevent CSRF
-    workspace_id = _verify_oauth_state(state)
+    workspace_id = await _verify_oauth_state(state)
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -293,7 +334,7 @@ async def google_callback(code: str, state: str):
         return HTMLResponse(_oauth_error_html("google_drive", "Missing authorization code"), status_code=400)
     
     # SECURITY: Verify the signed state token to prevent CSRF
-    workspace_id = _verify_oauth_state(state)
+    workspace_id = await _verify_oauth_state(state)
         
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -368,7 +409,7 @@ async def slack_callback(code: str, state: str):
         )
     
     # SECURITY: Verify the signed state token to prevent CSRF
-    workspace_id = _verify_oauth_state(state)
+    workspace_id = await _verify_oauth_state(state)
     
     async with httpx.AsyncClient() as client:
         response = await client.post(

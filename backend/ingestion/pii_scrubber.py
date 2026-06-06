@@ -2,8 +2,10 @@ import logging
 import json
 import uuid
 from typing import List, Dict, Any, Tuple
+from backend.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class PIIScrubber:
@@ -59,6 +61,8 @@ class PIIScrubber:
         if not text:
             return text, []
         if not self.analyzer or not self.anonymizer:
+            if not settings.is_development:
+                raise RuntimeError("PII Scrubber is uninitialized or failed to start in production. Ingestion halted.")
             return text, []
 
         try:

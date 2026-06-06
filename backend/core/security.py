@@ -65,15 +65,35 @@ def create_oauth_state(workspace_id: str) -> str:
     return create_access_token(payload, expires_delta=timedelta(minutes=10))
 
 
-def verify_oauth_state(state: str) -> str:
+async def verify_oauth_state(state: str) -> str:
     """Verify the signed OAuth state JWT and return the workspace_id.
-    Raises ValueError if the state is invalid or expired.
+    Raises ValueError if the state is invalid, expired, or replay is detected.
     """
     try:
         payload = jwt.decode(state, settings.app_secret_key, algorithms=[ALGORITHM])
         workspace_id = payload.get("workspace_id")
+        nonce = payload.get("nonce")
         if not workspace_id:
             raise ValueError("Missing workspace_id in state")
+        if not nonce:
+            raise ValueError("Missing nonce in state state token")
+
+        # Verify single-use nonce in database
+        from backend.core.database import async_session
+        from backend.models.used_nonce import UsedNonce
+        from sqlalchemy import select
+
+        async with async_session() as session:
+            stmt = select(UsedNonce).where(UsedNonce.nonce == nonce)
+            res = await session.execute(stmt)
+            if res.scalars().first():
+                raise ValueError("State token reuse detected (nonce already used)")
+
+            # Record used nonce
+            used_nonce = UsedNonce(nonce=nonce)
+            session.add(used_nonce)
+            await session.commit()
+
         return workspace_id
     except Exception as e:
         raise ValueError(f"OAuth state verification failed: {e}")
