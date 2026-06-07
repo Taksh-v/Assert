@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, Github, Chrome, Facebook } from "lucide-react";
+import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, Github, Globe, Facebook } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
@@ -130,7 +130,7 @@ export default function AuthPortal() {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-[--bg-root] overflow-hidden">
+    <div className="fixed inset-0 flex items-center justify-center bg-[#020617] overflow-hidden">
       {/* Decorative gradient blobs */}
       <div className="absolute top-[-10%] left-[-5%] h-[600px] w-[600px] rounded-full bg-indigo-600/[0.08] blur-[140px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-5%] h-[600px] w-[600px] rounded-full bg-violet-600/[0.06] blur-[140px] pointer-events-none" />
@@ -149,15 +149,15 @@ export default function AuthPortal() {
         <div className="flex flex-col items-center text-center space-y-3 mb-8">
           <div className="relative group">
             <div className="absolute inset-0 bg-indigo-500/20 rounded-2xl blur-xl group-hover:bg-indigo-500/30 transition-all duration-500" />
-            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-[--bg-surface] border border-[--border-subtle] shadow-inner">
-              <Brain className="h-8 w-8 text-[--accent]" />
+            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-[#0f172a] border border-white/10 shadow-inner">
+              <Brain className="h-8 w-8 text-indigo-400" />
             </div>
           </div>
           <div className="space-y-1">
-            <h1 className="text-4xl font-extrabold tracking-tight text-[--text-primary] bg-clip-text text-transparent bg-gradient-to-br from-white to-gray-400">
+            <h1 className="text-4xl font-extrabold tracking-tight text-white bg-clip-text text-transparent bg-gradient-to-br from-white to-gray-400">
               Assest
             </h1>
-            <p className="text-sm font-medium text-[--text-muted] uppercase tracking-widest">
+            <p className="text-sm font-medium text-gray-500 uppercase tracking-widest">
               Company Brain
             </p>
           </div>
@@ -174,8 +174,8 @@ export default function AuthPortal() {
               onClick={() => { setIsLogin(true); setError(null); setSuccess(null); }}
               className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
                 isLogin 
-                  ? "bg-[--accent] text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
-                  : "text-[--text-muted] hover:text-[--text-secondary]"
+                  ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
+                  : "text-gray-400 hover:text-gray-200"
               }`}
             >
               Sign In
@@ -184,8 +184,8 @@ export default function AuthPortal() {
               onClick={() => { setIsLogin(false); setError(null); setSuccess(null); }}
               className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
                 !isLogin 
-                  ? "bg-[--accent] text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
-                  : "text-[--text-muted] hover:text-[--text-secondary]"
+                  ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
+                  : "text-gray-400 hover:text-gray-200"
               }`}
             >
               Join
@@ -199,7 +199,7 @@ export default function AuthPortal() {
                 onClick={() => handleSocialLogin('Google')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Chrome className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <Globe className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
               </button>
               <button 
                 onClick={() => handleSocialLogin('GitHub')}
@@ -241,53 +241,53 @@ export default function AuthPortal() {
 
             {!isLogin && (
               <div className="space-y-1.5 group/field">
-                <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-[--accent] transition-colors">
+                <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
                   Identity
                 </label>
                 <div className="relative">
-                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-[--accent]/60 transition-colors" />
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
                   <input
                     type="text"
                     required
                     placeholder="Enter your name"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    className="w-full bg-white/[0.03] border border-white/5 focus:border-[--accent]/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
+                    className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
                   />
                 </div>
               </div>
             )}
 
             <div className="space-y-1.5 group/field">
-              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-[--accent] transition-colors">
+              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
                 Email
               </label>
               <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-[--accent]/60 transition-colors" />
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
                 <input
                   type="email"
                   required
                   placeholder="name@work.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 focus:border-[--accent]/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
+                  className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
                 />
               </div>
             </div>
 
             <div className="space-y-1.5 group/field">
-              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-[--accent] transition-colors">
+              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
                 Password
               </label>
               <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-[--accent]/60 transition-colors" />
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
                 <input
                   type="password"
                   required
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 focus:border-[--accent]/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
+                  className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
                 />
               </div>
             </div>
@@ -295,7 +295,7 @@ export default function AuthPortal() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full relative flex items-center justify-center gap-2 py-4 px-4 rounded-xl text-sm font-bold text-white bg-[--accent] hover:bg-[--accent-hover] overflow-hidden disabled:opacity-50 transition-all duration-500 shadow-[0_10px_30px_rgba(99,102,241,0.2)] active:scale-[0.98] group/submit mt-4"
+              className="w-full relative flex items-center justify-center gap-2 py-4 px-4 rounded-xl text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-500 overflow-hidden disabled:opacity-50 transition-all duration-500 shadow-[0_10px_30px_rgba(99,102,241,0.2)] active:scale-[0.98] group/submit mt-4"
             >
               {loading ? (
                 <>
