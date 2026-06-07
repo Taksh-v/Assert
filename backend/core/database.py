@@ -15,18 +15,27 @@ from backend.core.config import get_settings
 settings = get_settings()
 
 # ── Engine ──────────────────────────────────────────────
-# SQLite needs connect_args for async; PostgreSQL (asyncpg) does not support sslmode in connect_args
+# SQLite needs connect_args for async; PostgreSQL (asyncpg) requires special SSL handling
 _connect_args = {}
-if settings.database_url.startswith("sqlite"):
+db_url = settings.database_url
+
+if db_url.startswith("sqlite"):
     _connect_args = {
         "check_same_thread": False,
         "timeout": 60,
     }
+elif "postgresql" in db_url:
+    # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
+    # We must strip it and pass 'ssl=True' in connect_args instead.
+    if "sslmode=" in db_url:
+        import re
+        db_url = re.sub(r"[?&]sslmode=[^&]+", "", db_url)
+    _connect_args = {"ssl": True}
 
 engine = create_async_engine(
-    settings.database_url,
+    db_url,
     echo=settings.sql_echo,
-    connect_args=_connect_args if settings.database_url.startswith("sqlite") else {},
+    connect_args=_connect_args,
 )
 
 # Enable WAL mode for SQLite to prevent database lock errors
