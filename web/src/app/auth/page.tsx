@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, Github, Globe, Facebook } from "lucide-react";
+import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, Code2, Globe, Zap } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
@@ -205,13 +205,13 @@ export default function AuthPortal() {
                 onClick={() => handleSocialLogin('GitHub')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Github className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <Code2 className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
               </button>
               <button 
                 onClick={() => handleSocialLogin('Facebook')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Facebook className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <Zap className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
               </button>
             </div>
             <div className="relative flex items-center justify-center py-2">
