@@ -14,11 +14,10 @@ import {
   HeartPulse,
   Cpu,
 } from "lucide-react";
-import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser, isAuthenticated } from "@/lib/auth";
+import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import { parseUTCDate } from "@/lib/date";
 import ConnectorIcon from "@/components/ConnectorIcon";
-import AuthPortal from "@/components/AuthPortal";
 
 interface Connector {
   id: string;
@@ -82,32 +81,10 @@ export default function ChatPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
-  const [isAuthed, setIsAuthed] = useState<boolean | null>(null);
   const router = useRouter();
-
-  useEffect(() => {
-    setIsAuthed(isAuthenticated());
-  }, []);
 
   const user = getCurrentUser();
   const activeWorkspace = getActiveWorkspace();
-
-  // Guard: If not authenticated, show AuthPortal directly
-  if (isAuthed === false) {
-    return <AuthPortal />;
-  }
-
-  // Loading state while checking auth
-  if (isAuthed === null) {
-    return (
-      <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
-        <div className="animate-pulse text-indigo-500/50 text-[10px] font-bold uppercase tracking-[0.3em]">
-          Syncing Brain...
-        </div>
-      </div>
-    );
-  }
-
   const userName = user?.full_name || user?.email?.split("@")[0] || "there";
   const workspaceName = activeWorkspace?.name || "your workspace";
 

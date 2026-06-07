@@ -20,11 +20,16 @@ npx -y vercel login
 echo -e "${CYAN}Step 2: Deploying web/ directory to Vercel...${NC}"
 cd web
 
-# Set environment variables for production
+# Set environment variables for production (remove first to avoid "already exists" errors)
+echo -e "${CYAN}Step 2: Configuring environment variables...${NC}"
+npx -y vercel env rm ASSEST_API_URL production -y || true
 npx -y vercel env add ASSEST_API_URL production <<< "https://Taxyhere-assest-brain.hf.space"
+
+npx -y vercel env rm NEXT_PUBLIC_API_BASE_PATH production -y || true
 npx -y vercel env add NEXT_PUBLIC_API_BASE_PATH production <<< "/api/backend"
 
 # Deploy to production
+echo -e "${CYAN}Step 3: Deploying to Vercel...${NC}"
 npx -y vercel --prod \
   --build-env ASSEST_API_URL="https://Taxyhere-assest-brain.hf.space" \
   --build-env NEXT_PUBLIC_API_BASE_PATH="/api/backend"
