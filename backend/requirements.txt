@@ -118,5 +118,5 @@ langfuse
 dlt
 
 # Free Search & CPU Reranking
-duckduckgo-search==6.2.1
+duckduckgo-search>=6.3.0
 flashrank==0.2.8

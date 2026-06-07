@@ -103,5 +103,5 @@ beautifulsoup4==4.12.3
 pypdf==5.1.0
 
 # Free Search & CPU Reranking
-duckduckgo-search==6.2.1
+duckduckgo-search>=6.3.0
 flashrank==0.2.8
