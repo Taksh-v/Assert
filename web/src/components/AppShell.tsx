@@ -1,45 +1,29 @@
 "use client";
 
-import React, { useState, useEffect, useLayoutEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import React, { useState, useEffect } from "react";
 import Sidebar from "./Sidebar";
+import AuthPortal from "./AuthPortal";
 import { isAuthenticated, AUTH_CHANGE_EVENT } from "@/lib/auth";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean>(false);
   const [mounted, setMounted] = useState<boolean>(false);
-  const pathname = usePathname();
-  const router = useRouter();
-
-  // Use useLayoutEffect for faster redirect before first paint
-  useLayoutEffect(() => {
-    const authed = isAuthenticated();
-    setAuth(authed);
-    setMounted(true);
-
-    if (!authed && pathname !== "/auth") {
-      router.replace("/auth");
-    }
-  }, [pathname, router]);
 
   useEffect(() => {
+    setMounted(true);
+    setAuth(isAuthenticated());
+
     const handleAuthChange = () => {
-      const currentAuth = isAuthenticated();
-      setAuth(currentAuth);
-      if (!currentAuth && window.location.pathname !== "/auth") {
-        router.replace("/auth");
-      } else if (currentAuth && window.location.pathname === "/auth") {
-        router.replace("/");
-      }
+      setAuth(isAuthenticated());
     };
 
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
     return () => {
       window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
     };
-  }, [pathname, router]);
+  }, []);
 
-  // Prevent hydration mismatch: only render after mount
+  // Prevent flickering during hydration
   if (!mounted) {
     return (
       <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
@@ -50,20 +34,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Auth page rendering (no sidebar)
-  if (pathname === "/auth") {
-    return <div className="h-screen w-screen overflow-hidden">{children}</div>;
-  }
-
-  // Redirecting state
+  // If not logged in, show the login portal regardless of the current path
   if (!auth) {
-    return (
-      <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
-        <div className="animate-pulse text-indigo-500/50 text-[10px] font-bold uppercase tracking-[0.3em]">
-          Redirecting to Authorization...
-        </div>
-      </div>
-    );
+    return <AuthPortal />;
   }
 
   return (
