@@ -1,0 +1,7 @@
+"""Agent tools package (compat layer for tests).
+"""
+
+from .base import BaseTool
+from .registry import ToolRegistry
+
+__all__ = ["BaseTool", "ToolRegistry"]

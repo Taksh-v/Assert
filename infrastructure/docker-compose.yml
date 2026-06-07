@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # -------------------------------------------------------------
+  # 1. Database (PostgreSQL) for Langfuse and App Metadata
+  # -------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: assest-postgres
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 2. Vector Store (Qdrant)
+  # -------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: assest-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 3. LLM Gateway (LiteLLM)
+  # -------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: assest-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    environment:
+      # Pass your keys or let them be picked up from the host environment
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 4. Observability & Prompt Management (Langfuse)
+  # -------------------------------------------------------------
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: assest-langfuse
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@postgres:5432/langfuse
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=my_nextauth_secret_must_be_changed_in_prod
+      - SALT=my_salt_must_be_changed_in_prod
+      - TELEMETRY_ENABLED=false
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 5. UI (Open WebUI)
+  # -------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: assest-open-webui
+    ports:
+      - "8080:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    environment:
+      # Connect to our LiteLLM gateway proxy
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_KEY=not-needed-for-litellm-proxy
+      - WEBUI_SECRET_KEY=webui_secret_must_be_changed
+    depends_on:
+      - litellm
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 6. Cache & State (Redis)
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: assest-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # -------------------------------------------------------------
+  # 7. Analytical Intelligence (WrenAI - Simplified)
+  # -------------------------------------------------------------
+  wren-ai:
+    image: canner/wren-engine:latest
+    container_name: assest-wren-ai
+    environment:
+      - WREN_ENGINE_SQL_SELECTION=postgres
+    ports:
+      - "5566:5566"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  qdrant_storage:
+  open-webui:

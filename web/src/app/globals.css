@@ -1,0 +1,173 @@
+@import "tailwindcss";
+
+:root {
+  /* ─── Core Palette (Dark Kinetic Workspace System) ─── */
+  --bg-root: #09090b;
+  --bg-sidebar: #0d0d11;
+  --bg-surface: rgba(18, 18, 22, 0.65);
+  --bg-surface-hover: rgba(26, 26, 32, 0.85);
+  --bg-elevated: rgba(22, 22, 26, 0.95);
+
+  /* ─── Borders ─── */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-focus: rgba(99, 102, 241, 0.4);
+
+  /* ─── Text ─── */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-muted: rgba(255, 255, 255, 0.4);
+
+  /* ─── Accent ─── */
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-muted: rgba(99, 102, 241, 0.12);
+
+  /* ─── Semantic ─── */
+  --success: #10b981;
+  --success-muted: rgba(16, 185, 129, 0.1);
+  --warning: #f59e0b;
+  --warning-muted: rgba(245, 158, 11, 0.1);
+  --danger: #ef4444;
+  --danger-muted: rgba(239, 68, 68, 0.1);
+
+  /* ─── Shadows ─── */
+  --shadow-card: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --shadow-elevated: 0 24px 64px 0 rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 1px rgba(99, 102, 241, 0.2), 0 16px 40px rgba(99, 102, 241, 0.15);
+
+  /* ─── Tailwind compat aliases ─── */
+  --background: var(--bg-root);
+  --foreground: var(--text-primary);
+  --primary: var(--accent);
+  --border: var(--border-subtle);
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-accent: var(--accent);
+  --color-border: var(--border);
+  --radius-xl: var(--radius);
+}
+
+* {
+  border-color: var(--border-subtle);
+}
+
+body {
+  background:
+    radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.12), transparent 35%),
+    radial-gradient(circle at 85% 85%, rgba(16, 185, 129, 0.07), transparent 35%),
+    #09090b;
+  color: var(--text-primary);
+  font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+  letter-spacing: -0.015em;
+  color-scheme: dark;
+}
+
+h1, h2, h3, h4, h5, h6, .font-display {
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875rem;
+  letter-spacing: 0;
+}
+
+/* ─── Custom UI Helpers ─── */
+
+.glass-panel {
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-interactive:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-1px);
+}
+
+/* Blinking terminal caret cursor simulated block indicator */
+.console-input {
+  caret-color: var(--accent);
+}
+
+.composer-textarea, .composer-input {
+  color: var(--text-primary) !important;
+}
+
+.composer-textarea::placeholder, .composer-input::placeholder {
+  color: var(--text-muted) !important;
+}
+
+.label-caps {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
+}
+
+/* ─── Animations ─── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-top {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-ring {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes draw-path {
+  to { stroke-dashoffset: 0; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out both;
+}
+
+.animate-slide-in-top {
+  animation: slide-in-top 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-draw-path {
+  animation: draw-path 1.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* ─── Custom Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}

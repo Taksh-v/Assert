@@ -1,0 +1,40 @@
+model_list:
+  # -------------------------------------------------------------
+  # Fast Path Model (Default for routing, simple queries, and summarization)
+  # Uses local Ollama instance running llama3 (100% Free)
+  # Fallback: Groq free tier
+  # -------------------------------------------------------------
+  - model_name: company-brain-fast
+    litellm_params:
+      model: ollama/llama3
+      api_base: http://host.docker.internal:11434
+    # Fallback option if Ollama is not running:
+  - model_name: company-brain-fast
+    litellm_params:
+      model: groq/llama3-8b-8192
+      api_key: os.environ/GROQ_API_KEY
+
+  # -------------------------------------------------------------
+  # Smart Path Model (Used for deep planning, reasoning, and synthesis)
+  # Uses local Ollama instance running llama3:70b or mistral (100% Free)
+  # Fallback: Groq llama-3.3-70b (Free tier)
+  # -------------------------------------------------------------
+  - model_name: company-brain-smart
+    litellm_params:
+      model: ollama/llama3:70b
+      api_base: http://host.docker.internal:11434
+  - model_name: company-brain-smart
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+
+# LiteLLM general configurations
+litellm_settings:
+  drop_params: true # Drop parameters unsupported by target provider
+  set_verbose: true
+
+router_settings:
+  routing_strategy: latency-based-routing
+  allowed_fails: 3
+  cooldown_time: 30

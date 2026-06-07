@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Assest — System Components and Functionality</title>
+    <style>
+        body {
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+            padding: 24px;
+            color: #0f172a
+        }
+
+        h1 {
+            font-size: 20px;
+            margin-bottom: 6px
+        }
+
+        p {
+            color: #334155;
+            margin-top: 0;
+            margin-bottom: 18px
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #e2e8f0
+        }
+
+        th,
+        td {
+            padding: 10px;
+            border: 1px solid #e6eef7;
+            text-align: left;
+            vertical-align: top
+        }
+
+        th {
+            background: #f1f5f9;
+            color: #0b1220
+        }
+
+        tr:nth-child(even) {
+            background: #fbfdff
+        }
+
+        .muted {
+            color: #64748b;
+            font-size: 13px
+        }
+
+        .nowrap {
+            white-space: nowrap
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Assest — System Components & Functionality</h1>
+    <p class="muted">Generated inventory and architecture mapping for the repository. Reference: <a
+            href="../README.md">README.md</a> and <a href="../CONTEXT.md">CONTEXT.md</a>.</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Component</th>
+                <th>Functionality</th>
+                <th>Architecture role</th>
+                <th>Typical use case</th>
+                <th>Key files / locations</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Ingestion pipeline (connectors → orchestrator)</td>
+                <td>Normalize, parse, scrub PII, extract entities, chunk, persist</td>
+                <td>Data ingestion / ETL creating <em>SemanticChunk</em> artifacts and provenance</td>
+                <td>Sync Slack/Drive/Notion docs into the Company Brain for indexing/versioning</td>
+                <td>backend/ingestion/*, connectors/*, scripts/ingest_mock.py</td>
+            </tr>
+
+            <tr>
+                <td>Storage: Metadata DB (Postgres)</td>
+                <td>Persist documents, metadata, provenance, ACLs, versioning</td>
+                <td>Primary relational store and truth layer for provenance + ACL checks</td>
+                <td>Query document history and maintain tenant isolation</td>
+                <td>backend/core/database.py, Postgres configs</td>
+            </tr>
+
+            <tr>
+                <td>Vector store (Qdrant)</td>
+                <td>Store embedding vectors for dense retrieval</td>
+                <td>Dense retrieval layer for semantic nearest-neighbour lookup</td>
+                <td>Semantic search for relevant chunks and RRF fusion</td>
+                <td>data/qdrant/, backend/core/vector_store.py</td>
+            </tr>
+
+            <tr>
+                <td>Knowledge graph (Memgraph)</td>
+                <td>Store entities and relationships for multi-hop reasoning</td>
+                <td>Graph reasoning and relationship traversal</td>
+                <td>Entity-centric exploration, relationship queries, temporal traces</td>
+                <td>backend/graph/*, infrastructure configs</td>
+            </tr>
+
+            <tr>
+                <td>Retrieval stack</td>
+                <td>Multi-index fetch, rerank, caching, adaptive routing</td>
+                <td>Query orchestration combining dense + sparse + cached results</td>
+                <td>Answer user queries with high-precision, low-latency results</td>
+                <td>backend/query/retriever.py, reranker.py, adaptive_router.py, semantic_cache.py</td>
+            </tr>
+
+            <tr>
+                <td>Generation / LLM client</td>
+                <td>Prompting models, streaming responses, generation safety</td>
+                <td>Model interface layer for Gemini/Claude/Groq and streaming</td>
+                <td>Produce natural-language answers and streaming chat</td>
+                <td>backend/generation/llm_client.py, stream_generator.py</td>
+            </tr>
+
+            <tr>
+                <td>API & App server (FastAPI)</td>
+                <td>Expose endpoints for chat, connectors, workspaces, auth</td>
+                <td>Backend surface for frontend, bots, and external integrations</td>
+                <td>Serve UI, accept queries, start ingestion runs</td>
+                <td>backend/main.py, backend/api/*.py</td>
+            </tr>
+
+            <tr>
+                <td>Workers & Orchestration</td>
+                <td>Run ingestion jobs, syncs, background tasks, retries</td>
+                <td>Asynchronous job execution and orchestration for scale</td>
+                <td>Periodic connector syncs and heavy enrichment tasks</td>
+                <td>backend/workers/scheduler.py, task_queue.py, handlers.py</td>
+            </tr>
+
+            <tr>
+                <td>Frontend (Next.js + Tailwind)</td>
+                <td>Web UI: chat, connectors, system panels, auth</td>
+                <td>Client-side app for users to query and manage the Company Brain</td>
+                <td>Agent UI, connector setup, conversation sessions</td>
+                <td>web/src/ (components, pages like chat/[id])</td>
+            </tr>
+
+            <tr>
+                <td>Agents / Orchestration tasks</td>
+                <td>Multi-agent flows, task definitions, hooks for automation</td>
+                <td>Local task definitions and higher-level automated behaviors</td>
+                <td>Run automated tasks, task switching, watcher hooks</td>
+                <td>AI_SYSTEM_v2/TASKS/*, AI_SYSTEM_v2/AI_SYSTEM/hooks/*, agents/</td>
+            </tr>
+
+            <tr>
+                <td>Connectors</td>
+                <td>Fetch documents, maintain sync state, DLQ routing</td>
+                <td>Source adapters that feed ingestion runs and handle auth</td>
+                <td>Periodic sync of external sources (Drive, Notion, Slack)</td>
+                <td>connectors/google_drive.py, connectors/notion.py, backend/bot/slack.py</td>
+            </tr>
+
+            <tr>
+                <td>Security & ACLs</td>
+                <td>Pre-retrieval gating, authorization, PII scrubbing</td>
+                <td>Enforcement layer ensuring multi-tenant safety</td>
+                <td>Restrict results per workspace/user and scrub sensitive fields</td>
+                <td>backend/core/security.py, backend/api/auth.py</td>
+            </tr>
+
+            <tr>
+                <td>Observability & Metrics</td>
+                <td>Logging, metrics, tracing hooks</td>
+                <td>System health, performance, and model usage visibility</td>
+                <td>Alerting, RPS/latency dashboards, model token accounting</td>
+                <td>backend/core/metrics.py, observability/, grafana/</td>
+            </tr>
+
+            <tr>
+                <td>Integration / Infra</td>
+                <td>Local dev infra, model config, Qdrant/Memgraph orchestration</td>
+                <td>Deployment and dev orchestration for required services</td>
+                <td>Bring up Qdrant, Memgraph, DB, and litellm for local runs</td>
+                <td>infrastructure/docker-compose.yml, infrastructure/litellm-config.yaml</td>
+            </tr>
+
+            <tr>
+                <td>Scripts, seeds, tests</td>
+                <td>Utilities for schema repair, seeding, tests, and verification</td>
+                <td>Developer utilities and CI checks</td>
+                <td>Populate sample data, run e2e/unit tests, run verifications</td>
+                <td>scripts/*, seed_data.py, tests/</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p class="muted">Generated on: 2026-05-31</p>
+</body>
+
+</html>

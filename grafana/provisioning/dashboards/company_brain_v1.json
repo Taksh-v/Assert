@@ -1,0 +1,63 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Retrieval Latency (ms)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "rate(ingestion_latency_seconds_sum[5m]) / rate(ingestion_latency_seconds_count[5m]) * 1000" }
+      ]
+    },
+    {
+      "title": "LLM Token Usage",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(llm_token_count_total[5m])) by (model)" }
+      ]
+    },
+    {
+      "title": "Task Success Rate",
+      "type": "gauge",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(agent_tasks_total{status='success'}[5m])) / sum(rate(agent_tasks_total[5m]))" }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["assest", "ai-system"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Assest — Company Brain Performance",
+  "uid": "assest-brain-01",
+  "version": 1,
+  "weekStart": ""
+}
