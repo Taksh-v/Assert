@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useLayoutEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "./Sidebar";
 import { isAuthenticated, AUTH_CHANGE_EVENT } from "@/lib/auth";
@@ -11,27 +11,25 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  useEffect(() => {
-    setMounted(true);
+  // Use useLayoutEffect for faster redirect before first paint
+  useLayoutEffect(() => {
     const authed = isAuthenticated();
     setAuth(authed);
+    setMounted(true);
 
-    // If not authenticated and not already on the auth page, redirect to auth
     if (!authed && pathname !== "/auth") {
-      router.push("/auth");
+      router.replace("/auth");
     }
-    // If authenticated and on the auth page, redirect to home
-    else if (authed && pathname === "/auth") {
-      router.push("/");
-    }
+  }, [pathname, router]);
 
+  useEffect(() => {
     const handleAuthChange = () => {
       const currentAuth = isAuthenticated();
       setAuth(currentAuth);
-      if (!currentAuth) {
-        router.push("/auth");
-      } else if (pathname === "/auth") {
-        router.push("/");
+      if (!currentAuth && window.location.pathname !== "/auth") {
+        router.replace("/auth");
+      } else if (currentAuth && window.location.pathname === "/auth") {
+        router.replace("/");
       }
     };
 
@@ -41,13 +39,31 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [pathname, router]);
 
+  // Prevent hydration mismatch: only render after mount
   if (!mounted) {
-    return <div className="h-screen w-screen bg-[var(--bg-root)]" />;
+    return (
+      <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
+        <div className="animate-pulse text-indigo-500/50 text-[10px] font-bold uppercase tracking-[0.3em]">
+          Assest Brain Syncing...
+        </div>
+      </div>
+    );
   }
 
-  // If we are on the auth page, just render the children (which will be our AuthPortal page)
+  // Auth page rendering (no sidebar)
   if (pathname === "/auth") {
-    return <div className="h-screen w-screen overflow-auto">{children}</div>;
+    return <div className="h-screen w-screen overflow-hidden">{children}</div>;
+  }
+
+  // Redirecting state
+  if (!auth) {
+    return (
+      <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
+        <div className="animate-pulse text-indigo-500/50 text-[10px] font-bold uppercase tracking-[0.3em]">
+          Redirecting to Authorization...
+        </div>
+      </div>
+    );
   }
 
   return (
