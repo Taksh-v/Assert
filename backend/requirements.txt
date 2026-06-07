@@ -101,12 +101,7 @@ google-api-python-client==2.122.0
 google-auth-oauthlib==1.2.0
 
 # LangGraph for multi-agent orchestration (Layer 16)
-langgraph>=0.2.0
-langchain>=0.3.0
-langchain-anthropic>=0.3.0
-langchain-groq>=0.2.0
-
-# Unused langflow dependency removed to resolve conflict with duckduckgo-search and google-api-python-client
+langgraph==0.2.26
 
 # Open Policy Agent for security policies (Layer 18)
 opa-python-client>=1.0.0
@@ -116,8 +111,6 @@ click>=8.1.7
 aiohttp>=3.10,<4.0
 
 # Layer 16 Orchestration & Observability
-langgraph
-langchain-core
 litellm
 langfuse
 
