@@ -95,10 +95,12 @@ PyGithub==2.1.1
 slack-bolt==1.20.0
 slack-sdk==3.31.0
 
-# Connectors
+# Connectors & lightweight parsing
 notion-client==2.2.1
 google-api-python-client==2.122.0
 google-auth-oauthlib==1.2.0
+beautifulsoup4==4.12.3
+pypdf==5.1.0
 
 # LangGraph for multi-agent orchestration (Layer 16)
 langgraph==0.2.26
