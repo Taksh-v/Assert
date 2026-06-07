@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 2. Install Python dependencies (cached layer)
 COPY backend/requirements.txt /app/requirements.txt
 COPY requirements.txt /app/requirements-root.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt || true
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 3. Download SpaCy English model for Presidio PII Scrubbing
 RUN python -m spacy download en_core_web_sm || true

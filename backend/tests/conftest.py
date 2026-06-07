@@ -17,6 +17,18 @@ except Exception:
     _REAL_CHAT_COMPLETION = None
 
 
+_MOCK_CHAT_COMPLETION = None
+
+
+def pytest_collection_finish(session):
+    global _MOCK_CHAT_COMPLETION
+    try:
+        from backend.core.llm_impl import SharedLLMClient
+        _MOCK_CHAT_COMPLETION = SharedLLMClient.chat_completion
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _restore_shared_llm_client(request):
     """Restore SharedLLMClient.chat_completion before each test.
@@ -25,6 +37,8 @@ def _restore_shared_llm_client(request):
     AsyncMock(side_effect=Exception("Mock offline error")).
     """
     if "test_supervisor_routing" in request.node.nodeid:
+        if _MOCK_CHAT_COMPLETION is not None:
+            _SharedLLMClient.chat_completion = _MOCK_CHAT_COMPLETION
         yield
         return
 
