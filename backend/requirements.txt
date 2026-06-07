@@ -106,8 +106,7 @@ langchain>=0.3.0
 langchain-anthropic>=0.3.0
 langchain-groq>=0.2.0
 
-# Langflow integration (for visualization)
-langflow>=0.7.0
+# Unused langflow dependency removed to resolve conflict with duckduckgo-search and google-api-python-client
 
 # Open Policy Agent for security policies (Layer 18)
 opa-python-client>=1.0.0
