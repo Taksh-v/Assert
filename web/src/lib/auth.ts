@@ -17,7 +17,7 @@ export function isAdminWorkspaceRole(role?: string | null): boolean {
 
 import { getBrowserApiBasePath } from "./config";
 
-const TOKEN_KEY = "assest_auth_token";
+const TOKEN_KEY = "assest_identity_v1";
 const USER_KEY = "assest_auth_user";
 const WORKSPACE_KEY = "assest_auth_workspace";
 

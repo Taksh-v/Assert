@@ -76,6 +76,19 @@ function getGreeting(name: string) {
 }
 
 export default function ChatPage() {
+  const [isAuthed, setIsAuthed] = useState<boolean | null>(null);
+  
+  useEffect(() => {
+    // Immediate check on mount
+    setIsAuthed(isAuthenticated());
+  }, []);
+
+  // If we know for sure they aren't authed, show the login portal immediately
+  if (isAuthed === false) {
+    return <AuthPortal />;
+  }
+
+  // Rest of your component...
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [connectors, setConnectors] = useState<Connector[]>([]);
