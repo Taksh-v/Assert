@@ -82,6 +82,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """Create all tables. Called on app startup."""
     async with engine.begin() as conn:
+        # Note: Explicit Enum names in models prevent "Type already exists" errors in PostgreSQL
         await conn.run_sync(Base.metadata.create_all)
         if settings.database_url.startswith("sqlite"):
             from backend.core.migrations import ensure_sqlite_dev_columns, ensure_sqlite_dev_indexes

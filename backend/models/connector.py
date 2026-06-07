@@ -30,9 +30,9 @@ class Connector(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
-    type = Column(Enum(ConnectorType), nullable=False)
+    type = Column(Enum(ConnectorType, name="connectortype"), nullable=False)
     config = Column(JSON, nullable=False)  # Encrypted configuration
-    status = Column(Enum(ConnectorStatus), default=ConnectorStatus.ACTIVE)
+    status = Column(Enum(ConnectorStatus, name="connectorstatus"), default=ConnectorStatus.ACTIVE)
     last_synced_at = Column(DateTime, nullable=True)
     last_sync_cursor = Column(String, nullable=True)
     error_log = Column(JSON, default={})

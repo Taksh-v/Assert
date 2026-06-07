@@ -28,7 +28,7 @@ class QueryLog(Base):
     # Correlate query logs with streaming request IDs for observability
     request_id = Column(String, nullable=True)
     
-    feedback = Column(Enum(FeedbackType), default=FeedbackType.NULL)
+    feedback = Column(Enum(FeedbackType, name="feedbacktype"), default=FeedbackType.NULL)
     response_time_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 

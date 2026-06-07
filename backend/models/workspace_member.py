@@ -22,7 +22,7 @@ class WorkspaceMember(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
-    role = Column(Enum(WorkspaceRole), default=WorkspaceRole.MEMBER)
+    role = Column(Enum(WorkspaceRole, name="workspacerole"), default=WorkspaceRole.MEMBER)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
