@@ -136,11 +136,22 @@ class Settings(BaseSettings):
     notion_client_secret: Optional[str] = Field(default=None)
     notion_redirect_uri: str = Field(default="http://localhost:8000/api/auth/notion/callback")
 
-    # ── Google Drive OAuth ───────────────────────────────
+    # ── Google Drive OAuth (Connector) ───────────────────
     google_client_id: Optional[str] = Field(default=None)
     google_client_secret: Optional[str] = Field(default=None)
     google_redirect_uri: str = Field(default="http://localhost:8000/api/auth/google/callback")
+    google_identity_redirect_uri: str = Field(default="http://localhost:8000/api/auth/identity/google/callback")
     google_scopes: str = Field(default="https://www.googleapis.com/auth/drive.readonly")
+
+    # ── GitHub OAuth (Identity) ──────────────────────────
+    github_client_id: Optional[str] = Field(default=None)
+    github_client_secret: Optional[str] = Field(default=None)
+    github_redirect_uri: str = Field(default="http://localhost:8000/api/auth/identity/github/callback")
+
+    # ── Facebook OAuth (Identity) ────────────────────────
+    facebook_client_id: Optional[str] = Field(default=None)
+    facebook_client_secret: Optional[str] = Field(default=None)
+    facebook_redirect_uri: str = Field(default="http://localhost:8000/api/auth/identity/facebook/callback")
 
     # ── Slack OAuth ──────────────────────────────────────
     slack_client_id: Optional[str] = Field(default=None)

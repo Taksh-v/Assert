@@ -147,7 +147,70 @@ export default function AuthPortal() {
   };
 
   const handleSocialLogin = (provider: string) => {
-    setError(`Login with ${provider} will be available once OAuth is configured in your dashboard.`);
+    const providerLower = provider.toLowerCase();
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const authUrl = `${apiUrl}/api/auth/identity/${providerLower}/login`;
+    
+    // Open OAuth in a popup
+    const width = 600;
+    const height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    
+    const popup = window.open(
+      authUrl,
+      `Login with ${provider}`,
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+
+    if (!popup) {
+      setError("Popup blocked. Please allow popups to continue.");
+      return;
+    }
+
+    // Listen for the success message from the popup
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'oauth-identity-success') {
+        const token = event.data.token;
+        setAuthToken(token);
+        
+        setLoading(true);
+        try {
+          const userRes = await apiFetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (!userRes.ok) throw new Error("Failed to fetch user profile.");
+          const userData = await userRes.json();
+          
+          setCurrentUser({
+            id: userData.id,
+            email: userData.email,
+            full_name: userData.full_name,
+          });
+
+          const workspaceRes = await apiFetch("/api/workspaces", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (workspaceRes.ok) {
+            const workspaces = await workspaceRes.json() as WorkspaceInfo[];
+            if (workspaces && workspaces.length > 0) {
+              setActiveWorkspace(workspaces[0]);
+            }
+          }
+          
+          setSuccess(`Logged in with ${provider}! Redirecting...`);
+          window.removeEventListener('message', handleMessage);
+        } catch (err) {
+          setError("OAuth login succeeded but profile setup failed.");
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
   };
 
   return (
