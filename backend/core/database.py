@@ -15,7 +15,7 @@ from backend.core.config import get_settings
 settings = get_settings()
 
 # ── Engine ──────────────────────────────────────────────
-# SQLite needs connect_args for async; PostgreSQL does not
+# SQLite needs connect_args for async; PostgreSQL (asyncpg) does not support sslmode in connect_args
 _connect_args = {}
 if settings.database_url.startswith("sqlite"):
     _connect_args = {
@@ -26,7 +26,7 @@ if settings.database_url.startswith("sqlite"):
 engine = create_async_engine(
     settings.database_url,
     echo=settings.sql_echo,
-    connect_args=_connect_args,
+    connect_args=_connect_args if settings.database_url.startswith("sqlite") else {},
 )
 
 # Enable WAL mode for SQLite to prevent database lock errors
