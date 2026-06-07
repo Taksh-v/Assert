@@ -80,8 +80,8 @@ export function signOut() {
 }
 
 export function isAuthenticated(): boolean {
-  // PHASE 9: Unconditional bypass for login-free workspace experience
-  return true;
+  if (typeof window === "undefined") return false;
+  return !!localStorage.getItem(TOKEN_KEY);
 }
 
 /**
