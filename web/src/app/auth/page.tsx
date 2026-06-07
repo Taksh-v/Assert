@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, Code2, Globe, Zap } from "lucide-react";
+import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
@@ -199,19 +199,19 @@ export default function AuthPortal() {
                 onClick={() => handleSocialLogin('Google')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Globe className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <span className="text-[10px] font-bold text-gray-400 group-hover/btn:text-white transition-colors">GOOGLE</span>
               </button>
               <button 
                 onClick={() => handleSocialLogin('GitHub')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Code2 className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <span className="text-[10px] font-bold text-gray-400 group-hover/btn:text-white transition-colors">GITHUB</span>
               </button>
               <button 
                 onClick={() => handleSocialLogin('Facebook')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
-                <Zap className="h-5 w-5 text-gray-400 group-hover/btn:text-white transition-colors" />
+                <span className="text-[10px] font-bold text-gray-400 group-hover/btn:text-white transition-colors">FACEBOOK</span>
               </button>
             </div>
             <div className="relative flex items-center justify-center py-2">
