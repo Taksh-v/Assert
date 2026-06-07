@@ -68,4 +68,5 @@ htmlcov/
 
 AI_SYSTEM_v2/
 
-*.md
+# Local data stores (production uses cloud Qdrant + Neon Postgres)
+data/
