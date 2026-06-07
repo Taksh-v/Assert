@@ -75,8 +75,9 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if settings.database_url.startswith("sqlite"):
-            from backend.core.migrations import ensure_sqlite_dev_columns
+            from backend.core.migrations import ensure_sqlite_dev_columns, ensure_sqlite_dev_indexes
             await ensure_sqlite_dev_columns(conn)
+            await ensure_sqlite_dev_indexes(conn)
 
 
 async def close_db():

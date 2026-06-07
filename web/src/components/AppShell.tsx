@@ -26,7 +26,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (!mounted) {
-    return <div className="h-screen w-screen bg-background" />;
+    return <div className="h-screen w-screen bg-[var(--bg-root)]" />;
   }
 
   if (!auth) {
@@ -34,9 +34,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground animate-fade-in">
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-root)] text-[var(--text-primary)] animate-fade-in">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto overflow-x-hidden relative">
+      <main className="flex-1 overflow-hidden h-full relative flex flex-col">
         {children}
       </main>
     </div>

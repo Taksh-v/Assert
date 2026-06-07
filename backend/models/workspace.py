@@ -23,6 +23,7 @@ class Workspace(Base):
     documents = relationship("Document", back_populates="workspace", cascade="all, delete-orphan")
     query_logs = relationship("QueryLog", back_populates="workspace", cascade="all, delete-orphan")
     conversations = relationship("Conversation", back_populates="workspace", cascade="all, delete-orphan")
+    audit_logs = relationship("AuditLedger", back_populates="workspace", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Workspace(name='{self.name}', slug='{self.slug}')>"

@@ -96,17 +96,17 @@ class SharedLLMClient:
         # ensure callbacks are cleared to avoid litellm/langfuse oddities
         litellm.success_callback = []
         litellm.failure_callback = []
+        # Reset global api_base to prevent cross-provider pollution
+        litellm.api_base = None
 
         self.model_type = model_type
         self.provider = self._detect_provider()
 
-        # Configure api base based on provider/config
-        if self.provider == "openrouter":
-            litellm.api_base = settings.openrouter_api_base
-            if settings.openrouter_site_url:
-                os.environ["HTTP_REFERER"] = settings.openrouter_site_url
-        elif settings.litellm_proxy_url:
-            litellm.api_base = settings.litellm_proxy_url
+
+        # Configure site url referer for OpenRouter
+        if self.provider == "openrouter" and settings.openrouter_site_url:
+            os.environ["HTTP_REFERER"] = settings.openrouter_site_url
+
 
         # choose model name
         if model_type == "smart":
@@ -181,7 +181,19 @@ class SharedLLMClient:
 
         return resolved_model
 
-    async def chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:
+    def _default_max_tokens(self) -> int:
+        if self.model_type == "smart":
+            return int(getattr(settings, "llm_default_max_output_tokens_smart", 384))
+        return int(getattr(settings, "llm_default_max_output_tokens_fast", 192))
+
+    async def chat_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+        prompt_cache_key: Optional[str] = None,
+    ) -> str:
         """Async chat completion using litellm's async API where available."""
         call_id = str(uuid.uuid4())
         logger.info("LLM call start: call_id=%s provider=%s model=%s", call_id, self.provider, self.model)
@@ -203,20 +215,41 @@ class SharedLLMClient:
         else:
             models_to_try = [primary]
 
-        api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
+        # Fallback to Groq if groq_api_key and groq_model are configured
+        if getattr(settings, "groq_api_key", None) and getattr(settings, "groq_model", None):
+            groq_m = settings.groq_model
+            if not groq_m.startswith("groq/"):
+                groq_m = f"groq/{groq_m}"
+            if groq_m not in models_to_try:
+                models_to_try.append(groq_m)
+
         attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
         base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
+        max_tokens = max_tokens or self._default_max_tokens()
+
+        last_exception = None
 
         for model in models_to_try:
             for attempt in range(attempts_per_model):
                 try:
                     extra_kwargs: Dict[str, Any] = {}
-                    if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
-                        extra_kwargs["api_key"] = settings.openrouter_api_key
-                    elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
-                        extra_kwargs["api_key"] = settings.groq_api_key
-                    elif self.provider == "proxy":
-                        extra_kwargs["api_key"] = "sk-local-brain"
+                    current_api_base = None
+                    if model.startswith("openrouter/"):
+                        if getattr(settings, "openrouter_api_key", None):
+                            extra_kwargs["api_key"] = settings.openrouter_api_key
+                        current_api_base = settings.openrouter_api_base
+                    elif model.startswith("groq/"):
+                        if getattr(settings, "groq_api_key", None):
+                            extra_kwargs["api_key"] = settings.groq_api_key
+                    else:
+                        if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
+                            extra_kwargs["api_key"] = settings.openrouter_api_key
+                            current_api_base = settings.openrouter_api_base
+                        elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
+                            extra_kwargs["api_key"] = settings.groq_api_key
+                        elif self.provider == "proxy":
+                            extra_kwargs["api_key"] = "sk-local-brain"
+                            current_api_base = getattr(settings, "litellm_proxy_url", None)
 
                     logger.info("Attempting LLM call provider=%s model=%s attempt=%s call_id=%s", self.provider, model, attempt, call_id)
                     # start langfuse run (best-effort)
@@ -232,7 +265,10 @@ class SharedLLMClient:
                             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                             model=model,
                             temperature=temperature,
-                            api_base=api_base,
+                            max_tokens=max_tokens,
+                            api_base=current_api_base,
+                            prompt_cache_key=prompt_cache_key,
+                            timeout=float(getattr(settings, "llm_request_timeout", 5.0)),
                             **extra_kwargs,
                         )
                         duration = time.time() - start
@@ -250,8 +286,12 @@ class SharedLLMClient:
                         end_run(lf_run, status="ok")
                     except Exception:
                         pass
-                    return response.choices[0].message.content
+                    val = response.choices[0].message.content
+                    if not val or not val.strip():
+                        raise ValueError("Empty or null response content returned from LLM")
+                    return val
                 except Exception as e:
+                    last_exception = e
                     err_str = str(e)
                     duration = time.time() - start if 'start' in locals() else 0.0
                     try:
@@ -277,9 +317,18 @@ class SharedLLMClient:
 
         # All attempts failed
         logger.error("LLM all attempts failed call_id=%s provider=%s models=%s", call_id, self.provider, models_to_try)
-        return ""
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("All LLM completion attempts failed.")
 
-    async def chat_completion_stream(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> AsyncGenerator[str, None]:
+    async def chat_completion_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.1,
+        max_tokens: Optional[int] = None,
+        prompt_cache_key: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
         """Async chat completion streaming using litellm's stream=True API."""
         call_id = str(uuid.uuid4())
         logger.info("LLM stream start: call_id=%s provider=%s model=%s", call_id, self.provider, self.model)
@@ -298,20 +347,41 @@ class SharedLLMClient:
         else:
             models_to_try = [primary]
 
-        api_base = settings.openrouter_api_base if self.provider == "openrouter" else getattr(settings, "litellm_proxy_url", None)
+        # Fallback to Groq if groq_api_key and groq_model are configured
+        if getattr(settings, "groq_api_key", None) and getattr(settings, "groq_model", None):
+            groq_m = settings.groq_model
+            if not groq_m.startswith("groq/"):
+                groq_m = f"groq/{groq_m}"
+            if groq_m not in models_to_try:
+                models_to_try.append(groq_m)
+
         attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
         base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
+        max_tokens = max_tokens or self._default_max_tokens()
+
+        last_exception = None
 
         for model in models_to_try:
             for attempt in range(attempts_per_model):
                 try:
                     extra_kwargs: Dict[str, Any] = {}
-                    if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
-                        extra_kwargs["api_key"] = settings.openrouter_api_key
-                    elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
-                        extra_kwargs["api_key"] = settings.groq_api_key
-                    elif self.provider == "proxy":
-                        extra_kwargs["api_key"] = "sk-local-brain"
+                    current_api_base = None
+                    if model.startswith("openrouter/"):
+                        if getattr(settings, "openrouter_api_key", None):
+                            extra_kwargs["api_key"] = settings.openrouter_api_key
+                        current_api_base = settings.openrouter_api_base
+                    elif model.startswith("groq/"):
+                        if getattr(settings, "groq_api_key", None):
+                            extra_kwargs["api_key"] = settings.groq_api_key
+                    else:
+                        if self.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
+                            extra_kwargs["api_key"] = settings.openrouter_api_key
+                            current_api_base = settings.openrouter_api_base
+                        elif self.provider == "groq" and getattr(settings, "groq_api_key", None):
+                            extra_kwargs["api_key"] = settings.groq_api_key
+                        elif self.provider == "proxy":
+                            extra_kwargs["api_key"] = "sk-local-brain"
+                            current_api_base = getattr(settings, "litellm_proxy_url", None)
 
                     logger.info("Attempting LLM stream provider=%s model=%s attempt=%s call_id=%s", self.provider, model, attempt, call_id)
                     lf_run = start_run(request_id=call_id, metadata={"provider": self.provider, "model": model})
@@ -328,14 +398,21 @@ class SharedLLMClient:
                             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                             model=model,
                             temperature=temperature,
-                            api_base=api_base,
+                            max_tokens=max_tokens,
+                            api_base=current_api_base,
                             stream=True,
+                            prompt_cache_key=prompt_cache_key,
+                            timeout=float(getattr(settings, "llm_request_timeout", 5.0)),
                             **extra_kwargs,
                         )
                         
+                        yielded_any = False
                         async for chunk in response:
                             if chunk.choices and chunk.choices[0].delta.content:
+                                yielded_any = True
                                 yield chunk.choices[0].delta.content
+                        if not yielded_any:
+                            raise ValueError("Stream ended without yielding any content tokens")
                                 
                         duration = time.time() - start
                         span.set_attribute("duration_ms", duration * 1000.0)
@@ -354,6 +431,7 @@ class SharedLLMClient:
                         pass
                     return  # Success, exit the retry loops
                 except Exception as e:
+                    last_exception = e
                     err_str = str(e)
                     duration = time.time() - start if 'start' in locals() else 0.0
                     try:
@@ -376,6 +454,9 @@ class SharedLLMClient:
                     await asyncio.sleep(backoff)
 
         logger.error("LLM all stream attempts failed call_id=%s provider=%s models=%s", call_id, self.provider, models_to_try)
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("All LLM stream attempts failed.")
 
     @property
     def chat(self):
@@ -390,11 +471,9 @@ class SharedLLMClient:
                 def create(self, *args, **kwargs):
                     # Map to litellm.completion synchronously where possible
                     model = self.outer._resolve_model_for_provider(kwargs.pop("model", self.outer.model))
-                    # ensure api_base set for sync path
-                    if self.outer.provider == "openrouter":
-                        litellm.api_base = settings.openrouter_api_base
-                    elif self.outer.provider == "proxy" and settings.litellm_proxy_url:
-                        litellm.api_base = settings.litellm_proxy_url
+                    kwargs.setdefault("max_tokens", self.outer._default_max_tokens())
+                    # sync path uses explicit api_base parameter to avoid global pollution
+                    pass
 
                     extra_kwargs = dict(kwargs)
                     if self.outer.provider == "openrouter" and getattr(settings, "openrouter_api_key", None):
@@ -411,18 +490,50 @@ class SharedLLMClient:
                         if settings.openrouter_fast_model not in models_to_try:
                             models_to_try.append(settings.openrouter_fast_model)
 
+                    # Add groq model as fallback if groq key is configured
+                    if getattr(settings, "groq_api_key", None) and getattr(settings, "groq_model", None):
+                        groq_m = settings.groq_model
+                        if not groq_m.startswith("groq/"):
+                            groq_m = f"groq/{groq_m}"
+                        if groq_m not in models_to_try:
+                            models_to_try.append(groq_m)
+
                     attempts_per_model = max(1, getattr(settings, "openrouter_retry_attempts", 1))
                     base_backoff = float(getattr(settings, "openrouter_retry_backoff_base", 0.5))
 
-                    last_exception = RuntimeError("All LLM completion attempts failed.")
+                    last_exception = None
                     for m in models_to_try:
                         for attempt in range(attempts_per_model):
                             try:
-                                if self.outer.provider == "openrouter":
+                                extra_kwargs = dict(kwargs)
+                                current_api_base = None
+                                if m.startswith("openrouter/"):
                                     extra_kwargs["api_key"] = settings.openrouter_api_key if getattr(settings, "openrouter_api_key", None) else None
-                                    litellm.api_base = settings.openrouter_api_base
+                                    current_api_base = settings.openrouter_api_base
+                                elif m.startswith("groq/"):
+                                    extra_kwargs["api_key"] = settings.groq_api_key if getattr(settings, "groq_api_key", None) else None
+                                else:
+                                    if self.outer.provider == "openrouter":
+                                        extra_kwargs["api_key"] = settings.openrouter_api_key if getattr(settings, "openrouter_api_key", None) else None
+                                        current_api_base = settings.openrouter_api_base
+                                    elif self.outer.provider == "groq":
+                                        extra_kwargs["api_key"] = settings.groq_api_key if getattr(settings, "groq_api_key", None) else None
+                                    elif self.outer.provider == "proxy" and settings.litellm_proxy_url:
+                                        extra_kwargs["api_key"] = "sk-local-brain"
+                                        current_api_base = settings.litellm_proxy_url
+
                                 logger.info("Sync LLM attempt provider=%s model=%s attempt=%s", self.outer.provider, m, attempt)
-                                return litellm.completion(model=m, *args, **extra_kwargs)
+                                res = litellm.completion(
+                                    model=m, 
+                                    api_base=current_api_base, 
+                                    timeout=float(getattr(settings, "llm_request_timeout", 5.0)),
+                                    *args, 
+                                    **extra_kwargs
+                                )
+                                val = res.choices[0].message.content
+                                if not val or not val.strip():
+                                    raise ValueError("Empty or null response content returned from LLM")
+                                return res
                             except Exception as e:
                                 logger.warning("Sync LLM attempt failed for model=%s attempt=%s: %s", m, attempt, e)
                                 last_exception = e
@@ -431,7 +542,9 @@ class SharedLLMClient:
                                 backoff = base_backoff * (2 ** attempt) + random.uniform(0, base_backoff)
                                 time.sleep(backoff)
 
-                    raise last_exception
+                    if last_exception is not None:
+                        raise last_exception
+                    raise RuntimeError("All LLM completion attempts failed.")
 
             def __init__(self):
                 self.completions = self.Completions(client)

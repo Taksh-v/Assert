@@ -98,11 +98,16 @@ class ReasoningOrchestrator:
 
     def _build_workflow(self) -> Any:
         builder = StateGraph(ReasoningState)
+        builder.add_node("profiler", self.profile_node)
         builder.add_node("planner", self.planner.run)
         builder.add_node("researcher", self.researcher.run)
         builder.add_node("synthesizer", self.synthesizer.run)
-        builder.set_entry_point("planner")
+        builder.add_node("critic", self.critic_node)
+        
+        builder.set_entry_point("profiler")
+        builder.add_edge("profiler", "planner")
         builder.add_edge("planner", "researcher")
+        
         def route_researcher(state: ReasoningState):
             if state.get("awaiting_approval"):
                 return END
@@ -113,8 +118,86 @@ class ReasoningOrchestrator:
             route_researcher,
             {"researcher": "researcher", "synthesizer": "synthesizer", END: END}
         )
-        builder.add_edge("synthesizer", END)
+        builder.add_edge("synthesizer", "critic")
+        
+        def route_critic(state: ReasoningState):
+            # If both scores are high, complete
+            if state.get("last_faithfulness_score", 1.0) >= 0.70 and state.get("last_relevance_score", 1.0) >= 0.70:
+                return END
+            # Loop cap
+            if state.get("iterations", 0) >= 3:
+                logger.warning("Critic iteration cap (3) reached. Ending reasoning loop.")
+                return END
+            # Otherwise, loop back to planning with criticism feedback
+            return "planner"
+            
+        builder.add_conditional_edges(
+            "critic",
+            route_critic,
+            {"planner": "planner", END: END}
+        )
+        
         return builder.compile()
+
+    async def profile_node(self, state: ReasoningState) -> Dict[str, Any]:
+        """Runs the CognitiveProfiler to extract intent and tone markers."""
+        from backend.query.cognitive_alignment import CognitiveProfiler
+        try:
+            profiler = CognitiveProfiler()
+            profile = await profiler.profile_query(state["query"])
+            return {"user_profile": profile}
+        except Exception as e:
+            logger.warning(f"Failed in profile_node: {e}")
+            return {"user_profile": {"tone": "neutral", "complexity": "medium", "expertise": "intermediate"}}
+
+    async def critic_node(self, state: ReasoningState) -> Dict[str, Any]:
+        """Evaluates final answer quality (faithfulness & relevance)."""
+        from backend.query.evaluators import evaluate_faithfulness, evaluate_relevance
+        import asyncio
+        
+        answer = state.get("final_answer") or ""
+        evidence_parts = []
+        for e in state.get("raw_evidence", []):
+            content = e.get("content", "")
+            evidence_parts.append(str(content))
+        context_str = "\n\n".join(evidence_parts) if evidence_parts else ""
+
+        # Score in parallel
+        faithfulness = 1.0
+        relevance = 1.0
+        faith_reasoning = "N/A"
+        rel_reasoning = "N/A"
+        
+        try:
+            faith_task = evaluate_faithfulness(context_str, answer)
+            rel_task = evaluate_relevance(state["query"], answer)
+            faith_eval, rel_eval = await asyncio.gather(faith_task, rel_task)
+            
+            faithfulness = faith_eval["score"]
+            relevance = rel_eval["score"]
+            faith_reasoning = faith_eval.get("reasoning", "")
+            rel_reasoning = rel_eval.get("reasoning", "")
+        except Exception as e:
+            logger.warning(f"Failed to run scoring pipeline in critic_node: {e}")
+
+        passed = faithfulness >= 0.70 and relevance >= 0.70
+        feedback = f"Critic Feedback - Faithfulness: {faithfulness:.2f} ({faith_reasoning}). Relevance: {relevance:.2f} ({rel_reasoning})."
+        
+        logger.info(f"Critique results: faithfulness={faithfulness:.2f}, relevance={relevance:.2f}, passed={passed}")
+        
+        # If it failed and we are looping back, clear plan so planner can rebuild it with the feedback
+        updates = {
+            "last_faithfulness_score": faithfulness,
+            "last_relevance_score": relevance,
+            "critic_feedback": None if passed else feedback,
+            "iterations": state.get("iterations", 0) + 1
+        }
+        if not passed:
+            updates["plan"] = {}
+            updates["current_task_index"] = 0
+            
+        return updates
+
 
     async def run(
         self, 
@@ -187,12 +270,32 @@ class ReasoningOrchestrator:
                 execution.status = "running"
                 await session.commit()
             else:
+                # Resolve user's role from workspace memberships
+                user_role = "employee"
+                if user_id and workspace_id:
+                    try:
+                        from backend.models.workspace_member import WorkspaceMember, WorkspaceRole
+                        stmt = select(WorkspaceMember.role).where(
+                            WorkspaceMember.user_id == user_id,
+                            WorkspaceMember.workspace_id == workspace_id
+                        )
+                        res = await session.execute(stmt)
+                        db_role = res.scalar()
+                        if db_role:
+                            if db_role in (WorkspaceRole.OWNER, WorkspaceRole.ADMIN):
+                                user_role = "admin"
+                            else:
+                                user_role = "employee"
+                    except Exception as re:
+                        logger.warning(f"Failed to fetch user role for user {user_id}: {re}")
+
                 # ── Create new execution ──
                 state = {
                     "query": query,
                     "workspace_id": workspace_id,
                     "request_id": request_id,
                     "user_id": user_id,
+                    "user_role": user_role,
                     "plan": {},
                     "current_task_index": 0,
                     "raw_evidence": [],
@@ -205,7 +308,11 @@ class ReasoningOrchestrator:
                     "should_continue": True,
                     "awaiting_approval": False,
                     "approved": False,
-                    "errors": []
+                    "errors": [],
+                    "critic_feedback": None,
+                    "user_profile": None,
+                    "last_faithfulness_score": 0.0,
+                    "last_relevance_score": 0.0,
                 }
                 execution = ReasoningExecution(
                     workspace_id=workspace_id,
@@ -344,5 +451,6 @@ class ReasoningOrchestrator:
             "awaiting_approval": state.get("awaiting_approval", False),
             "suspend_schema": state.get("suspend_schema"),
             "eval_scores": state.get("eval_scores", []),
-            "flagged_for_review": state.get("flagged_for_review", False)
+            "flagged_for_review": state.get("flagged_for_review", False),
+            "user_profile": state.get("user_profile"),
         }

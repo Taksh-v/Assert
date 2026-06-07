@@ -64,7 +64,7 @@ async def evaluate_faithfulness(context: str, answer: str) -> Dict[str, Any]:
         return {"score": max(0.0, min(1.0, score)), "reasoning": reasoning}
 
     except Exception as e:
-        logger.warning("Faithfulness evaluation failed to parse: %s. Raw response: %s", e, response_text if 'response_text' in locals() else '')
+        logger.warning("TELEMETRY_WARNING: Faithfulness evaluation failed to parse: %s. Raw response: %s", e, response_text if 'response_text' in locals() else '')
         
         # Attempt regex fallback
         try:
@@ -130,7 +130,7 @@ async def evaluate_relevance(question: str, answer: str) -> Dict[str, Any]:
         return {"score": max(0.0, min(1.0, score)), "reasoning": reasoning}
 
     except Exception as e:
-        logger.warning("Relevance evaluation failed to parse: %s. Raw response: %s", e, response_text if 'response_text' in locals() else '')
+        logger.warning("TELEMETRY_WARNING: Relevance evaluation failed to parse: %s. Raw response: %s", e, response_text if 'response_text' in locals() else '')
         
         # Attempt regex fallback
         try:

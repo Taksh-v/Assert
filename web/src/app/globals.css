@@ -1,172 +1,173 @@
 @import "tailwindcss";
 
 :root {
-  --background: #08090d;
-  --foreground: #f3f4f6;
-  --card: rgba(13, 15, 23, 0.7);
-  --card-foreground: #e5e7eb;
-  --primary: #00f5ff; /* Electric Cyan */
-  --primary-foreground: #000000;
-  --secondary: #ff00e5; /* Neon Magenta */
-  --secondary-foreground: #ffffff;
-  --accent: #ccff00; /* Cyber Lime */
-  --accent-foreground: #000000;
-  --destructive: #ff3b30;
-  --destructive-foreground: #ffffff;
-  --muted: rgba(255, 255, 255, 0.02);
-  --muted-foreground: #9ca3af;
-  --border: rgba(255, 255, 255, 0.04);
-  --input: rgba(255, 255, 255, 0.01);
-  --ring: rgba(0, 245, 255, 0.3);
-  --radius: 0.75rem;
+  /* ─── Core Palette (Dark Kinetic Workspace System) ─── */
+  --bg-root: #09090b;
+  --bg-sidebar: #0d0d11;
+  --bg-surface: rgba(18, 18, 22, 0.65);
+  --bg-surface-hover: rgba(26, 26, 32, 0.85);
+  --bg-elevated: rgba(22, 22, 26, 0.95);
 
-  /* Dashboard Custom Variables */
-  --glass-bg: rgba(13, 15, 23, 0.8);
-  --glass-border: rgba(255, 255, 255, 0.04);
-  --glass-border-glow: rgba(0, 245, 255, 0.15);
-  --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.85);
+  /* ─── Borders ─── */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-focus: rgba(99, 102, 241, 0.4);
+
+  /* ─── Text ─── */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-muted: rgba(255, 255, 255, 0.4);
+
+  /* ─── Accent ─── */
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-muted: rgba(99, 102, 241, 0.12);
+
+  /* ─── Semantic ─── */
+  --success: #10b981;
+  --success-muted: rgba(16, 185, 129, 0.1);
+  --warning: #f59e0b;
+  --warning-muted: rgba(245, 158, 11, 0.1);
+  --danger: #ef4444;
+  --danger-muted: rgba(239, 68, 68, 0.1);
+
+  /* ─── Shadows ─── */
+  --shadow-card: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --shadow-elevated: 0 24px 64px 0 rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 1px rgba(99, 102, 241, 0.2), 0 16px 40px rgba(99, 102, 241, 0.15);
+
+  /* ─── Tailwind compat aliases ─── */
+  --background: var(--bg-root);
+  --foreground: var(--text-primary);
+  --primary: var(--accent);
+  --border: var(--border-subtle);
+  --radius: 0.75rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
-  --color-secondary: var(--secondary);
   --color-accent: var(--accent);
-  --color-card: var(--card);
   --color-border: var(--border);
-  --color-muted: var(--muted);
   --radius-xl: var(--radius);
 }
 
 * {
-  border-color: var(--border);
+  border-color: var(--border-subtle);
 }
 
 body {
-  background-color: var(--background);
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(0, 245, 255, 0.03) 0px, transparent 40%),
-    radial-gradient(at 100% 100%, rgba(255, 0, 229, 0.02) 0px, transparent 40%),
-    radial-gradient(at 50% 50%, rgba(10, 12, 19, 0.95) 0px, transparent 100%);
-  color: var(--foreground);
-  font-family: 'Sora', 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.12), transparent 35%),
+    radial-gradient(circle at 85% 85%, rgba(16, 185, 129, 0.07), transparent 35%),
+    #09090b;
+  color: var(--text-primary);
+  font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
   overflow-x: hidden;
   letter-spacing: -0.015em;
+  color-scheme: dark;
 }
 
-/* Glassmorphism Panels */
+h1, h2, h3, h4, h5, h6, .font-display {
+  font-family: 'Sora', 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875rem;
+  letter-spacing: 0;
+}
+
+/* ─── Custom UI Helpers ─── */
+
 .glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--panel-shadow);
-  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.glass-panel:hover {
-  border-color: var(--glass-border-glow);
-  box-shadow: 0 8px 36px 0 rgba(0, 245, 255, 0.05);
+.glass-panel-interactive:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-1px);
 }
 
-/* Premium Glass Cards */
-.glass-card {
-  background: rgba(255, 255, 255, 0.01);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.03);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+/* Blinking terminal caret cursor simulated block indicator */
+.console-input {
+  caret-color: var(--accent);
 }
 
-.glass-card:hover {
-  background: rgba(255, 255, 255, 0.02);
-  border-color: rgba(0, 245, 255, 0.15);
-  transform: translateY(-1.5px);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.8), 0 0 15px rgba(0, 245, 255, 0.03);
+.composer-textarea, .composer-input {
+  color: var(--text-primary) !important;
 }
 
-/* Cyber buttons */
-.cyber-button {
-  background: var(--primary);
-  color: #000000;
+.composer-textarea::placeholder, .composer-input::placeholder {
+  color: var(--text-muted) !important;
+}
+
+.label-caps {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  border: 1px solid rgba(0, 245, 255, 0.3);
-  box-shadow: 0 0 10px rgba(0, 245, 255, 0.1);
+  letter-spacing: 0.16em;
+  color: var(--text-muted);
 }
 
-.cyber-button:hover:not(:disabled) {
-  background: #ffffff;
-  border-color: #ffffff;
-  transform: translateY(-1px);
-  box-shadow: 0 0 20px rgba(0, 245, 255, 0.2);
+/* ─── Animations ─── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.cyber-button:active:not(:disabled) {
-  transform: translateY(0.5px);
+@keyframes slide-in-top {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.cyber-input {
-  background: rgba(255, 255, 255, 0.01);
-  border: 1px solid rgba(255, 255, 255, 0.03);
-  color: #ffffff;
-  font-family: 'Geist', sans-serif;
-  transition: all 0.25s ease;
-}
-
-.cyber-input:focus {
-  border-color: var(--primary);
-  background: rgba(0, 245, 255, 0.015);
-  box-shadow: 0 0 15px rgba(0, 245, 255, 0.05);
-  outline: none;
-}
-
-/* Animations */
-@keyframes cyber-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 0.7; transform: scale(1.02); }
+@keyframes pulse-ring {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
 }
 
 @keyframes draw-path {
   to { stroke-dashoffset: 0; }
 }
 
-@keyframes node-float {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-3px); }
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out both;
 }
 
-.animate-cyber-pulse {
-  animation: cyber-pulse 3s infinite ease-in-out;
+.animate-slide-in-top {
+  animation: slide-in-top 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .animate-draw-path {
   animation: draw-path 1.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
-.animate-node-float {
-  animation: node-float 6s infinite ease-in-out;
-}
-
-/* Custom scrollbars */
+/* ─── Custom Scrollbar ─── */
 ::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.3);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 99px;
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 999px;
+  transition: background 0.2s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--primary);
+  background: var(--accent);
 }

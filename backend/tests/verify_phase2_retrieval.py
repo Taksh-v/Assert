@@ -42,7 +42,7 @@ async def verify_phase2():
     try:
         logger.info("Seeding test data...")
         for doc in seed_docs:
-            await pipeline._process_document(doc, workspace_id)
+            await pipeline.runner.process(doc, workspace_id)
         
         # Give a small delay for local Qdrant indexing if needed (though local is usually instant)
         await asyncio.sleep(1)

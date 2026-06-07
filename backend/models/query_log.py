@@ -19,8 +19,8 @@ class QueryLog(Base):
     __tablename__ = "query_logs"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
-    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=True)
+    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False, index=True)
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=True, index=True)
     
     question = Column(String, nullable=False)
     answer = Column(String, nullable=True)
@@ -30,7 +30,7 @@ class QueryLog(Base):
     
     feedback = Column(Enum(FeedbackType), default=FeedbackType.NULL)
     response_time_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     # Synchronous evaluation metrics
     faithfulness_score = Column(Float, nullable=True)

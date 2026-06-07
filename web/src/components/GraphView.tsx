@@ -6,7 +6,7 @@ export const GraphView = () => {
   return (
     <div className="glass-card p-8 h-[400px] flex flex-col relative overflow-hidden">
       <div className="flex justify-between items-center mb-6">
-        <h3 className="text-xl font-bold text-white">Knowledge Graph</h3>
+        <h3 className="text-xl font-bold text-[var(--text-primary)]">Knowledge Graph</h3>
         <span className="text-[10px] font-black uppercase text-blue-400 bg-blue-500/10 px-3 py-1 rounded-full">Memgraph Live</span>
       </div>
       
@@ -20,7 +20,7 @@ export const GraphView = () => {
           
           {/* Nodes */}
           <circle cx="200" cy="150" r="12" fill="#3b82f6" className="animate-pulse" />
-          <text x="200" y="130" textAnchor="middle" fill="white" fontSize="10" fontWeight="bold">Project Assest</text>
+          <text x="200" y="130" textAnchor="middle" fill="var(--text-primary)" fontSize="10" fontWeight="bold">Project Assest</text>
           
           <circle cx="100" cy="80" r="8" fill="#10b981" />
           <text x="100" y="65" textAnchor="middle" fill="#9ca3af" fontSize="8">Notion Page</text>

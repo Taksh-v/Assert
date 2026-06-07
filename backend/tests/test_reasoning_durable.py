@@ -23,10 +23,10 @@ class MockLLMClient:
     def __init__(self, *args, **kwargs):
         pass
         
-    async def chat_completion(self, system_prompt, user_prompt, temperature=0):
-        # Planner expects a plan
-        if "Enterprise Strategy" in system_prompt:
-            return '{"plan": "mocked plan", "tasks": [{"id": "task_1", "task_name": "Task 1", "description": "Requires approve", "dependencies": []}]}'
+    async def chat_completion(self, system_prompt, user_prompt, temperature=0, **kwargs):
+        # Planner expects a plan — match both old and new prompt styles
+        if "strategic planner" in system_prompt.lower() or "Enterprise Strategy" in system_prompt:
+            return '{"goal": "Test investigation", "tasks": [{"id": 1, "description": "Requires approve", "type": "retrieval", "dependencies": []}], "initial_hypotheses": ["test hypothesis"]}'
         # Analyst/Researcher/Synthesizer
         return '{"result": "mocked result", "sources": ["mock"], "confidence": 0.9, "answer": "final answer"}'
         

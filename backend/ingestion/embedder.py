@@ -10,6 +10,9 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 FALLBACK_MODEL = object()
 
+_EMBEDDING_CACHE = {}  # sha256_hash -> list of floats
+_CACHE_LIMIT = 1000
+
 
 class Embedder:
     """
@@ -45,44 +48,70 @@ class Embedder:
         if not texts:
             return []
 
-        # Use batching for efficiency
-        BATCH_SIZE = 100
-        all_embeddings = []
-        
-        for i in range(0, len(texts), BATCH_SIZE):
-            batch = [str(t) if t else "" for t in texts[i:i+BATCH_SIZE]]
+        # 1. Pre-check cache to find cached texts
+        result_embeddings = [None] * len(texts)
+        uncached_texts = []
+        uncached_indices = []
+
+        for idx, text in enumerate(texts):
+            h = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+            if h in _EMBEDDING_CACHE:
+                result_embeddings[idx] = _EMBEDDING_CACHE[h]
+            else:
+                uncached_texts.append(text)
+                uncached_indices.append(idx)
+
+        # 2. Embed only uncached texts
+        if uncached_texts:
+            uncached_embeddings = []
+            BATCH_SIZE = 100
             
-            if self.provider == "local":
-                try:
-                    model = self._get_model()
-                    if model is FALLBACK_MODEL:
-                        all_embeddings.extend([self._hash_embedding(text) for text in batch])
-                    else:
-                        embeddings = model.encode(batch)
-                        all_embeddings.extend(embeddings.tolist())
-                except Exception as e:
-                    logger.warning(f"Local embedding model unavailable, using hash embeddings: {e}")
-                    all_embeddings.extend([self._hash_embedding(text) for text in batch])
-            
-            elif self.provider == "openai":
-                if not settings.openai_api_key:
-                    logger.error("OpenAI API key missing")
-                    all_embeddings.extend([[0.0] * 1536 for _ in batch])
-                    continue
+            for i in range(0, len(uncached_texts), BATCH_SIZE):
+                batch = [str(t) if t else "" for t in uncached_texts[i:i+BATCH_SIZE]]
                 
-                try:
-                    from openai import OpenAI
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    response = client.embeddings.create(
-                        model=self.model_name or "text-embedding-3-small",
-                        input=batch
-                    )
-                    all_embeddings.extend([data.embedding for data in response.data])
-                except Exception as e:
-                    logger.error(f"OpenAI embedding error: {e}")
-                    all_embeddings.extend([[0.0] * 1536 for _ in batch])
+                if self.provider == "local":
+                    try:
+                        model = self._get_model()
+                        if model is FALLBACK_MODEL:
+                            uncached_embeddings.extend([self._hash_embedding(text) for text in batch])
+                        else:
+                            embeddings = model.encode(batch)
+                            uncached_embeddings.extend(embeddings.tolist())
+                    except Exception as e:
+                        logger.warning(f"Local embedding model unavailable, using hash embeddings: {e}")
+                        uncached_embeddings.extend([self._hash_embedding(text) for text in batch])
+                
+                elif self.provider == "openai":
+                    if not settings.openai_api_key:
+                        logger.error("OpenAI API key missing")
+                        uncached_embeddings.extend([[0.0] * 1536 for _ in batch])
+                        continue
+                    
+                    try:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=settings.openai_api_key)
+                        response = client.embeddings.create(
+                            model=self.model_name or "text-embedding-3-small",
+                            input=batch
+                        )
+                        uncached_embeddings.extend([data.embedding for data in response.data])
+                    except Exception as e:
+                        logger.error(f"OpenAI embedding error: {e}")
+                        uncached_embeddings.extend([[0.0] * 1536 for _ in batch])
+            
+            # 3. Store uncached embeddings back into cache and results list
+            for text, emb, orig_idx in zip(uncached_texts, uncached_embeddings, uncached_indices):
+                h = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+                # Simple cache eviction (FIFO)
+                if len(_EMBEDDING_CACHE) >= _CACHE_LIMIT:
+                    try:
+                        _EMBEDDING_CACHE.pop(next(iter(_EMBEDDING_CACHE)))
+                    except KeyError:
+                        pass
+                _EMBEDDING_CACHE[h] = emb
+                result_embeddings[orig_idx] = emb
         
-        return all_embeddings
+        return result_embeddings
 
     def embed_multi(self, chunks: List[str], title: str, summary: str) -> List[Dict[str, List[float]]]:
         """

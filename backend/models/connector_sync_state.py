@@ -13,7 +13,7 @@ class ConnectorSyncState(Base):
     workspace_id = Column(String, primary_key=True)
     
     # Stores the high-water mark (timestamp or opaque token)
-    last_sync_at = Column(DateTime, default=datetime.utcnow)
+    last_sync_at = Column(DateTime, nullable=True)
     last_sync_token = Column(String, nullable=True)
     
     # Stats for the last sync

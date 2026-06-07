@@ -13,6 +13,7 @@ class ConnectorType(str, enum.Enum):
     GITHUB = "github"
     JIRA = "jira"
     WHATSAPP = "whatsapp"
+    FILE_UPLOAD = "file_upload"
 
 
 class ConnectorStatus(str, enum.Enum):

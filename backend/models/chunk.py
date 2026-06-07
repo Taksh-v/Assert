@@ -13,8 +13,8 @@ class Chunk(Base):
     __tablename__ = "chunks"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(String, ForeignKey("documents.id"), nullable=False)
-    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
+    document_id = Column(String, ForeignKey("documents.id"), nullable=False, index=True)
+    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False, index=True)
     
     # Hierarchy & Structure (Layer 4)
     parent_id = Column(String, nullable=True) # For nested chunks

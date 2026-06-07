@@ -17,6 +17,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 
 from backend.core.llm_client import LLMClient
+from backend.core.config import get_settings
 from backend.query.retriever import RetrievalResult
 from backend.query.resolution import (
     CRAGVerdict,
@@ -25,6 +26,7 @@ from backend.query.resolution import (
 )
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class CRAGVerifier:
@@ -57,6 +59,33 @@ class CRAGVerifier:
                 confidence_signal="none",
                 grounding_score=0.0,
                 needs_web_fallback=True,
+            )
+
+        top_score = max((chunk.score for chunk in chunks), default=0.0)
+        if top_score >= getattr(settings, "crag_skip_high_confidence_threshold", 0.82):
+            verified = [
+                VerifiedChunk(
+                    chunk_id=chunk.chunk_id,
+                    content=chunk.content,
+                    source_url=chunk.source_url,
+                    title=chunk.title,
+                    section_heading=chunk.metadata.get("heading_path", [None])[-1]
+                    if isinstance(chunk.metadata.get("heading_path"), list)
+                    and chunk.metadata.get("heading_path")
+                    else chunk.metadata.get("section_heading"),
+                    score=chunk.score,
+                    verdict=CRAGVerdict.RELEVANT,
+                    metadata=chunk.metadata,
+                )
+                for chunk in chunks[: min(3, len(chunks))]
+            ]
+            grounding_score = min(1.0, top_score)
+            return VerifiedContext(
+                verified_chunks=verified,
+                rejected_chunks=[],
+                grounding_score=grounding_score,
+                confidence_signal="high",
+                needs_web_fallback=False,
             )
 
         logger.info(
@@ -168,6 +197,8 @@ Output ONLY valid JSON — an array of objects:
                 system_prompt="You are a precision relevance judge. Output ONLY valid JSON.",
                 user_prompt=prompt,
                 temperature=0,
+                max_tokens=getattr(settings, "llm_verifier_max_output_tokens", 128),
+                prompt_cache_key="crag-verifier:v1",
             )
 
             # Parse the JSON response
@@ -257,19 +288,50 @@ class KnowledgeGapHandler:
         self, question: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Lightweight web search attempt. Returns None if unavailable or failed.
-        Currently uses the LLM's parametric knowledge as a proxy for web search.
-        In production, wire this to an actual search API (Serper, Tavily, etc.).
+        Lightweight, free web search attempt using DuckDuckGo.
+        Requires no API key and runs 100% free.
         """
         try:
+            from duckduckgo_search import DDGS
+            import asyncio
+
+            def _ddg_sync():
+                with DDGS() as ddgs:
+                    return list(ddgs.text(question, max_results=4))
+
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(None, _ddg_sync)
+
+            if not results:
+                logger.info("DuckDuckGo search returned no results.")
+                return None
+
+            snippets = []
+            sources = []
+            for r in results:
+                title = r.get("title", "Web Result")
+                url = r.get("href", "#")
+                body = r.get("body", "")
+                if body:
+                    snippets.append(f"Source: {title} ({url})\nContent: {body}")
+                    sources.append({"title": title, "url": url})
+
+            if not snippets:
+                return None
+
+            context_text = "\n\n".join(snippets)
+            prompt = f"""You are a helpful assistant. The company's knowledge base did not contain the answer,
+so we searched the web instead. Synthesize a concise answer using the search context below.
+If the context does not answer the question, output "NO_ANSWER".
+
+USER QUESTION: "{question}"
+
+WEB SEARCH RESULTS:
+{context_text}
+"""
             answer = await self.llm.chat_completion(
-                system_prompt=(
-                    "You are a helpful assistant. The user's company knowledge base "
-                    "did not contain the answer. Try to provide a general answer based "
-                    "on your knowledge. If you're not confident, respond with exactly: "
-                    "NO_ANSWER"
-                ),
-                user_prompt=question,
+                system_prompt="You are a factual summarizer. Ground your answer strictly on the provided web results.",
+                user_prompt=prompt,
                 temperature=0.1,
             )
 
@@ -279,8 +341,8 @@ class KnowledgeGapHandler:
             return {
                 "found": True,
                 "answer": answer,
-                "sources": [{"title": "General Knowledge", "url": "#"}],
+                "sources": sources,
             }
         except Exception as e:
-            logger.warning("Web fallback failed: %s", e)
+            logger.warning("DuckDuckGo web fallback failed: %s", e)
             return None

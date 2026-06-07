@@ -1,4 +1,4 @@
-## Status: 🧠 Company Brain — Phases 1-37 Completed & Verified (Zero-Cost local path)
+## Status: 🧠 Company Brain — Phases 1-42 Completed & Verified (Zero-Cost local path)
 
 The Assest engine has been transformed into a production-grade Reasoning Infrastructure. All core cognitive layers (Sensory, Attention, Executive) are now running locally via LiteLLM/Ollama for $0 API cost.
 
@@ -272,3 +272,32 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Episodic Memory Access Securing**: Secured `/memory/episodes` and `/memory/episodes/search` routes in `backend/api/memory.py` by verifying active workspace access permissions.
 - [x] **Webhook Signature Hardening**: Implemented Notion signature validation (`X-Notion-Signature` header or query parameter `secret` verification) and resolved Slack signature fallback checks in `backend/api/webhooks.py`.
 - [x] **Security Test Verification**: Added unit test coverage for webhook signature validation, conversation BOLA protection, memory BOLA protection, and slack direct BOLA. Verified that the complete test suite runs and passes cleanly.
+
+### 39. Phase 39: Dependency & Static Code Hardening — [VERIFIED]
+- [x] **Git index hygiene**: Ensured `.env` file credentials are not tracked by the git index by invoking `git rm --cached` safely.
+- [x] **Bandit MD5 warning resolution**: Refactored Qdrant deterministic point ID generation in `backend/core/vector_store.py` to use `usedforsecurity=False` in `hashlib.md5`, satisfying static security audits while retaining database ID backward compatibility.
+- [x] **Hardened Model Router Conditions**: Replaced unsafe `eval` with a secure AST-based logical expression parser in `backend/generation/model_router.py` to run conditions safely and protect against arbitrary code execution.
+- [x] **Secure Default Binding**: Swapped `app_host` default binding configuration from `0.0.0.0` to `127.0.0.1` in `backend/core/config.py` to prevent open public interfaces in dev settings.
+- [x] **Dependency vulnerability upgrades**: Upgraded packages (`python-multipart`, `python-dotenv`, `llama-index-core`, `python-jose`, `pytest`, `pypdf`) in both `requirements.txt` and `backend/requirements.txt` to non-vulnerable versions.
+- [x] **Static & Functional validation**: Checked with `bandit` (0 issues flagged) and ran the full 103 backend test suite under Python 3.12 (100% pass rate).
+
+### 40. Phase 40: Free Web Search & CPU Reranking Integration — [VERIFIED]
+- [x] **Zero-Cost Live Web Fallback**: Replaced mock parametric memory web fallback in `backend/query/crag_verifier.py` with real-time, free search queries using the `duckduckgo-search` library on GitHub. Web search runs asynchronously to prevent blocking the FastAPI event loop and extracts authentic citations and links.
+- [x] **Free local CPU Reranker**: Integrated `FlashRank` inside `backend/query/reranker.py` to run lightweight ONNX cross-encoder models locally on the CPU. Replaced the heavy PyTorch `sentence_transformers` model with a CPU-optimized version that speeds up retrieval ranking (usually <20ms) and consumes zero external API fees.
+- [x] **Package registration**: Added `duckduckgo-search` and `flashrank` package pins to both root `requirements.txt` and `backend/requirements.txt`.
+- [x] **Automated verification**: Created `backend/tests/test_free_search_and_rerank.py` and verified both live DDGS web context queries and local FlashRank reranking on CPU. Ran the complete 105 backend test suite with a 100% pass rate.
+
+### 41. Phase 41: Local Query Embedding Cache & Timeout Configuration — [VERIFIED]
+- [x] **In-Memory Embedding Caching**: Integrated local query embedding caching using an in-memory `_EMBEDDING_CACHE` in `backend/ingestion/embedder.py` to save CPU resources and speed up repeated embedding queries.
+- [x] **LiteLLM Timeout Configuration**: Added `llm_request_timeout` parameter in `backend/core/config.py` and applied it to LiteLLM completion calls in `backend/core/llm_impl.py` to prevent cascading hangs.
+- [x] **Proactive Cache Purges**: Implemented automatic cache purging at the end of successful sync runs inside `backend/workers/sync_runner.py` and `backend/core/vector_store.py`.
+- [x] **Automated verification**: Added test cases in `backend/tests/test_semantic_cache.py` which all passed successfully.
+
+### 42. Phase 42: Database Sorting Indexes, SSE Stream Token Buffering & Direct Evaluation Bypass — [VERIFIED]
+- [x] **Sorting Indexes**: Added `index=True` on `created_at` in both `QueryLog` and `Episode` models.
+- [x] **Dynamic SQLite Auto-Migrations**: Extended `ensure_sqlite_dev_indexes` in `backend/core/migrations.py` to automatically construct `idx_query_logs_created_at` and `idx_episodes_created_at` at startup.
+- [x] **Direct Path Evaluation Bypass**: Refactored `_direct_path` and `stream_query` in `backend/query/query_service.py` to completely bypass online model-graded quality evaluations on direct conversational routes.
+- [x] **SSE Streaming Token Buffering**: Implemented a buffering wrapper around `_stream_query_raw` inside `stream_query` that batches token SSE payloads in chunks of 4 tokens/words while yielding immediately on punctuation, newlines, and the first token to reduce network and UI rendering overhead.
+- [x] **Automated verification**: Created `backend/tests/test_stream_buffering.py` and verified correct buffering logic and evaluation bypass behavior. All tests passed.
+
+

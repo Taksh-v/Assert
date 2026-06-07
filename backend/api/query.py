@@ -15,7 +15,7 @@ from backend.observability.telemetry import tracer
 from backend.query.query_service import QueryService
 from backend.api.users import get_current_user
 from backend.models.user import User
-from backend.core.database import get_db
+from backend.core.database import get_db, async_session
 from backend.api.connectors import verify_workspace_access
 from backend.models.workspace import Workspace
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,7 +105,6 @@ async def query_knowledge_base(
 async def query_knowledge_base_stream(
     request: Request,
     query_req: QueryRequest,
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID"),
 ):
@@ -115,9 +114,11 @@ async def query_knowledge_base_stream(
     """
     logger.info(f"Received streaming query: {query_req.question} for workspace: {query_req.workspace_id}")
     request_id = x_request_id or str(uuid.uuid4())
-    workspace_id = await verify_workspace_access(query_req.workspace_id, db, current_user)
     
-    query_service = QueryService(db)
+    async with async_session() as db:
+        workspace_id = await verify_workspace_access(query_req.workspace_id, db, current_user)
+    
+    query_service = QueryService(None)
 
     # Note: The actual span is managed inside the AsyncGenerator within stream_query
     return StreamingResponse(

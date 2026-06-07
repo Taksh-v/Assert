@@ -47,6 +47,7 @@ class Answer:
         faithfulness_score: float = 1.0,
         relevance_score: float = 1.0,
         eval_reasoning: str = "",
+        user_profile: Optional[Dict[str, Any]] = None,
     ):
         self.answer_text = answer_text
         self.sources = sources
@@ -59,6 +60,7 @@ class Answer:
         self.faithfulness_score = faithfulness_score
         self.relevance_score = relevance_score
         self.eval_reasoning = eval_reasoning
+        self.user_profile = user_profile
 
 
 
@@ -94,6 +96,16 @@ def _get_format_instruction(tier: ResponseTier) -> str:
     elif tier in (ResponseTier.FULL_SWARM, ResponseTier.TOOL_EXEC):
         return _FORMAT_STRUCTURED
     return _FORMAT_STANDARD
+
+
+def _max_output_tokens_for_tier(tier: ResponseTier) -> int:
+    if tier == ResponseTier.DIRECT:
+        return 128
+    if tier == ResponseTier.FAST_RAG:
+        return 256
+    if tier in (ResponseTier.FULL_SWARM, ResponseTier.TOOL_EXEC):
+        return 384
+    return 256
 
 
 # ─── Citation builder ──────────────────────────────────────────
@@ -251,6 +263,8 @@ class Generator:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.1,
+                max_tokens=_max_output_tokens_for_tier(tier),
+                prompt_cache_key=f"grounded:{tier.value}:v1",
             )
 
             # JSON leak protection
@@ -355,6 +369,8 @@ class Generator:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.1,
+            max_tokens=_max_output_tokens_for_tier(tier),
+            prompt_cache_key=f"grounded-stream:{tier.value}:v1",
         ):
             yield token
 
@@ -388,6 +404,8 @@ class Generator:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.5,
+                max_tokens=_max_output_tokens_for_tier(ResponseTier.DIRECT),
+                prompt_cache_key="direct:v1",
             )
             return Answer(
                 answer_text=answer_text or "Hello! How can I help you today?",
@@ -425,6 +443,8 @@ class Generator:
                 system_prompt=system_prompt,
                 user_prompt=f"Question: {question}\n\nREASONING CONTEXT:\n{context}",
                 temperature=0,
+                max_tokens=_max_output_tokens_for_tier(ResponseTier.FULL_SWARM),
+                prompt_cache_key="swarm:v1",
             )
             span.set_attribute("response_length", len(answer_text or ""))
             return Answer(

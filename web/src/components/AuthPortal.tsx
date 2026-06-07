@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Sparkles, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthPortal() {
@@ -26,7 +26,6 @@ export default function AuthPortal() {
 
     try {
       if (isLogin) {
-        // 1. Call Login API (form-encoded as required by FastAPI OAuth2)
         const params = new URLSearchParams();
         params.append("username", email);
         params.append("password", password);
@@ -48,7 +47,6 @@ export default function AuthPortal() {
         const token = data.access_token;
         setAuthToken(token);
 
-        // 2. Fetch User Profile Info & Workspaces
         const userRes = await apiFetch("/api/users/me", {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -64,7 +62,6 @@ export default function AuthPortal() {
           full_name: userData.full_name,
         });
 
-        // Fetch workspaces
         const workspaceRes = await apiFetch("/api/workspaces", {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -80,7 +77,6 @@ export default function AuthPortal() {
 
         setSuccess("Success! Logging in...");
       } else {
-        // Call Registration API
         const response = await apiFetch("/api/register", {
           method: "POST",
           headers: {
@@ -117,12 +113,12 @@ export default function AuthPortal() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-[#020617] px-4 py-12 sm:px-6 lg:px-8 overflow-hidden font-sans">
-      {/* Decorative Blur Backgrounds */}
-      <div className="absolute top-[-10%] left-[-10%] h-[500px] w-[500px] rounded-full bg-blue-600/10 blur-[150px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] h-[500px] w-[500px] rounded-full bg-indigo-600/10 blur-[150px] pointer-events-none" />
+    <div className="relative flex min-h-screen items-center justify-center bg-[--bg-root] px-4 py-12 overflow-hidden">
+      {/* Decorative gradient blobs */}
+      <div className="absolute top-[-15%] left-[-10%] h-[500px] w-[500px] rounded-full bg-indigo-600/[0.06] blur-[180px] pointer-events-none" />
+      <div className="absolute bottom-[-15%] right-[-10%] h-[500px] w-[500px] rounded-full bg-violet-600/[0.04] blur-[180px] pointer-events-none" />
       
-      {/* Subtle Grid Backdrop */}
+      {/* Dot grid */}
       <div 
         className="absolute inset-0 opacity-[0.015] pointer-events-none"
         style={{
@@ -131,48 +127,45 @@ export default function AuthPortal() {
         }}
       />
 
-      <div className="w-full max-w-md space-y-8 z-10">
-        {/* Logo and Header */}
+      <div className="w-full max-w-[420px] space-y-8 z-10">
+        {/* Logo & Header */}
         <div className="flex flex-col items-center text-center space-y-4">
           <div className="relative group">
-            <div className="absolute inset-0 bg-blue-500/20 rounded-2xl blur-xl group-hover:bg-blue-500/30 transition-all duration-500" />
-            <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-xl">
-              <Sparkles className="h-6 w-6 text-blue-400 animate-pulse" />
+            <div className="absolute inset-0 bg-indigo-500/15 rounded-2xl blur-xl group-hover:bg-indigo-500/20 transition-all duration-500" />
+            <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-[--accent-muted] border border-[--border-subtle]">
+              <Brain className="h-6 w-6 text-[--accent]" />
             </div>
           </div>
           <div className="space-y-1">
-            <h1 className="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-              Assest <span className="text-zinc-500 font-normal">Brain</span>
+            <h1 className="text-3xl font-bold tracking-tight text-[--text-primary]">
+              Assest
             </h1>
-            <p className="text-sm font-medium text-zinc-400">
-              AI-first Knowledge Engine for Enterprise Silos
+            <p className="text-sm text-[--text-muted]">
+              Company Brain
             </p>
           </div>
         </div>
 
         {/* Card */}
-        <div className="relative overflow-hidden rounded-[2rem] border border-white/[0.07] bg-white/[0.02] p-8 shadow-2xl backdrop-blur-2xl transition-all duration-500">
-          {/* Card Border Glow */}
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 opacity-0 transition-opacity duration-500 hover:opacity-100 pointer-events-none" />
-
-          {/* Tab Selection */}
-          <div className="flex rounded-xl bg-white/[0.03] p-1 border border-white/5 mb-8">
+        <div className="rounded-2xl border border-[--border-subtle] bg-[--bg-surface] p-8 shadow-[--shadow-elevated]">
+          {/* Tab Switcher */}
+            <div className="flex rounded-xl bg-[--bg-root] p-1 border border-[--border-subtle] mb-8">
             <button
               onClick={() => { setIsLogin(true); setError(null); setSuccess(null); }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all duration-300 ${
+              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 ${
                 isLogin 
-                  ? "bg-white text-black shadow-lg" 
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-[--accent] text-white shadow-lg" 
+                  : "text-[--text-muted] hover:text-[--text-secondary]"
               }`}
             >
               Sign In
             </button>
             <button
               onClick={() => { setIsLogin(false); setError(null); setSuccess(null); }}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all duration-300 ${
+              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-300 ${
                 !isLogin 
-                  ? "bg-white text-black shadow-lg" 
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-[--accent] text-white shadow-lg" 
+                  : "text-[--text-muted] hover:text-[--text-secondary]"
               }`}
             >
               Create Account
@@ -180,16 +173,15 @@ export default function AuthPortal() {
           </div>
 
           {/* Form */}
-          <form className="space-y-6" onSubmit={handleSubmit}>
-            {/* Status alerts */}
+          <form className="space-y-5" onSubmit={handleSubmit}>
             {error && (
-              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium animate-in fade-in duration-300">
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[--danger-muted] border border-red-500/20 text-red-400 text-sm animate-fade-in">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
             {success && (
-              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-medium animate-in fade-in duration-300">
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-[--success-muted] border border-emerald-500/20 text-emerald-400 text-sm animate-fade-in">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                 <span>{success}</span>
               </div>
@@ -197,53 +189,53 @@ export default function AuthPortal() {
 
             {!isLogin && (
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-wider text-zinc-500 px-1">
+                <label className="text-[12px] font-medium text-[--text-muted] px-1">
                   Full Name
                 </label>
                 <div className="relative flex items-center">
-                  <User className="absolute left-4 h-4 w-4 text-zinc-500" />
+                  <User className="absolute left-4 h-4 w-4 text-[--text-muted]" />
                   <input
                     type="text"
                     required
                     placeholder="Jane Doe"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    className="w-full bg-white/[0.03] border border-white/5 hover:border-white/10 focus:border-blue-500/50 focus:bg-white/[0.05] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none transition-all duration-300"
+                    className="w-full bg-[--bg-root] border border-[--border-subtle] hover:border-[var(--accent)]/20 focus:border-[--border-focus] rounded-xl pl-11 pr-4 py-3 text-sm text-[--text-primary] placeholder-[--text-muted] focus:outline-none transition-all duration-300"
                   />
                 </div>
               </div>
             )}
 
             <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-500 px-1">
+              <label className="text-[12px] font-medium text-[--text-muted] px-1">
                 Email Address
               </label>
               <div className="relative flex items-center">
-                <Mail className="absolute left-4 h-4 w-4 text-zinc-500" />
+                <Mail className="absolute left-4 h-4 w-4 text-[--text-muted]" />
                 <input
                   type="email"
                   required
                   placeholder="name@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 hover:border-white/10 focus:border-blue-500/50 focus:bg-white/[0.05] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none transition-all duration-300"
+                  className="w-full bg-[--bg-root] border border-[--border-subtle] hover:border-[var(--accent)]/20 focus:border-[--border-focus] rounded-xl pl-11 pr-4 py-3 text-sm text-[--text-primary] placeholder-[--text-muted] focus:outline-none transition-all duration-300"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase tracking-wider text-zinc-500 px-1">
+              <label className="text-[12px] font-medium text-[--text-muted] px-1">
                 Password
               </label>
               <div className="relative flex items-center">
-                <Lock className="absolute left-4 h-4 w-4 text-zinc-500" />
+                <Lock className="absolute left-4 h-4 w-4 text-[--text-muted]" />
                 <input
                   type="password"
                   required
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 hover:border-white/10 focus:border-blue-500/50 focus:bg-white/[0.05] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none transition-all duration-300"
+                  className="w-full bg-[--bg-root] border border-[--border-subtle] hover:border-[var(--accent)]/20 focus:border-[--border-focus] rounded-xl pl-11 pr-4 py-3 text-sm text-[--text-primary] placeholder-[--text-muted] focus:outline-none transition-all duration-300"
                 />
               </div>
             </div>
@@ -251,7 +243,7 @@ export default function AuthPortal() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3.5 px-4 border border-transparent rounded-xl text-xs font-black uppercase tracking-widest text-black bg-white hover:bg-blue-500 hover:text-white disabled:opacity-50 disabled:hover:bg-white disabled:hover:text-black transition-all duration-350 shadow-lg shadow-white/5 active:scale-98"
+              className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl text-sm font-semibold text-white bg-[--accent] hover:bg-[--accent-hover] disabled:opacity-50 transition-all duration-300 shadow-lg shadow-indigo-500/10 active:scale-[0.98]"
             >
               {loading ? (
                 <>
@@ -260,7 +252,7 @@ export default function AuthPortal() {
                 </>
               ) : (
                 <>
-                  {isLogin ? "Sign In" : "Register"}
+                  {isLogin ? "Sign In" : "Create Account"}
                   <ArrowRight className="h-4 w-4" />
                 </>
               )}
@@ -269,8 +261,8 @@ export default function AuthPortal() {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-[10px] font-medium text-zinc-600 uppercase tracking-widest">
-          Workspace Authentication • Connector-Scoped Access
+        <p className="text-center text-[11px] text-[--text-muted]">
+          Enterprise Knowledge Platform
         </p>
       </div>
     </div>

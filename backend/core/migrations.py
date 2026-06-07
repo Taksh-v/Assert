@@ -121,3 +121,30 @@ async def ensure_sqlite_dev_columns(conn):
             if column_name not in existing_names:
                 logger.info(f"Adding missing column {column_name} ({column_type}) to table {table_name}")
                 await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+
+async def ensure_sqlite_dev_indexes(conn):
+    """
+    Ensure critical database indexes exist in the local SQLite environment.
+    """
+    indexes = [
+        ("idx_documents_workspace_id", "documents", "workspace_id"),
+        ("idx_documents_connector_id", "documents", "connector_id"),
+        ("idx_query_logs_workspace_id", "query_logs", "workspace_id"),
+        ("idx_query_logs_conversation_id", "query_logs", "conversation_id"),
+        ("idx_chunks_document_id", "chunks", "document_id"),
+        ("idx_chunks_workspace_id", "chunks", "workspace_id"),
+        ("idx_failed_ingestions_workspace_id", "failed_ingestions", "workspace_id"),
+        ("idx_failed_ingestions_status", "failed_ingestions", "status"),
+        ("idx_failed_ingestions_source_url", "failed_ingestions", "source_url"),
+        ("idx_query_logs_created_at", "query_logs", "created_at"),
+        ("idx_episodes_created_at", "episodes", "created_at"),
+    ]
+    for index_name, table_name, column_name in indexes:
+        try:
+            # CREATE INDEX IF NOT EXISTS is safe and standard in SQLite
+            await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({column_name})"))
+            logger.info(f"Ensured index {index_name} exists on {table_name}({column_name})")
+        except Exception as e:
+            logger.warning(f"Failed to create index {index_name}: {e}")
+

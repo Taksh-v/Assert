@@ -58,12 +58,12 @@ async def health_check():
 
     # 2. Check Attention Layer (Vector Store)
     try:
-        vs = VectorStore()
-        # Non-blocking check for connection
-        if vs.client:
-            health["layers"]["attention"]["status"] = "connected"
-        else:
-            health["layers"]["attention"]["status"] = "offline"
+        from backend.core.vector_store import get_qdrant_client_ctx
+        with get_qdrant_client_ctx() as client:
+            if client:
+                health["layers"]["attention"]["status"] = "connected"
+            else:
+                health["layers"]["attention"]["status"] = "offline"
     except Exception:
         health["layers"]["attention"]["status"] = "error"
 

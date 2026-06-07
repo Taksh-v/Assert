@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap } from "lucide-react";
+import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap, Brain, UploadCloud, FileText } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
-import { useSyncRunPolling } from "@/lib/syncRuns";
 import { parseUTCDate } from "@/lib/date";
+import ConnectorIcon from "./ConnectorIcon";
 
 interface SourceMetadata {
   name: string;
@@ -21,6 +21,7 @@ interface DiscoveredItem {
   description?: string;
   display_type?: string;
   member_count?: number;
+  size?: number;
 }
 
 interface SourceSetupModalProps {
@@ -46,7 +47,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [, setOauthConfigured] = useState<boolean>(true);
   const [hasDirectToken, setHasDirectToken] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const { startPolling } = useSyncRunPolling();
+  const [uploadProgress, setUploadProgress] = useState<Record<string, string>>({});
+  const [isUploading, setIsUploading] = useState(false);
   const sourceIconSrc =
     type === "notion"
       ? "https://www.notion.so/favicon.ico"
@@ -160,6 +162,85 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     }
   };
 
+  const handleFileUploadConnectorCreation = useCallback(async () => {
+    try {
+      const response = await apiFetch(`/api/connectors`, {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          type: "file_upload",
+          config: {},
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json() as { id: string };
+        setConnectorId(data.id);
+        setStep("discover");
+        await discoverResources(data.id);
+        return data.id;
+      } else {
+        const errorData = await response.json();
+        setErrorMessage(errorData.detail || "Failed to initialize upload area");
+        setStep("error");
+      }
+    } catch (error) {
+      console.error("Failed to create file_upload connector:", error);
+      setErrorMessage("Failed to create file connector");
+      setStep("error");
+    }
+    return null;
+  }, [workspaceId, discoverResources]);
+
+  const handleFileUpload = async (files: FileList) => {
+    if (!connectorId) return;
+    setIsUploading(true);
+    setErrorMessage("");
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.size > 50 * 1024 * 1024) {
+        setErrorMessage(`File ${file.name} exceeds maximum limit of 50MB`);
+        setIsUploading(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      setUploadProgress((prev) => ({ ...prev, [file.name]: "Uploading..." }));
+
+      try {
+        const response = await apiFetch(`/api/connectors/${connectorId}/upload`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (response.ok) {
+          setUploadProgress((prev) => {
+            const next = { ...prev };
+            delete next[file.name];
+            return next;
+          });
+        } else {
+          const errorData = await response.json();
+          setErrorMessage(`Failed to upload ${file.name}: ${errorData.detail || "Unknown error"}`);
+          setUploadProgress((prev) => ({ ...prev, [file.name]: "Failed" }));
+          setIsUploading(false);
+          return;
+        }
+      } catch (error) {
+        console.error("Upload failed:", error);
+        setErrorMessage(`Network error uploading ${file.name}`);
+        setUploadProgress((prev) => ({ ...prev, [file.name]: "Failed" }));
+        setIsUploading(false);
+        return;
+      }
+    }
+    
+    setIsUploading(false);
+    await discoverResources(connectorId);
+  };
+
   const checkForExistingConnector = useCallback(async () => {
     // After popup closes or on mount, check if the backend has an active connector
     try {
@@ -169,7 +250,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         const match = connectors.find(
           (c) => c.type === type &&
             c.status === "active" &&
-            (c.config_summary?.oauth || c.config_summary?.direct_token)
+            (type === "file_upload" || c.config_summary?.oauth || c.config_summary?.direct_token)
         );
         if (match) {
           setConnectorId(match.id);
@@ -189,11 +270,14 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   useEffect(() => {
     const init = async () => {
       setIsInitialLoading(true);
-      await checkForExistingConnector();
+      const found = await checkForExistingConnector();
+      if (!found && type === "file_upload") {
+        await handleFileUploadConnectorCreation();
+      }
       setIsInitialLoading(false);
     };
     void init();
-  }, [checkForExistingConnector]);
+  }, [checkForExistingConnector, type, handleFileUploadConnectorCreation]);
 
   // Listen for OAuth popup messages
   useEffect(() => {
@@ -270,35 +354,8 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       });
 
       if (response.ok) {
-        const started = await response.json() as { sync_run_id: string; status: string; message?: string };
-        setSyncProgress(started.message || "Sync queued...");
-        startPolling(started.sync_run_id, {
-          onSuccess: (syncRun) => {
-            if (syncRun.status === "completed") {
-              setDoneMessage("Knowledge captured successfully. Your connected source is ready for grounded answers.");
-              setStep("done");
-              setTimeout(() => {
-                onConnect(config);
-                onClose();
-              }, 2000);
-            } else if (syncRun.status === "completed_with_errors") {
-              const failed = typeof syncRun.stats?.failed === "number" ? syncRun.stats.failed : "some";
-              setDoneMessage(`Sync completed with ${failed} document errors. Successful documents are available now.`);
-              setStep("done");
-              setTimeout(() => {
-                onConnect(config);
-                onClose();
-              }, 2600);
-            }
-          },
-          onError: (errStr) => {
-            setErrorMessage(errStr);
-            setStep("error");
-          },
-          onProgress: (progText) => {
-            setSyncProgress(progText);
-          }
-        });
+        onConnect(config);
+        onClose();
       } else {
         const errorData = await response.json();
         setErrorMessage(errorData.detail || "Sync failed");
@@ -336,291 +393,352 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xl p-6">
-      <div className="glass-card w-full max-w-xl overflow-hidden relative border-white/10 shadow-[0_0_80px_rgba(0,0,0,0.8)] bg-slate-900 rounded-[2.5rem] transform transition-all duration-500 scale-100">
-        {/* Header */}
-        <div className="p-10 border-b border-white/5 flex items-center justify-between bg-gradient-to-br from-white/[0.03] to-transparent">
-          <div className="flex items-center gap-6">
-            <div
-              className="h-16 w-16 rounded-[1.25rem] flex items-center justify-center text-3xl font-black text-white shadow-2xl"
-              style={{ backgroundColor: metadata.color, boxShadow: `0 20px 40px ${metadata.color}44` }}
-            >
-              {metadata.icon}
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6 backdrop-blur-md">
+      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/40 p-6 md:p-8">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-slate-100">
+              <ConnectorIcon type={type} className="h-6 w-6" />
             </div>
             <div>
-              <h2 className="text-2xl font-black text-white tracking-tight">Connect {metadata.name}</h2>
-              <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mt-1 opacity-60">
-                {step === "setup" && "Secure Authorization"}
-                {step === "discover" && "Browsing Your Knowledge"}
-                {step === "syncing" && "Indexing Your Brain"}
-                {step === "done" && "All Set!"}
-                {step === "error" && "Something Went Wrong"}
+              <h2 className="text-xl font-semibold tracking-tight text-slate-100">Connect {metadata.name}</h2>
+              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-slate-500">
+                {step === "setup" && "Secure authorization"}
+                {step === "discover" && "Browsing your knowledge"}
+                {step === "syncing" && "Indexing your workspace"}
+                {step === "done" && "All set"}
+                {step === "error" && "Something went wrong"}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="h-12 w-12 rounded-full hover:bg-white/5 flex items-center justify-center transition-all group"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-100 hover:border-slate-700 transition"
           >
-            <X className="h-6 w-6 text-zinc-500 group-hover:text-white transition-colors" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-10 space-y-8">
+        <div className="p-6 md:p-8">
           {isInitialLoading ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-4">
-              <Loader2 className="animate-spin text-blue-500 h-10 w-10" />
-              <p className="text-xs font-black text-zinc-500 uppercase tracking-widest">Validating Connection...</p>
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+              <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">Validating connection</p>
             </div>
-          ) : step === "setup" && (
-            <div className="space-y-8">
-              <div className="flex flex-col items-center text-center space-y-4 py-4">
-                <div className="p-4 bg-blue-500/10 rounded-full">
-                  <Lock className="w-8 h-8 text-blue-400" />
-                </div>
-                <h3 className="text-xl font-bold text-white">
-                  {hasDirectToken ? "Direct Connection" : "One-Click Authorization"}
-                </h3>
-                <p className="text-sm text-zinc-500 max-w-[320px] leading-relaxed">
-                  {type === "slack" && hasDirectToken
-                    ? "Your Slack bot token is configured. Connect instantly to start indexing channels."
-                    : "We'll open a secure window for you to authorize Assest. No tokens or manual setup required."
+          ) : step === "setup" ? (
+            <div className="space-y-6">
+              <div className="flex flex-col items-center space-y-3 py-2 text-center">
+                <style dangerouslySetInnerHTML={{__html: `
+                  @keyframes bridge-flow {
+                    0% { transform: translateX(-100%); }
+                    100% { transform: translateX(300%); }
                   }
+                `}} />
+                <div className="flex items-center justify-center gap-5 py-4 w-full">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 shadow-md">
+                    <Brain className="h-6 w-6 text-blue-500 animate-pulse" />
+                  </div>
+                  
+                  <div className="relative w-20 h-[3px] bg-slate-800 rounded-full overflow-hidden shrink-0">
+                    <div className="absolute inset-0 overflow-hidden">
+                      <div 
+                        className="h-full w-8 bg-gradient-to-r from-transparent via-blue-400 to-transparent"
+                        style={{
+                          animation: "bridge-flow 1.5s infinite linear",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 shadow-md">
+                    <ConnectorIcon type={type} className="h-6 w-6" />
+                  </div>
+                </div>
+                <h3 className="text-lg font-semibold tracking-tight text-slate-100">
+                  {hasDirectToken ? "Direct connection" : "One-click authorization"}
+                </h3>
+                <p className="max-w-[340px] text-sm leading-relaxed text-slate-400">
+                  {type === "slack" && hasDirectToken
+                    ? "Your Slack bot token is already configured. Connect instantly and start indexing channels."
+                    : "Authorize Assest to access your files securely. No tokens or manual configuration required."}
                 </p>
               </div>
 
               {errorMessage && (
-                <div className="flex items-center gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/20">
-                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
-                  <p className="text-sm text-red-400">{errorMessage}</p>
+                <div className="flex items-center gap-3 rounded-xl border border-rose-950 bg-rose-950/20 p-4 text-rose-400">
+                  <AlertCircle className="h-5 w-5 shrink-0" />
+                  <p className="text-sm">{errorMessage}</p>
                 </div>
               )}
 
               <button
                 onClick={handleOAuth}
                 disabled={isLoading}
-                className="w-full h-16 rounded-2xl bg-white text-black font-black text-lg flex items-center justify-center gap-4 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-2xl shadow-white/10 disabled:opacity-50 disabled:hover:scale-100"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isLoading ? (
-                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
                   <>
-                    {type === "slack" ? (
-                      <Zap className="w-6 h-6" />
-                    ) : sourceIconSrc ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={sourceIconSrc}
-                        className="w-6 h-6"
-                        alt=""
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
-                    ) : null}
-                    {type === "slack" && hasDirectToken ? "Connect Slack" : `Authorize ${metadata.name}`}
-                    <ChevronRight className="w-5 h-5" />
+                    <ConnectorIcon type={type} className="h-5 w-5 shrink-0" />
+                    <span>{type === "slack" && hasDirectToken ? "Connect Slack" : `Authorize ${metadata.name}`}</span>
+                    <ChevronRight className="h-4 w-4" />
                   </>
                 )}
               </button>
 
-              <div className="pt-4 flex flex-col items-center gap-4">
+              <div className="flex flex-col items-center gap-4 pt-1">
                 <button
                   onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="text-[10px] font-black text-zinc-500 uppercase tracking-widest hover:text-white transition-colors flex items-center gap-2"
+                  className="inline-flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-slate-500 transition hover:text-slate-300"
                 >
-                  <Settings className="w-3 h-3" />
-                  {showAdvanced ? "Hide Advanced Setup" : "Manual Token Setup (Advanced)"}
+                  <Settings className="h-3.5 w-3.5" />
+                  {showAdvanced ? "Hide advanced setup" : "Manual token setup"}
                 </button>
 
                 {showAdvanced && (
-                  <div className="w-full space-y-4 animate-in slide-in-from-top-4 duration-300">
+                  <div className="w-full space-y-3 animate-fade-in">
                     <input
                       type="password"
-                      placeholder={type === "notion" ? "Enter Notion integration token..." : type === "google_drive" ? "Paste OAuth access token..." : "Enter Slack bot token..."}
-                      className="w-full h-14 px-6 rounded-2xl bg-white/5 border border-white/10 text-sm text-white focus:outline-none focus:border-blue-500/50 placeholder:text-zinc-600"
+                      placeholder={
+                        type === "notion"
+                          ? "Enter Notion integration token..."
+                          : type === "google_drive"
+                            ? "Paste OAuth access token..."
+                            : "Enter Slack bot token..."
+                      }
+                      className="h-12 w-full rounded-xl border border-slate-800 bg-slate-900/50 px-4 text-sm text-slate-100 placeholder:text-slate-600 focus:border-slate-700 focus:outline-none transition"
                       onChange={(e) => setConfig({ ...config, api_key: e.target.value })}
                     />
                     <button
                       onClick={handleManualToken}
                       disabled={isLoading || !config.api_key}
-                      className="w-full h-14 rounded-2xl bg-zinc-800 text-white font-bold text-sm hover:bg-zinc-700 transition-colors disabled:opacity-50"
+                      className="flex h-12 w-full items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-sm font-semibold text-slate-100 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {isLoading ? <Loader2 className="h-5 w-5 animate-spin mx-auto" /> : "Verify Manual Connection"}
+                      {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : "Verify manual connection"}
                     </button>
                   </div>
                 )}
               </div>
             </div>
-          )}
-
-          {step === "discover" && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-white">Pick Your Knowledge</h3>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={toggleSelectAll}
-                    className="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 transition-colors"
-                  >
-                    {selectedIds.length === discoveredItems.length ? "Deselect All" : "Select All"}
-                  </button>
-                  <span className="text-[10px] font-black text-blue-400 uppercase bg-blue-400/10 px-3 py-1 rounded-full">
-                    {selectedIds.length} / {discoveredItems.length}
-                  </span>
+          ) : step === "discover" ? (
+            <div className="space-y-4">
+              <div className="flex flex-col gap-2 border-b border-slate-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-base font-semibold tracking-tight text-slate-100">
+                    {type === "file_upload" ? "Upload and manage files" : "Pick your knowledge"}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {type === "file_upload" 
+                      ? "Ingest local files directly into the reasoning workspace."
+                      : "Choose which spaces should be indexed for grounded answers."}
+                  </p>
                 </div>
-              </div>
-              <div className="max-h-[320px] overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                {isDiscovering ? (
-                  <div className="flex flex-col items-center justify-center py-20 gap-4">
-                    <Loader2 className="animate-spin text-blue-500 h-10 w-10" />
-                    <p className="text-xs font-black text-zinc-500 uppercase tracking-widest">Scanning Workspace...</p>
-                  </div>
-                ) : discoveredItems.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 gap-4">
-                    <AlertCircle className="text-zinc-600 h-10 w-10" />
-                    <p className="text-xs font-black text-zinc-500 uppercase tracking-widest">No Resources Found</p>
-                    <p className="text-xs text-zinc-600 text-center max-w-[250px]">
-                      Make sure you have shared pages/files with the Assest integration.
-                    </p>
-                  </div>
-                ) : (
-                  discoveredItems.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => {
-                        if (selectedIds.includes(item.id)) setSelectedIds(selectedIds.filter(id => id !== item.id));
-                        else setSelectedIds([...selectedIds, item.id]);
-                      }}
-                      className={`flex items-center gap-4 p-5 rounded-[1.5rem] border transition-all cursor-pointer group ${selectedIds.includes(item.id)
-                          ? "bg-blue-600/10 border-blue-500/50 shadow-lg shadow-blue-500/5"
-                          : "bg-white/[0.03] border-white/5 hover:bg-white/[0.08]"
-                        }`}
+                {type !== "file_upload" && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={toggleSelectAll}
+                      className="font-mono text-[9px] uppercase tracking-wider text-blue-400 transition hover:text-blue-300"
                     >
-                      <div className={`w-6 h-6 rounded-lg border flex items-center justify-center transition-all ${selectedIds.includes(item.id) ? "bg-blue-500 border-blue-500" : "border-white/20 bg-transparent"
-                        }`}>
-                        {selectedIds.includes(item.id) && <CheckCircle2 className="w-4 h-4 text-white" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          {item.icon && <span className="text-sm">{item.icon}</span>}
-                          <p className={`text-sm font-bold transition-colors truncate ${selectedIds.includes(item.id) ? "text-blue-400" : "text-white"}`}>
-                            {item.name}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[9px] text-zinc-500 uppercase font-black tracking-widest bg-white/5 px-2 py-0.5 rounded-md">
-                            {item.display_type || item.type}
-                          </span>
-                          {item.last_modified && (
-                            <span className="text-[9px] text-zinc-600 font-bold">
-                              {formatTimeAgo(item.last_modified)}
-                            </span>
-                          )}
-                          {item.member_count !== undefined && item.member_count > 0 && (
-                            <span className="text-[9px] text-zinc-600 font-bold">
-                              {item.member_count} members
-                            </span>
-                          )}
-                        </div>
-                        {item.description && (
-                          <p className="text-[10px] text-zinc-600 mt-1 truncate">{item.description}</p>
-                        )}
-                      </div>
-                    </div>
-                  ))
+                      {selectedIds.length === discoveredItems.length ? "Deselect all" : "Select all"}
+                    </button>
+                    <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-0.5 font-mono text-[9px] text-slate-300">
+                      {selectedIds.length} / {discoveredItems.length}
+                    </span>
+                  </div>
                 )}
               </div>
 
-              {!isDiscovering && discoveredItems.length > 0 && (
+              {type === "file_upload" && (
+                <div className="space-y-3">
+                  <div 
+                    className={`border border-dashed border-slate-800 rounded-2xl p-7 bg-slate-900/10 hover:bg-slate-900/20 hover:border-slate-700 transition text-center cursor-pointer relative flex flex-col items-center justify-center gap-2 ${
+                      isUploading ? "pointer-events-none opacity-55" : ""
+                    }`}
+                  >
+                    <input
+                      type="file"
+                      multiple
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                      onChange={async (e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          await handleFileUpload(e.target.files);
+                        }
+                      }}
+                      disabled={isUploading}
+                    />
+                    <UploadCloud className="h-6 w-6 text-slate-500 animate-pulse" />
+                    <p className="text-xs text-slate-300 font-semibold">
+                      Drag & drop files here, or click to browse
+                    </p>
+                    <p className="text-[10px] text-slate-500 font-mono">
+                      Max 50MB. Supports PDF, plain text, HTML, images (OCR), audio/video
+                    </p>
+                  </div>
+
+                  {errorMessage && (
+                    <div className="flex items-center gap-3 rounded-xl border border-rose-950 bg-rose-950/20 p-4 text-rose-400">
+                      <AlertCircle className="h-5 w-5 shrink-0" />
+                      <p className="text-sm">{errorMessage}</p>
+                    </div>
+                  )}
+
+                  {Object.entries(uploadProgress).map(([name, status]) => (
+                    <div key={name} className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-900/40 animate-pulse">
+                      <div className="flex items-center gap-3">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />
+                        <span className="text-xs text-slate-300 font-medium truncate max-w-[200px]">{name}</span>
+                      </div>
+                      <span className="text-[9px] font-mono uppercase text-slate-500">{status}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="max-h-[250px] space-y-2 overflow-y-auto pr-1">
+                {isDiscovering ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3">
+                    <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                    <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">Scanning workspace</p>
+                  </div>
+                ) : discoveredItems.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 gap-3 rounded-2xl border border-dashed border-slate-800 bg-slate-950">
+                    {type === "file_upload" ? (
+                      <>
+                        <FileText className="h-8 w-8 text-slate-700" />
+                        <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">No files uploaded yet</p>
+                        <p className="max-w-[280px] text-center text-xs text-slate-400">
+                          Upload files to connect them to the system.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle className="h-8 w-8 text-slate-600" />
+                        <p className="font-mono text-[9px] uppercase tracking-wider text-slate-500">No resources found</p>
+                        <p className="max-w-[280px] text-center text-xs text-slate-400">
+                          Make sure the workspace content has been shared with the integration.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  discoveredItems.map((item) => {
+                    const selected = selectedIds.includes(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          if (selected) setSelectedIds(selectedIds.filter((id) => id !== item.id));
+                          else setSelectedIds([...selectedIds, item.id]);
+                        }}
+                        className={`flex w-full items-center gap-4 rounded-xl border p-4.5 text-left transition ${
+                          selected
+                            ? "border-blue-500/50 bg-blue-950/20 text-slate-100 hover:border-blue-500 hover:bg-blue-950/30"
+                            : "border-slate-800 bg-slate-900/30 hover:border-slate-700 hover:bg-slate-900/50"
+                        }`}
+                      >
+                        <div
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition ${
+                            selected ? "border-blue-500 bg-blue-500 text-white" : "border-slate-700 bg-transparent"
+                          }`}
+                        >
+                          {selected ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            {type === "file_upload" ? (
+                              <FileText className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                            ) : item.icon ? (
+                              <span className="text-sm shrink-0">{item.icon}</span>
+                            ) : null}
+                            <p className={`truncate text-sm font-semibold ${selected ? "text-blue-400" : "text-slate-200"}`}>
+                              {item.name}
+                            </p>
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="rounded border border-slate-800 bg-slate-950 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider text-slate-400">
+                              {item.display_type || item.type}
+                            </span>
+                            {item.last_modified ? (
+                              <span className="font-mono text-[8px] text-slate-500">{formatTimeAgo(item.last_modified)}</span>
+                            ) : null}
+                            {item.size !== undefined ? (
+                              <span className="font-mono text-[8px] text-slate-500">{(item.size / 1024).toFixed(1)} KB</span>
+                            ) : null}
+                            {item.member_count !== undefined && item.member_count > 0 ? (
+                              <span className="font-mono text-[8px] text-slate-500">{item.member_count} members</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              {!isDiscovering && discoveredItems.length > 0 ? (
                 <button
                   onClick={handleSync}
-                  className="w-full h-16 rounded-2xl bg-white text-black font-black text-lg flex items-center justify-center gap-3 shadow-xl shadow-white/10 mt-4 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 text-sm font-semibold text-white transition hover:bg-blue-500"
                 >
-                  {selectedIds.length > 0
-                    ? `Sync ${selectedIds.length} Selected`
-                    : "Sync All Knowledge"
-                  }
-                  <CheckCircle2 className="w-5 h-5" />
+                  <span>{selectedIds.length > 0 ? `Sync ${selectedIds.length} selected` : "Sync all knowledge"}</span>
+                  <CheckCircle2 className="h-4 w-4" />
                 </button>
-              )}
+              ) : null}
             </div>
-          )}
-
-          {step === "syncing" && (
-            <div className="py-16 text-center text-white space-y-8">
-              <div className="relative w-24 h-24 mx-auto">
-                <div className="absolute inset-0 bg-blue-500/30 blur-3xl rounded-full animate-pulse"></div>
-                <div className="relative p-7 bg-slate-800 rounded-[2rem] border border-blue-500/50 flex items-center justify-center shadow-2xl">
-                  <div className="absolute inset-0 border-2 border-blue-400 border-t-transparent rounded-[2rem] animate-spin"></div>
-                  <RefreshCw className="h-12 w-12 text-blue-400 animate-spin" style={{ animationDuration: '3s' }} />
+          ) : step === "syncing" ? (
+            <div className="py-12 text-center space-y-4">
+              <div className="relative mx-auto h-20 w-20">
+                <div className="absolute inset-0 rounded-full bg-blue-500/10 blur-xl" />
+                <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 shadow-xl">
+                  <RefreshCw className="h-10 w-10 animate-spin text-blue-500" style={{ animationDuration: "3s" }} />
                 </div>
               </div>
-              <div className="space-y-3">
-                <h3 className="text-2xl font-black">Ingesting Knowledge</h3>
-                <p className="text-sm text-zinc-500 max-w-[300px] mx-auto leading-relaxed">
-                  {syncProgress || "Processing documents through the ingestion pipeline..."}
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold tracking-tight text-slate-100">Ingesting knowledge</h3>
+                <p className="mx-auto max-w-[320px] text-xs text-slate-400">
+                  {syncProgress || "Processing documents through the ingestion pipeline."}
                 </p>
               </div>
             </div>
-          )}
-
-          {step === "done" && (
-            <div className="py-16 text-center text-white space-y-8">
-              <div className="relative w-24 h-24 mx-auto">
-                <div className="absolute inset-0 bg-green-500/30 blur-3xl rounded-full animate-pulse"></div>
-                <div className="relative p-7 bg-slate-800 rounded-[2rem] border border-green-500/50 flex items-center justify-center shadow-2xl">
-                  <CheckCircle2 className="h-12 w-12 text-green-400" />
+          ) : step === "done" ? (
+            <div className="py-12 text-center space-y-4">
+              <div className="relative mx-auto h-20 w-20">
+                <div className="absolute inset-0 rounded-full bg-emerald-500/10 blur-xl" />
+                <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 shadow-xl">
+                  <CheckCircle2 className="h-10 w-10 text-emerald-500" />
                 </div>
               </div>
-              <div className="space-y-3">
-                <h3 className="text-2xl font-black">Knowledge Captured!</h3>
-                <p className="text-sm text-zinc-500 max-w-[300px] mx-auto leading-relaxed">
-                  {doneMessage}
-                </p>
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold tracking-tight text-slate-100">Knowledge captured</h3>
+                <p className="mx-auto max-w-[320px] text-xs text-slate-400">{doneMessage}</p>
               </div>
             </div>
-          )}
-
-          {step === "error" && (
-            <div className="py-12 text-center text-white space-y-8">
-              <div className="relative w-20 h-20 mx-auto">
-                <div className="absolute inset-0 bg-red-500/20 blur-2xl rounded-full"></div>
-                <div className="relative p-5 bg-slate-800 rounded-[1.5rem] border border-red-500/30 flex items-center justify-center">
-                  <AlertCircle className="h-10 w-10 text-red-400" />
+          ) : (
+            <div className="py-8 text-center space-y-4">
+              <div className="relative mx-auto h-16 w-16">
+                <div className="absolute inset-0 rounded-full bg-rose-500/10 blur-xl" />
+                <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900 shadow-xl">
+                  <AlertCircle className="h-8 w-8 text-rose-500" />
                 </div>
               </div>
-              <div className="space-y-3">
-                <h3 className="text-xl font-black">Connection Failed</h3>
-                <p className="text-sm text-red-400/80 max-w-[320px] mx-auto leading-relaxed">
+              <div className="space-y-2">
+                <h3 className="text-base font-semibold tracking-tight text-slate-100">Connection failed</h3>
+                <p className="mx-auto max-w-[340px] text-xs text-rose-400">
                   {errorMessage || "An unexpected error occurred. Please try again."}
                 </p>
               </div>
               <button
-                onClick={() => { setStep("setup"); setErrorMessage(""); }}
-                className="px-8 py-4 rounded-2xl bg-zinc-800 text-white font-bold text-sm hover:bg-zinc-700 transition-colors"
+                onClick={() => {
+                  setStep("setup");
+                  setErrorMessage("");
+                }}
+                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2 text-xs font-semibold text-slate-200 border border-slate-800 hover:bg-slate-800 transition"
               >
-                Try Again
+                Try again
               </button>
             </div>
           )}
-        </div>
-
-        {/* Footer Info */}
-        <div className="px-10 py-8 bg-white/[0.02] border-t border-white/5 flex flex-wrap items-center justify-center gap-6 text-[10px] font-black text-zinc-600 uppercase tracking-widest">
-          <div className="flex items-center gap-2">
-            <Shield className="w-3 h-3 text-green-500" />
-            <span>Workspace Scoped</span>
-          </div>
-          <div className="h-1 w-1 rounded-full bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <Lock className="w-3 h-3 text-blue-500" />
-            <span>Encrypted Config</span>
-          </div>
-          <div className="h-1 w-1 rounded-full bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-3 h-3 text-primary" />
-            <span>Selectable Sync</span>
-          </div>
         </div>
       </div>
     </div>

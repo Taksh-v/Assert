@@ -14,10 +14,10 @@ class FailedIngestion(RunLedgerMixin, Base):
     __tablename__ = "failed_ingestions"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workspace_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=False, index=True)
     
     source_type = Column(String, nullable=False) # slack, notion, drive
-    source_url = Column(String, nullable=False)
+    source_url = Column(String, nullable=False, index=True)
     
     error_message = Column(Text, nullable=False)
     stack_trace = Column(Text, nullable=True)
@@ -31,7 +31,7 @@ class FailedIngestion(RunLedgerMixin, Base):
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     
-    status = Column(String, default="pending") # pending, retrying, failed, resolved
+    status = Column(String, default="pending", index=True) # pending, retrying, failed, resolved
     
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

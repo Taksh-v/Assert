@@ -61,10 +61,35 @@ class SynthesizerAgent:
 
         source_block = "\n".join(source_lines) if source_lines else "No specific sources available."
 
+        profile_instructions = []
+        profile = state.get("user_profile")
+        if profile:
+            tone = profile.get("tone", "neutral")
+            expertise = profile.get("expertise", "intermediate")
+            
+            # Expertise styling
+            if expertise == "beginner":
+                profile_instructions.append("The user has beginner-level expertise. Simplify terminology, explain technical acronyms, and focus on foundational explanations rather than deep code or database internals.")
+            elif expertise == "advanced":
+                profile_instructions.append("The user has advanced-level expertise. Provide highly detailed technical specifications, cite configuration settings and raw findings directly where available.")
+                
+            # Tone styling
+            if tone == "frustrated":
+                profile_instructions.append("The user is frustrated. Maintain an extremely supportive, patient, and highly empathetic tone. Acknowledge their issue directly, clarify next steps clearly, and provide structured, step-by-step guidance.")
+            elif tone == "confused":
+                profile_instructions.append("The user is confused. Focus on structured clarity, define core concepts, and avoid complex or overwhelming terminology.")
+            elif tone == "curious":
+                profile_instructions.append("The user is curious. Provide extra technical depth, conceptual links, and explain why things are designed or behaved in this manner.")
+
+        profile_block = "\n".join(f"- {inst}" for inst in profile_instructions) if profile_instructions else "- Use a professional, objective tone."
+
         prompt = f"""You are the Chief Intelligence Officer and Senior Systems Analyst. 
 Analyze the collected evidence and synthesize a high-fidelity executive intelligence report for the query: "{query}".
 
 GOAL: Determine root causes, identify patterns, and correlate temporal events.
+
+ADAPTIVE STYLE & TONE GUIDELINES:
+{profile_block}
 
 EVIDENCE COLLECTED:
 {formatted_evidence}

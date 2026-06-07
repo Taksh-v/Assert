@@ -60,13 +60,14 @@ class ResearcherAgent:
 
         workspace_id = state.get("workspace_id", "")
         user_id = state.get("user_id")
-        logger.info("Researching Task %d: %s", idx + 1, current_task["description"])
+        user_role = state.get("user_role", "employee")
+        logger.info("Researching Task %d: %s with role %s", idx + 1, current_task["description"], user_role)
 
         # Initialize retriever lazily
         self._ensure_retriever()
 
-        # Build a search query from the task description
-        search_query = current_task["description"]
+        # Build an optimized search query from the task description
+        search_query = await self._optimize_search_query(current_task["description"])
         task_type = current_task.get("type", "retrieval")
 
         evidence_content = ""
@@ -75,13 +76,15 @@ class ResearcherAgent:
 
         try:
             if task_type in ("retrieval", "temporal"):
-                # Use the production hybrid retriever
+                # Use the production hybrid retriever with RBAC roles
                 results = await self._retriever.search(
                     question=search_query,
                     workspace_id=workspace_id,
                     top_k=5,
                     user_id=user_id,
+                    user_role=user_role
                 )
+
 
                 if results:
                     # CRAG-verify the results
@@ -171,3 +174,28 @@ class ResearcherAgent:
             "current_task_index": idx + 1,
             "should_continue": idx + 1 < len(tasks),
         }
+
+    async def _optimize_search_query(self, task_description: str) -> str:
+        """Use a fast LLM template to transform narrative task descriptions into keyword-dense search terms."""
+        from backend.core.llm_client import LLMClient
+        try:
+            client = LLMClient(model_type="fast")
+            system_prompt = (
+                "You are a search query optimizer. Extract only the primary keywords, entities, "
+                "and search terms from the input task description. Keep it under 6 words and return ONLY the keywords."
+            )
+            res = await client.chat_completion(
+                system_prompt=system_prompt,
+                user_prompt=task_description,
+                temperature=0.0,
+                max_tokens=24
+            )
+            opt = res.strip()
+            if opt:
+                logger.info(f"Optimized search query: '{task_description}' -> '{opt}'")
+                return opt
+            return task_description
+        except Exception as e:
+            logger.warning(f"Failed to optimize search query: {e}")
+            return task_description
+

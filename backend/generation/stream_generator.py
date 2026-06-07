@@ -31,6 +31,8 @@ class StreamGenerator:
         messages: List[Dict[str, str]],
         model: str = None,
         temperature: float = 0.3,
+        max_tokens: int = None,
+        prompt_cache_key: Optional[str] = None,
         request_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
@@ -54,15 +56,15 @@ class StreamGenerator:
             }
         )
         
-        if settings.litellm_proxy_url:
-            litellm.api_base = settings.litellm_proxy_url
-
         try:
             response = await litellm.acompletion(
                 messages=messages,
                 model=model,
                 temperature=temperature,
-                stream=True
+                max_tokens=max_tokens or self.llm_client._default_max_tokens(),
+                stream=True,
+                prompt_cache_key=prompt_cache_key,
+                api_base=settings.litellm_proxy_url or None,
             )
             
             async for chunk in response:

@@ -33,4 +33,13 @@ class ReasoningState(TypedDict):
     awaiting_approval: bool
     approved: bool
     errors: List[str]
+    
+    # Active Critique & Profiling (Sophia Integration)
+    critic_feedback: Optional[str]
+    user_profile: Optional[Dict[str, Any]]
+    user_role: str
+    last_faithfulness_score: float
+    last_relevance_score: float
+
+
 

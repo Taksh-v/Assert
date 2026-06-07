@@ -45,6 +45,10 @@ class AdaptiveRouter:
         "create", "make", "send", "post", "deploy", "update", "delete",
         "open", "close", "assign", "file", "submit", "trigger",
     }
+    FACTUAL_PREFIXES = {
+        "what is", "who is", "where is", "when is", "what are", "who are",
+        "where are", "when are", "how many", "how much", "what was", "who was",
+    }
     # Greetings and small talk
     GREETING_PATTERNS = {
         "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
@@ -110,7 +114,17 @@ class AdaptiveRouter:
                     estimated_complexity="low",
                 )
 
-            # 3. Action keyword detection
+            # 3. Short factual lookup
+            if any(lower.startswith(prefix) for prefix in self.FACTUAL_PREFIXES):
+                span.set_attribute("route", "fast_rag_lookup")
+                return RouteDecision(
+                    tier=ResponseTier.FAST_RAG,
+                    intent=QueryIntent.QUICK_LOOKUP,
+                    rationale="Short factual lookup detected",
+                    estimated_complexity="low",
+                )
+
+            # 4. Action keyword detection
             first_word = lower.split()[0] if lower.split() else ""
             if first_word in self.ACTION_KEYWORDS:
                 span.set_attribute("route", "tool_exec")
@@ -120,6 +134,17 @@ class AdaptiveRouter:
                     rationale=f"Action verb '{first_word}' detected",
                     estimated_complexity="medium",
                     required_tools=self._guess_tools(lower),
+                )
+
+            # 5. Comparison keyword detection
+            comparison_tokens = ("compare", "versus", "vs", "tradeoff", "difference between")
+            if any(token in lower for token in comparison_tokens):
+                span.set_attribute("route", "fast_rag_comparison")
+                return RouteDecision(
+                    tier=ResponseTier.FAST_RAG,
+                    intent=QueryIntent.COMPARISON,
+                    rationale="Comparison request detected",
+                    estimated_complexity="medium",
                 )
 
             # --- LLM-based classification (for non-trivial queries) ---
@@ -157,7 +182,7 @@ class AdaptiveRouter:
         mapping = {
             QueryIntent.CONVERSATIONAL: ResponseTier.DIRECT,
             QueryIntent.QUICK_LOOKUP: ResponseTier.FAST_RAG,
-            QueryIntent.COMPARISON: ResponseTier.FULL_SWARM,
+            QueryIntent.COMPARISON: ResponseTier.FAST_RAG,
             QueryIntent.DEEP_ANALYSIS: ResponseTier.FULL_SWARM,
             QueryIntent.ACTION_REQUEST: ResponseTier.TOOL_EXEC,
         }

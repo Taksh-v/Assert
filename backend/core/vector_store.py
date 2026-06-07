@@ -30,8 +30,13 @@ def get_qdrant_client():
             logger.info("Initializing in-memory Qdrant")
             _GLOBAL_QDRANT_CLIENT = QdrantClient(":memory:")
         else:
-            logger.info(f"Connecting to Qdrant server at {settings.qdrant_host}:{settings.qdrant_port}")
-            _GLOBAL_QDRANT_CLIENT = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+            host = settings.qdrant_host
+            if host.startswith("https://") or host.startswith("http://"):
+                logger.info(f"Connecting to Qdrant Cloud at {host}")
+                _GLOBAL_QDRANT_CLIENT = QdrantClient(url=host, api_key=settings.qdrant_api_key)
+            else:
+                logger.info(f"Connecting to Qdrant server at {host}:{settings.qdrant_port}")
+                _GLOBAL_QDRANT_CLIENT = QdrantClient(host=host, port=settings.qdrant_port, api_key=settings.qdrant_api_key)
         # Register an atexit handler to close the client cleanly before interpreter shutdown
         try:
             atexit.register(_close_global_qdrant)
@@ -63,6 +68,10 @@ async def get_qdrant_client_async():
     return await asyncio.to_thread(get_qdrant_client)
 
 
+import threading
+
+_qdrant_process_lock = threading.Lock()
+
 @contextmanager
 def get_qdrant_client_ctx():
     """
@@ -92,25 +101,31 @@ def get_qdrant_client_ctx():
         return
 
     if settings.qdrant_mode == "local":
-        logger.info(f"Initializing transient local Qdrant client at {settings.qdrant_path}")
-        os.makedirs(settings.qdrant_path, exist_ok=True)
-        client = QdrantClient(path=settings.qdrant_path)
-        try:
-            yield client
-        finally:
-            logger.debug("Releasing Qdrant file storage lock")
+        with _qdrant_process_lock:
+            logger.info(f"Initializing transient local Qdrant client at {settings.qdrant_path}")
+            os.makedirs(settings.qdrant_path, exist_ok=True)
+            client = QdrantClient(path=settings.qdrant_path)
             try:
-                client.close()
-            except Exception:
-                pass
+                yield client
+            finally:
+                logger.debug("Releasing Qdrant file storage lock")
+                try:
+                    client.close()
+                except Exception:
+                    pass
     else:
         # For memory or server modes, cache the connection
         if settings.qdrant_mode == "memory":
             logger.info("Initializing in-memory Qdrant")
             _GLOBAL_QDRANT_CLIENT = QdrantClient(":memory:")
         else:
-            logger.info(f"Connecting to Qdrant server at {settings.qdrant_host}:{settings.qdrant_port}")
-            _GLOBAL_QDRANT_CLIENT = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+            host = settings.qdrant_host
+            if host.startswith("https://") or host.startswith("http://"):
+                logger.info(f"Connecting to Qdrant Cloud at {host}")
+                _GLOBAL_QDRANT_CLIENT = QdrantClient(url=host, api_key=settings.qdrant_api_key)
+            else:
+                logger.info(f"Connecting to Qdrant server at {host}:{settings.qdrant_port}")
+                _GLOBAL_QDRANT_CLIENT = QdrantClient(host=host, port=settings.qdrant_port, api_key=settings.qdrant_api_key)
             
         try:
             atexit.register(_close_global_qdrant)
@@ -230,7 +245,7 @@ class VectorStore:
                 for i, (vector, payload) in enumerate(zip(vectors, payloads)):
                     # Generate deterministic point ID based on source and index
                     source_url = payload.get("source_url", "")
-                    point_id = hashlib.md5(f"{source_url}_{i}".encode()).hexdigest()
+                    point_id = hashlib.md5(f"{source_url}_{i}".encode(), usedforsecurity=False).hexdigest()  # nosec B303
 
                     points.append(self._models.PointStruct(
                         id=point_id,
@@ -410,6 +425,30 @@ class VectorStore:
                 }
                 for hit in response.points
             ]
+
+    def delete_by_workspace(self, workspace_id: str):
+        """
+        Delete all points in the collection for a given workspace_id.
+        """
+        with self._get_client() as client:
+            if not client:
+                return
+            try:
+                client.delete(
+                    collection_name=self.collection_name,
+                    points_selector=self._models.Filter(
+                        must=[
+                            self._models.FieldCondition(
+                                key="workspace_id",
+                                match=self._models.MatchValue(value=workspace_id)
+                            )
+                        ]
+                    )
+                )
+                logger.info(f"Deleted vector points in collection {self.collection_name} for workspace: {workspace_id}")
+            except Exception as e:
+                logger.error(f"Error deleting vector points by workspace in Qdrant: {e}")
+
 
 
 def initialize_qdrant_collections() -> None:

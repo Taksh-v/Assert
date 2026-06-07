@@ -7,6 +7,7 @@ and verifies that we receive successful and properly formatted HTTP/SSE response
 import sys
 import json
 import asyncio
+import pytest
 from unittest.mock import MagicMock
 
 # Mock heavy/external modules to prevent boot/network errors
@@ -62,7 +63,14 @@ async def mock_acompletion(*args, **kwargs):
             choices = [Choice()]
         return MockResponse()
 
-litellm.acompletion = mock_acompletion
+
+@pytest.fixture(autouse=True)
+def patch_litellm_acompletion():
+    """Scope litellm.acompletion mock to individual tests so it doesn't leak globally."""
+    original = litellm.acompletion
+    litellm.acompletion = mock_acompletion
+    yield
+    litellm.acompletion = original
 
 from backend.core.vector_store import VectorStore
 VectorStore.search = MagicMock(return_value=[])

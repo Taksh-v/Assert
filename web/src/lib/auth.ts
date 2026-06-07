@@ -11,6 +11,10 @@ export interface WorkspaceInfo {
   role: string;
 }
 
+export function isAdminWorkspaceRole(role?: string | null): boolean {
+  return role === "owner" || role === "admin";
+}
+
 import { getBrowserApiBasePath } from "./config";
 
 const TOKEN_KEY = "assest_auth_token";
@@ -85,14 +89,18 @@ export function isAuthenticated(): boolean {
  * If none exists, fetches from /api/workspaces and sets the first one.
  */
 export async function ensureDefaultWorkspace(): Promise<WorkspaceInfo | null> {
-  const current = getActiveWorkspace();
-  if (current?.id) return current;
-
   try {
     const res = await apiFetch("/workspaces");
     if (!res.ok) return null;
-    const workspaces = await res.json();
+    const workspaces = await res.json() as WorkspaceInfo[];
+    
     if (workspaces && workspaces.length > 0) {
+      const current = getActiveWorkspace();
+      const stillExists = current ? workspaces.some(w => w.id === current.id) : false;
+      if (stillExists && current) {
+        return current;
+      }
+
       const defaultWs = {
         id: workspaces[0].id,
         name: workspaces[0].name,

@@ -1,3 +1,4 @@
+from datetime import datetime
 import logging
 import json
 from typing import Optional, Dict, Any, List
@@ -30,7 +31,9 @@ class SemanticCache:
             self.vector_store.create_collection(vector_size=vector_size)
             self._initialized = True
 
-    async def check_cache(self, workspace_id: str, question: str) -> Optional[Dict[str, Any]]:
+    async def check_cache(
+        self, workspace_id: str, question: str, session: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Check if a similar question has been answered before.
         """
@@ -46,10 +49,45 @@ class SemanticCache:
             )
             
             if results and results[0]["score"] > 0.95:
-                logger.info(f"Semantic cache hit! Similarity: {results[0]['score']}")
                 hit = results[0]
                 metadata = hit["metadata"]
                 
+                # Check for database-backed freshness if session is provided
+                if session:
+                    from backend.models.connector import Connector
+                    from sqlalchemy import select, func
+                    
+                    stmt = select(func.max(Connector.last_synced_at)).where(
+                        Connector.workspace_id == workspace_id
+                    )
+                    res = await session.execute(stmt)
+                    max_last_synced = res.scalar()
+                    
+                    created_at_str = metadata.get("created_at")
+                    
+                    if max_last_synced and isinstance(max_last_synced, datetime):
+                        if not created_at_str:
+                            logger.info("Semantic cache entry missing created_at timestamp. Invalidating legacy cache.")
+                            return None
+                        
+                        try:
+                            cache_created_at = datetime.fromisoformat(created_at_str)
+                            # Align timezones for comparison (ensure both are naive UTC datetimes)
+                            if max_last_synced.tzinfo is not None:
+                                max_last_synced = max_last_synced.replace(tzinfo=None)
+                            if cache_created_at.tzinfo is not None:
+                                cache_created_at = cache_created_at.replace(tzinfo=None)
+                            
+                            if max_last_synced > cache_created_at:
+                                logger.info(
+                                    f"Semantic cache stale. Workspace synced at {max_last_synced}, "
+                                    f"cache created at {cache_created_at}. Invalidating cache."
+                                )
+                                return None
+                        except Exception as te:
+                            logger.error(f"Error parsing semantic cache timestamps: {te}")
+                
+                logger.info(f"Semantic cache hit! Similarity: {results[0]['score']}")
                 return {
                     "answer": metadata.get("answer"),
                     "sources": json.loads(metadata.get("sources", "[]")),
@@ -81,6 +119,7 @@ class SemanticCache:
                 "question": question,
                 "answer": result.get("answer"),
                 "sources": json.dumps(result.get("sources", [])),
+                "created_at": datetime.utcnow().isoformat(),
                 "is_active": True # VectorStore search filters for is_active: True
             }]
             
@@ -92,3 +131,15 @@ class SemanticCache:
             logger.info(f"Stored result in semantic cache for: {question[:50]}...")
         except Exception as e:
             logger.error(f"Error setting semantic cache: {e}")
+
+    def purge_workspace_cache(self, workspace_id: str):
+        """
+        Delete all cache entries for a given workspace_id.
+        """
+        try:
+            self.vector_store.delete_by_workspace(workspace_id)
+            logger.info(f"Purged semantic cache for workspace: {workspace_id}")
+        except Exception as e:
+            logger.error(f"Error purging semantic cache: {e}")
+
+

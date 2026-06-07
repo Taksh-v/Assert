@@ -1,21 +1,25 @@
 "use client";
 
-import { Suspense, useState, useEffect, useMemo, useCallback } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { 
-  Search,
-  Settings2, 
-  Zap,
-  ShieldCheck,
-  Trash2,
-  Clock,
-  CheckCircle2,
+import {
   AlertCircle,
+  CheckCircle2,
+  Clock,
+  Database,
+  Loader2,
   RefreshCw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Zap,
 } from "lucide-react";
 
 import SourceSetupModal from "@/components/SourceSetupModal";
-import { apiFetch, getActiveWorkspace, ensureDefaultWorkspace } from "@/lib/auth";
+import ConnectorIcon from "@/components/ConnectorIcon";
+import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace } from "@/lib/auth";
 import { useSyncRunPolling } from "@/lib/syncRuns";
 import { parseUTCDate } from "@/lib/date";
 
@@ -37,6 +41,17 @@ interface SyncRun {
   error?: string | null;
 }
 
+interface DiscoveredItem {
+  id: string;
+  name: string;
+  type: string;
+  icon?: string | null;
+  last_modified?: string;
+  description?: string;
+  display_type?: string;
+  member_count?: number;
+}
+
 interface ConnectorMetadata {
   name: string;
   category: string;
@@ -49,35 +64,75 @@ const CONNECTOR_METADATA: Record<string, ConnectorMetadata> = {
   notion: {
     name: "Notion",
     category: "Productivity",
-    description: "Sync pages, databases, and enterprise workspaces.",
-    color: "#000000",
+    description: "Sync pages, databases, and team knowledge bases.",
+    color: "#111111",
     icon: "N",
   },
   google_drive: {
     name: "Google Drive",
     category: "Cloud Storage",
-    description: "Securely index Docs, Sheets, and company PDFs.",
+    description: "Index docs, sheets, and shared files.",
     color: "#4285F4",
     icon: "G",
   },
   slack: {
     name: "Slack",
     category: "Communication",
-    description: "Capture organizational knowledge from public channels.",
+    description: "Capture public channel knowledge and discussions.",
     color: "#4A154B",
     icon: "S",
   },
   github: {
     name: "GitHub",
     category: "Engineering",
-    description: "Index documentation, issues, and READMEs.",
+    description: "Index docs, issues, and repository context.",
     color: "#181717",
     icon: "H",
-  }
+  },
+  file_upload: {
+    name: "File Upload",
+    category: "Files",
+    description: "Upload local files (PDF, plain text, html, images, audio) directly.",
+    color: "#00F5FF",
+    icon: "F",
+  },
 };
 
-// Persistent session cache
 let globalConnectorsCache: Connector[] | null = null;
+
+function formatLastSync(isoString?: string) {
+  if (!isoString) return "Never synced";
+
+  try {
+    const date = parseUTCDate(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${Math.floor(diffHours / 24)}d ago`;
+  } catch {
+    return "Unknown";
+  }
+}
+
+function toneClass(status?: string) {
+  if (status === "active" || status === "connected" || status === "healthy" || status === "completed") {
+    return "border-emerald-500/20 bg-emerald-500/10 text-emerald-400";
+  }
+  if (status === "running" || status === "queued") {
+    return "border-blue-500/20 bg-blue-500/10 text-blue-400 animate-pulse";
+  }
+  if (status === "error" || status === "failed" || status === "offline") {
+    return "border-rose-500/20 bg-rose-500/10 text-rose-400";
+  }
+  if (status === "degraded" || status === "completed_with_errors") {
+    return "border-amber-500/20 bg-amber-500/10 text-amber-400";
+  }
+  return "border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-muted)]";
+}
 
 export default function ConnectorsPage() {
   return (
@@ -95,6 +150,9 @@ function ConnectorsContent() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [setupSource, setSetupSource] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [selectedType, setSelectedType] = useState<string>("notion");
+  const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
   const { startPolling } = useSyncRunPolling();
   const activeWorkspace = getActiveWorkspace();
 
@@ -105,10 +163,10 @@ function ConnectorsContent() {
         setConnectors([]);
         return;
       }
-      const workspaceId = activeWs.id;
-      const response = await apiFetch(`/api/connectors?workspace_id=${workspaceId}`);
+
+      const response = await apiFetch(`/api/connectors?workspace_id=${activeWs.id}`);
       if (response.ok) {
-        const data = await response.json() as Connector[];
+        const data = (await response.json()) as Connector[];
         setConnectors(data);
         globalConnectorsCache = data;
       }
@@ -119,17 +177,18 @@ function ConnectorsContent() {
     }
   }, []);
 
-  // Handle OAuth redirect params (from callback page fallback)
   useEffect(() => {
     const connected = searchParams.get("connected");
     const connectorId = searchParams.get("connector_id");
 
     if (connected && connectorId) {
       queueMicrotask(() => {
-        setNotification({ type: "success", message: `Successfully connected to ${CONNECTOR_METADATA[connected]?.name || connected}!` });
+        setNotification({
+          type: "success",
+          message: `Successfully connected to ${CONNECTOR_METADATA[connected.toLowerCase()]?.name || connected}.`,
+        });
         void fetchConnectors();
       });
-      // Clean URL
       window.history.replaceState({}, "", "/connectors");
     }
   }, [searchParams, fetchConnectors]);
@@ -139,27 +198,45 @@ function ConnectorsContent() {
       await ensureDefaultWorkspace();
       void fetchConnectors();
     }
+
     queueMicrotask(() => void init());
   }, [fetchConnectors]);
 
-  // Auto-dismiss notifications
   useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 5000);
-      return () => clearTimeout(timer);
-    }
+    if (!notification) return undefined;
+    const timer = setTimeout(() => setNotification(null), 5000);
+    return () => clearTimeout(timer);
   }, [notification]);
+
+  // Poll connectors status in the background when any of them are syncing
+  useEffect(() => {
+    const hasActiveSync = connectors.some((connector) => {
+      const status = connector.latest_sync?.status;
+      return status === "queued" || status === "running";
+    });
+
+    if (!hasActiveSync) return undefined;
+
+    const intervalId = setInterval(() => {
+      void fetchConnectors();
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [connectors, fetchConnectors]);
 
   const disconnectConnector = async (connectorId: string, connectorType: string) => {
     try {
       const response = await apiFetch(`/api/connectors/${connectorId}`, { method: "DELETE" });
       if (response.ok) {
-        setNotification({ type: "success", message: `${CONNECTOR_METADATA[connectorType]?.name || connectorType} disconnected` });
+        setNotification({
+          type: "success",
+          message: `${CONNECTOR_METADATA[connectorType]?.name || connectorType} disconnected.`,
+        });
         await fetchConnectors();
       }
     } catch (error) {
       console.error("Failed to disconnect:", error);
-      setNotification({ type: "error", message: "Failed to disconnect connector" });
+      setNotification({ type: "error", message: "Failed to disconnect connector." });
     }
   };
 
@@ -169,317 +246,482 @@ function ConnectorsContent() {
         method: "POST",
         body: JSON.stringify({}),
       });
+
       if (response.ok) {
-        const data = await response.json() as { sync_run_id: string; message?: string };
-        setNotification({ type: "success", message: data.message || "Sync started" });
+        const data = (await response.json()) as { sync_run_id: string; message?: string };
+        setNotification({ type: "success", message: data.message || "Sync started." });
         await fetchConnectors();
+
         startPolling(data.sync_run_id, {
           onSuccess: async (syncRun) => {
             await fetchConnectors();
             if (syncRun.status === "completed") {
-              setNotification({ type: "success", message: "Sync completed successfully" });
+              setNotification({ type: "success", message: "Sync completed successfully." });
             } else if (syncRun.status === "completed_with_errors") {
-              setNotification({ type: "success", message: "Sync completed with document errors" });
+              setNotification({ type: "success", message: "Sync completed with some document errors." });
             }
           },
           onError: async (errStr) => {
             await fetchConnectors();
             setNotification({ type: "error", message: errStr });
-          }
+          },
         });
       } else {
         setNotification({ type: "error", message: "Sync failed. Check backend logs." });
       }
     } catch {
-      setNotification({ type: "error", message: "Failed to trigger sync" });
+      setNotification({ type: "error", message: "Failed to trigger sync." });
     }
   };
 
-  const formatLastSync = (isoString?: string) => {
-    if (!isoString) return "Never";
-    try {
-      const date = parseUTCDate(isoString);
-      const now = new Date();
-      const diffMs = now.getTime() - date.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      if (diffMins < 1) return "Just now";
-      if (diffMins < 60) return `${diffMins}m ago`;
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours}h ago`;
-      const diffDays = Math.floor(diffHours / 24);
-      return `${diffDays}d ago`;
-    } catch {
-      return "Unknown";
-    }
-  };
+  const categoryOptions = useMemo(() => {
+    const categories = new Set(Object.values(CONNECTOR_METADATA).map((meta) => meta.category));
+    return ["All", ...Array.from(categories)];
+  }, []);
 
   const filteredConnectors = useMemo(() => {
-    return Object.keys(CONNECTOR_METADATA).filter(type => {
+    return Object.keys(CONNECTOR_METADATA).filter((type) => {
       const meta = CONNECTOR_METADATA[type];
-      const matchesSearch = meta.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                           meta.description.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch =
+        meta.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        meta.description.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === "All" || meta.category === selectedCategory;
       return matchesSearch && matchesCategory;
     });
   }, [searchQuery, selectedCategory]);
 
-  return (
-    <div className="flex-1 h-full bg-background overflow-y-auto relative custom-scrollbar">
-      {/* Premium Background Atmosphere */}
-      <div className="absolute top-0 left-0 right-0 h-[500px] bg-gradient-to-b from-blue-600/5 via-transparent to-transparent pointer-events-none" />
-      <div className="absolute top-20 right-20 h-64 w-64 bg-blue-500/10 rounded-full blur-[120px] pointer-events-none animate-pulse" />
+  const activeSelectedType = useMemo(() => {
+    if (filteredConnectors.includes(selectedType)) {
+      return selectedType;
+    }
+    return filteredConnectors[0] || "notion";
+  }, [filteredConnectors, selectedType]);
 
-      {/* Notification Toast */}
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDiscovered() {
+      const instance = connectors.find((connector) => connector.type.toLowerCase() === activeSelectedType.toLowerCase());
+      if (!instance || instance.status !== "active") {
+        setDiscoveredItems([]);
+        return;
+      }
+
+      setIsDiscovering(true);
+      try {
+        const response = await apiFetch(`/api/connectors/${instance.id}/discover`);
+        if (response.ok && !cancelled) {
+          const data = (await response.json()) as { items?: DiscoveredItem[] };
+          setDiscoveredItems(data.items || []);
+        } else if (!cancelled) {
+          setDiscoveredItems([]);
+        }
+      } catch (error) {
+        console.error("Failed to load discovered items:", error);
+        if (!cancelled) {
+          setDiscoveredItems([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsDiscovering(false);
+        }
+      }
+    }
+
+    void loadDiscovered();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSelectedType, connectors]);
+
+  const selectedMeta = CONNECTOR_METADATA[activeSelectedType];
+  const selectedInstance = connectors.find((connector) => connector.type.toLowerCase() === activeSelectedType.toLowerCase());
+  const selectedSyncStatus = selectedInstance?.latest_sync?.status;
+  const isSelectedActive = selectedInstance?.status === "active";
+  const isSelectedError = selectedInstance?.status === "error";
+  const isSelectedSyncing = selectedSyncStatus === "queued" || selectedSyncStatus === "running";
+  const selectedWorkspaceNameValue = selectedInstance?.config_summary?.workspace_name || selectedInstance?.config_summary?.team_name;
+  const selectedWorkspaceName = typeof selectedWorkspaceNameValue === "string" ? selectedWorkspaceNameValue : "";
+  const syncingCount = connectors.filter((connector) => {
+    const status = connector.latest_sync?.status;
+    return status === "queued" || status === "running";
+  }).length;
+  const failedCount = connectors.filter((connector) => connector.status === "error" || connector.latest_sync?.status === "failed").length;
+
+  return (
+    <div className="relative h-full overflow-y-auto bg-[var(--bg-root)] text-[var(--text-primary)]">
+      <div className="pointer-events-none absolute right-8 top-0 h-64 w-64 rounded-full bg-[var(--accent)]/10 blur-3xl" />
+      <div className="pointer-events-none absolute bottom-0 left-12 h-80 w-80 rounded-full bg-emerald-400/10 blur-3xl" />
+
       {notification && (
-        <div className={`fixed top-6 right-6 z-[200] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl border backdrop-blur-xl animate-in slide-in-from-top-4 duration-300 ${
-          notification.type === "success"
-            ? "bg-green-500/10 border-green-500/20 text-green-400"
-            : "bg-red-500/10 border-red-500/20 text-red-400"
-        }`}>
+        <div
+          className={`fixed right-5 top-5 z-[200] flex items-center gap-3 rounded-2xl border px-4 py-3 shadow-[var(--shadow-elevated)] ${
+            notification.type === "success"
+              ? "border-emerald-500/20 bg-emerald-950/85 text-emerald-400 backdrop-blur-xl"
+              : "border-rose-500/20 bg-rose-950/85 text-rose-400 backdrop-blur-xl"
+          }`}
+        >
           {notification.type === "success" ? (
-            <CheckCircle2 className="w-5 h-5" />
+            <CheckCircle2 className="h-5 w-5 shrink-0" />
           ) : (
-            <AlertCircle className="w-5 h-5" />
+            <AlertCircle className="h-5 w-5 shrink-0" />
           )}
-          <span className="text-sm font-bold">{notification.message}</span>
+          <span className="text-sm font-medium">{notification.message}</span>
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto p-12 space-y-12 relative z-10">
-        {!activeWorkspace?.id && (
-          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm font-bold text-amber-300">
-            No active workspace was found. Sign in again before connecting sources.
-          </div>
-        )}
-
-        {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
-          <div className="space-y-4">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-black uppercase tracking-widest text-blue-400">
-                <ShieldCheck className="w-3 h-3" />
-              Workspace Connectors
+      <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-6 px-6 py-6 md:px-8 md:py-8">
+        <header className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-[var(--shadow-elevated)] md:p-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl space-y-4">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+                <Sparkles className="h-3.5 w-3.5 text-[var(--accent)]" />
+                Source workspace
+              </div>
+              <div className="space-y-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-[var(--text-primary)] md:text-4xl">
+                  Connectors
+                </h1>
+                <p className="max-w-2xl text-sm leading-6 text-[var(--text-secondary)] md:text-[15px]">
+                  A structured view of every integration, its sync posture, and the resources it contributes to grounded answers.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+                  {connectors.length} configured
+                </span>
+                <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+                  {syncingCount} syncing
+                </span>
+                <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+                  {failedCount} need attention
+                </span>
+              </div>
             </div>
-            <h1 className="text-6xl font-black tracking-tighter leading-none">
-              Connect <span className="text-zinc-600">your</span><br/>
-              <span className="gradient-text">sources.</span>
-            </h1>
-          </div>
 
-          {/* Search & Filter Bar */}
-          <div className="flex items-center gap-4 bg-white/5 p-2 rounded-2xl border border-white/10 backdrop-blur-md w-full max-w-md shadow-2xl">
-            <div className="flex-1 flex items-center gap-3 px-4">
-              <Search className="w-4 h-4 text-zinc-500" />
-              <input 
-                type="text" 
-                placeholder="Search sources..." 
-                className="bg-transparent border-none text-sm text-white focus:outline-none w-full font-medium"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
+            <div className="w-full max-w-2xl rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-root)] p-4 shadow-[var(--shadow-card)]">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                <div className="flex flex-1 items-center gap-3 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3 focus-within:border-[var(--border-focus)] transition-colors">
+                  <Search className="h-4 w-4 text-[var(--text-muted)]" />
+                  <input
+                    type="text"
+                    placeholder="Search integrations"
+                    className="w-full border-none bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <select
+                    className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-3 text-sm font-medium text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none cursor-pointer"
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                  >
+                    {categoryOptions.map((category) => (
+                      <option key={category} value={category} className="bg-[var(--bg-root)]">
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
-            <div className="h-8 w-[1px] bg-white/10" />
-            <select 
-              className="bg-transparent text-xs font-bold text-zinc-400 px-4 focus:outline-none cursor-pointer hover:text-white transition-colors"
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-            >
-              <option>All</option>
-              <option>Productivity</option>
-              <option>Cloud Storage</option>
-              <option>Communication</option>
-              <option>Engineering</option>
-            </select>
           </div>
-        </div>
+        </header>
 
-        {/* Content Grid */}
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-72 rounded-[2rem] bg-white/5 animate-pulse border border-white/5" />
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredConnectors.map((type) => {
-              const meta = CONNECTOR_METADATA[type];
-              const instance = connectors.find(c => c.type === type);
-              const isActive = instance?.status === "active";
-              const isError = instance?.status === "error";
-              const syncStatus = instance?.latest_sync?.status;
-              const isSyncing = syncStatus === "queued" || syncStatus === "running";
-              const workspaceNameValue = instance?.config_summary?.workspace_name || instance?.config_summary?.team_name;
-              const workspaceName = typeof workspaceNameValue === "string" ? workspaceNameValue : "";
+        <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+            <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Available integrations</p>
+                <p className="mt-2 text-sm text-[var(--text-secondary)]">Select a source to inspect its current status.</p>
+              </div>
+              <Database className="h-4 w-4 text-[var(--accent)]" />
+            </div>
 
-              return (
-                <div 
-                  key={type} 
-                  className="glass-card group relative flex flex-col p-8 hover:-translate-y-2 transition-all duration-500 border-white/5 hover:border-white/20"
-                >
-                  <div className="flex items-start justify-between">
-                    <div 
-                      className="h-14 w-14 rounded-2xl flex items-center justify-center text-xl font-black text-white shadow-2xl transition-transform group-hover:scale-110 duration-500"
-                      style={{ backgroundColor: meta.color, boxShadow: `0 10px 30px ${meta.color}44` }}
+            <div className="mt-4 space-y-2">
+              {isLoading ? (
+                <div className="space-y-3 py-4">
+                  {[1, 2, 3, 4].map((index) => (
+                    <div key={index} className="h-20 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-root)] animate-pulse" />
+                  ))}
+                </div>
+              ) : filteredConnectors.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-root)] px-4 py-8 text-center">
+                  <p className="text-sm font-medium text-[var(--text-primary)]">No integrations found.</p>
+                  <p className="mt-2 text-sm text-[var(--text-secondary)]">Try a different search or category.</p>
+                </div>
+              ) : (
+                filteredConnectors.map((type) => {
+                  const meta = CONNECTOR_METADATA[type];
+                  const instance = connectors.find((connector) => connector.type.toLowerCase() === type.toLowerCase());
+                  const syncStatus = instance?.latest_sync?.status;
+                  const isSyncing = syncStatus === "queued" || syncStatus === "running";
+                  const isActive = instance?.status === "active";
+                  const isError = instance?.status === "error";
+                  const isSelected = activeSelectedType === type;
+
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => setSelectedType(type)}
+                      className={`relative flex w-full items-center justify-between gap-3 rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:bg-[var(--bg-surface-hover)] ${
+                        isSelected
+                          ? "border-[var(--border-focus)] bg-[var(--accent-muted)] shadow-[var(--shadow-glow)]"
+                          : "border-[var(--border-subtle)] bg-[var(--bg-surface)]"
+                      }`}
                     >
-                      {meta.icon}
-                    </div>
-                    
-                    <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
-                      isSyncing
-                        ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        : isActive 
-                        ? "bg-green-500/10 text-green-400 border border-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.2)]" 
-                        : isError
-                        ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                        : "bg-zinc-800/50 text-zinc-600 border border-white/5"
-                    }`}>
-                      {isSyncing ? (
-                        <>
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                          Syncing
-                        </>
-                      ) : isActive ? (
-                        <>
-                          <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                          Connected
-                        </>
-                      ) : isError ? (
-                        <>
-                          <div className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                          Error
-                        </>
-                      ) : (
-                        "Ready"
-                      )}
-                    </div>
-                  </div>
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-primary)] shadow-sm">
+                          <ConnectorIcon type={type} className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{meta.name}</p>
+                          <p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{meta.category}</p>
+                          <p className="mt-1 line-clamp-2 text-xs text-[var(--text-muted)]">{meta.description}</p>
+                        </div>
+                      </div>
 
-                  <div className="mt-8 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-bold text-white group-hover:text-blue-400 transition-colors">{meta.name}</h3>
-                      <span className="text-[8px] font-black text-zinc-600 uppercase tracking-widest">{meta.category}</span>
-                    </div>
-                    <p className="text-xs text-zinc-500 font-medium leading-relaxed line-clamp-2">
-                      {meta.description}
-                    </p>
-                    {workspaceName ? (
-                      <p className="text-[10px] text-blue-400/60 font-bold truncate">
-                        {workspaceName}
-                      </p>
-                    ) : null}
-                  </div>
+                      <div className="flex shrink-0 flex-col items-end gap-2">
+                        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${toneClass(syncStatus || instance?.status)}`}>
+                          {syncStatus || instance?.status || "inactive"}
+                        </span>
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full ${
+                            isSyncing ? "bg-blue-500" : isActive ? "bg-emerald-500" : isError ? "bg-rose-500" : "bg-slate-300"
+                          }`}
+                        />
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
 
-                  <div className="mt-auto pt-8 flex items-center justify-between">
-                    <div className="flex flex-col">
-                      <span className="text-[9px] font-black text-zinc-600 uppercase tracking-tighter">
-                        {isActive ? "Last Sync" : "Status"}
-                      </span>
-                      <span className="text-[10px] font-bold text-zinc-400 flex items-center gap-1">
-                        {isSyncing ? (
-                          <>
-                            <RefreshCw className="w-3 h-3 animate-spin" />
-                            Running
-                          </>
-                        ) : isActive ? (
-                          <>
-                            <Clock className="w-3 h-3" />
-                            {formatLastSync(instance?.last_synced_at)}
-                          </>
-                        ) : (
-                          "Not Setup"
-                        )}
-                      </span>
+          <section className="space-y-6">
+            {!activeWorkspace?.id ? (
+              <div className="rounded-[28px] border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700 shadow-[var(--shadow-card)]">
+                No active workspace was found. Select a workspace before configuring connectors.
+              </div>
+            ) : (
+              <>
+                <div className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-[var(--shadow-elevated)]">
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex min-w-0 items-start gap-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-primary)] shadow-sm">
+                        <ConnectorIcon type={activeSelectedType} className="h-6 w-6" />
+                      </div>
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{selectedMeta.name}</h2>
+                          <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+                            {selectedMeta.category}
+                          </span>
+                          <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${toneClass(selectedSyncStatus || selectedInstance?.status)}`}>
+                            {selectedSyncStatus || selectedInstance?.status || "inactive"}
+                          </span>
+                        </div>
+                        <p className="max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
+                          {selectedMeta.description}
+                        </p>
+                        {selectedWorkspaceName ? (
+                          <p className="text-sm text-[var(--text-muted)]">
+                            Workspace scope: <span className="font-medium text-[var(--text-primary)]">{selectedWorkspaceName}</span>
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
-                    
-                    <div className="flex items-center gap-2">
-                      {isActive && (
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isSelectedActive && selectedInstance ? (
                         <>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); resyncConnector(instance!.id); }}
-                            disabled={isSyncing}
-                            className="h-10 w-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors border border-white/5"
-                            title="Re-sync"
+                          <button
+                            onClick={() => resyncConnector(selectedInstance.id)}
+                            disabled={isSelectedSyncing}
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            <RefreshCw className="w-3.5 h-3.5 text-zinc-400" />
+                            <RefreshCw className={`h-4 w-4 ${isSelectedSyncing ? "animate-spin text-[var(--accent)]" : "text-[var(--text-muted)]"}`} />
+                            Sync now
                           </button>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); disconnectConnector(instance!.id, type); }}
-                            className="h-10 w-10 rounded-xl bg-zinc-800 hover:bg-red-500/20 flex items-center justify-center transition-colors border border-white/5 hover:border-red-500/30"
-                            title="Disconnect"
+                          <button
+                            onClick={() => disconnectConnector(selectedInstance.id, selectedType)}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/20 bg-rose-950/20 px-4 py-2 text-sm font-medium text-rose-400 transition hover:bg-rose-950/40 hover:border-rose-500/30 cursor-pointer"
                           >
-                            <Trash2 className="w-3.5 h-3.5 text-zinc-400 hover:text-red-400" />
+                            <Trash2 className="h-4 w-4" />
+                            Disconnect
                           </button>
                         </>
-                      )}
-                      <button 
-                        onClick={() => setSetupSource(type)}
-                        disabled={!activeWorkspace?.id}
-                        className={`h-10 px-6 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 flex items-center gap-2 ${
-                          isActive
-                            ? "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-white/5"
-                            : "bg-white text-black hover:bg-blue-500 hover:text-white shadow-xl shadow-white/5"
-                        } disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-black`}
+                      ) : null}
+
+                      <button
+                        onClick={() => setSetupSource(selectedType)}
+                        className="inline-flex items-center gap-2 rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--accent-hover)]"
                       >
-                        {isActive ? (
-                          <>
-                            <Settings2 className="w-3.5 h-3.5" />
-                            Manage
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="w-3.5 h-3.5" />
-                            Connect
-                          </>
-                        )}
+                        {isSelectedActive ? <Settings2 className="h-4 w-4" /> : <Zap className="h-4 w-4" />}
+                        {isSelectedActive ? "Manage source" : "Connect source"}
                       </button>
                     </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
 
-        {/* Operational Footer */}
-        <div className="bg-white/[0.02] border border-white/5 rounded-[2.5rem] p-12 flex flex-col md:flex-row items-center justify-between gap-12 relative overflow-hidden group">
-           <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-blue-500/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-1000" />
-           <div className="space-y-6 relative z-10">
-              <div className="flex items-center gap-4">
-                 <div className="h-12 w-12 rounded-2xl bg-zinc-900 border border-white/10 flex items-center justify-center">
-                    <ShieldCheck className="w-6 h-6 text-blue-500" />
-                 </div>
-                 <h2 className="text-2xl font-black tracking-tight">Connector Operations</h2>
-              </div>
-              <p className="text-sm text-zinc-500 font-medium max-w-xl leading-relaxed">
-                 Connector configs are stored server-side and sync status is reported from backend runs. Keep this page focused on sources that are actually connected to the active workspace.
-              </p>
-           </div>
-           <div className="flex gap-8 items-center relative z-10">
-              <div className="text-center">
-                 <p className="text-2xl font-black text-white">{connectors.length}</p>
-                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Configured</p>
-              </div>
-              <div className="h-10 w-[1px] bg-white/10" />
-              <div className="text-center">
-                 <p className="text-2xl font-black text-white">{connectors.filter(c => c.latest_sync?.status === "running" || c.latest_sync?.status === "queued").length}</p>
-                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Syncing</p>
-              </div>
-              <div className="h-10 w-[1px] bg-white/10" />
-              <div className="text-center">
-                 <p className="text-2xl font-black text-white">{connectors.filter(c => c.status === "active").length}</p>
-                 <p className="text-[9px] font-black text-zinc-600 uppercase tracking-widest">Active</p>
-              </div>
-           </div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Connection state</p>
+                        <p className="mt-3 text-lg font-semibold text-[var(--text-primary)]">
+                          {isSelectedSyncing ? "Sync running" : isSelectedActive ? "Active" : isSelectedError ? "Error" : "Not configured"}
+                        </p>
+                      </div>
+                      <ShieldCheck className="h-5 w-5 text-[var(--accent)]" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Indexed documents</p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-[var(--text-primary)]">
+                          {isSelectedActive ? (selectedInstance?.document_count ?? 0) : "—"}
+                        </p>
+                      </div>
+                      <Database className="h-5 w-5 text-[var(--accent)]" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Last sync</p>
+                        <p className="mt-3 truncate text-lg font-semibold text-[var(--text-primary)]">
+                          {isSelectedSyncing ? "Running..." : formatLastSync(selectedInstance?.last_synced_at)}
+                        </p>
+                      </div>
+                      <Clock className="h-5 w-5 text-[var(--accent)]" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-card)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Workspace sources</p>
+                        <p className="mt-3 text-3xl font-semibold tracking-tight text-[var(--text-primary)]">{connectors.length}</p>
+                      </div>
+                      <Sparkles className="h-5 w-5 text-[var(--accent)]" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+                  <div className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-[var(--shadow-card)]">
+                    <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-4">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Grounded resources</p>
+                        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--text-primary)]">What this connector is feeding into the workspace.</h3>
+                      </div>
+                      <Database className="h-5 w-5 text-[var(--accent)]" />
+                    </div>
+
+                    <div className="mt-4">
+                      {isDiscovering ? (
+                        <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-root)] py-10 text-sm text-[var(--text-secondary)]">
+                          <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" />
+                          Scanning indexed resources
+                        </div>
+                      ) : !isSelectedActive ? (
+                        <div className="rounded-2xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-root)] px-5 py-10 text-center">
+                          <p className="text-sm font-medium text-[var(--text-primary)]">Connect this source to preview indexed content.</p>
+                          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                            Discovery results and resource previews appear here once the connector is active.
+                          </p>
+                        </div>
+                      ) : discoveredItems.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-root)] px-5 py-10 text-center">
+                          <p className="text-sm font-medium text-[var(--text-primary)]">No indexed files or channels found.</p>
+                          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                            The connector is active, but discovery hasn&apos;t surfaced any content yet.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {discoveredItems.slice(0, 8).map((item) => (
+                            <div
+                              key={item.id}
+                              className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-root)] px-4 py-3 transition hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)]"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  {item.icon ? <span className="text-sm">{item.icon}</span> : null}
+                                  <p className="truncate text-sm font-medium text-[var(--text-primary)]">{item.name}</p>
+                                </div>
+                                <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                                  {item.display_type || item.type}
+                                  {item.last_modified ? ` · ${formatLastSync(item.last_modified)}` : ""}
+                                </p>
+                                {item.description ? <p className="mt-1 line-clamp-2 text-xs text-[var(--text-muted)]">{item.description}</p> : null}
+                              </div>
+                              <span className="shrink-0 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-root)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+                                {item.member_count !== undefined ? `${item.member_count} members` : "Indexed"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="rounded-[28px] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-[var(--shadow-card)]">
+                      <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-4">
+                        <Clock className="h-4 w-4 text-[var(--text-muted)]" />
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">Synchronization log</p>
+                          <h3 className="mt-1 text-base font-semibold tracking-tight text-[var(--text-primary)]">Pipeline history</h3>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 space-y-4 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[var(--text-secondary)] font-mono text-[11px] uppercase tracking-wider">Latest ingestion sync</span>
+                          <span className="font-mono text-[11px] font-medium text-[var(--text-primary)]">
+                            {isSelectedSyncing ? "Running..." : formatLastSync(selectedInstance?.last_synced_at)}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[var(--text-secondary)] font-mono text-[11px] uppercase tracking-wider">Current status</span>
+                          <span className={`rounded-full border px-2.5 py-0.5 text-[9px] font-mono font-semibold uppercase tracking-[0.16em] ${toneClass(selectedSyncStatus || selectedInstance?.status)}`}>
+                            {selectedSyncStatus || selectedInstance?.status || "inactive"}
+                          </span>
+                        </div>
+
+                        {selectedInstance?.latest_sync?.error && (
+                          <div className="rounded-2xl border border-rose-500/20 bg-rose-950/20 p-4 text-sm leading-6 text-rose-400 font-mono">
+                            {selectedInstance.latest_sync.error}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
         </div>
       </div>
 
       {setupSource && (
-        <SourceSetupModal 
+        <SourceSetupModal
           type={setupSource}
           metadata={CONNECTOR_METADATA[setupSource]}
           workspaceId={activeWorkspace?.id || ""}
           onClose={() => setSetupSource(null)}
-          onConnect={() => { fetchConnectors(); setNotification({ type: "success", message: "Connector synced successfully!" }); }}
+          onConnect={() => {
+            void fetchConnectors();
+            setNotification({ type: "success", message: "Sync started in background." });
+          }}
         />
       )}
     </div>

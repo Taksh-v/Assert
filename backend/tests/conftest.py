@@ -7,6 +7,34 @@ sys.modules["presidio_anonymizer"] = MagicMock()
 
 import pytest
 
+# Save the real SharedLLMClient.chat_completion BEFORE any test file is imported.
+# test_supervisor_routing.py replaces it at module-level, which runs during collection.
+# Saving here (conftest is always imported first) lets us restore the original per-test.
+try:
+    from backend.core.llm_impl import SharedLLMClient as _SharedLLMClient
+    _REAL_CHAT_COMPLETION = _SharedLLMClient.__dict__.get("chat_completion")
+except Exception:
+    _REAL_CHAT_COMPLETION = None
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_llm_client(request):
+    """Restore SharedLLMClient.chat_completion before each test.
+    
+    test_supervisor_routing.py replaces it at module import time with an 
+    AsyncMock(side_effect=Exception("Mock offline error")).
+    """
+    if "test_supervisor_routing" in request.node.nodeid:
+        yield
+        return
+
+    if _REAL_CHAT_COMPLETION is not None:
+        _SharedLLMClient.chat_completion = _REAL_CHAT_COMPLETION
+    yield
+    if _REAL_CHAT_COMPLETION is not None:
+        _SharedLLMClient.chat_completion = _REAL_CHAT_COMPLETION
+
+
 from backend.agents.harness import TestHarness
 import os
 

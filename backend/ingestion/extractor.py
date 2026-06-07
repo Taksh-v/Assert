@@ -35,6 +35,18 @@ class EntityExtractor:
         if not text or len(text) < 50:
             return {"entities": [], "topics": [], "keywords": [], "summary": ""}
 
+        # Representative sampling for large documents to preserve global meaning
+        if len(text) > 8000:
+            part1 = text[:3000]
+            part3 = text[-2000:]
+            # Sample middle parts
+            mid_len = len(text) - 5000
+            mid1 = text[3000 + int(mid_len * 0.25):3000 + int(mid_len * 0.25) + 1000]
+            mid2 = text[3000 + int(mid_len * 0.60):3000 + int(mid_len * 0.60) + 1000]
+            sampled_text = f"{part1}\n\n[... SECTION OMITTED ...]\n\n{mid1}\n\n[... SECTION OMITTED ...]\n\n{mid2}\n\n[... SECTION OMITTED ...]\n\n{part3}"
+        else:
+            sampled_text = text
+
         prompt = f"""
         Analyze the following text and extract semantic metadata for an enterprise knowledge base.
         
@@ -77,7 +89,7 @@ class EntityExtractor:
         }}
         
         Text:
-        {text[:4000]}
+        {sampled_text[:8000]}
         
         JSON Output:
         """

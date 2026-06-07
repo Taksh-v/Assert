@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # ── App ──────────────────────────────────────────────
     app_env: str = Field(default="development", description="development | production")
     app_secret_key: str = Field(default="change-me-to-a-random-64-char-string")
-    app_host: str = Field(default="0.0.0.0")
+    app_host: str = Field(default="127.0.0.1")
     app_port: int = Field(default=8000)
     app_version: str = Field(default="0.1.0")
     sql_echo: bool = Field(
@@ -51,6 +51,7 @@ class Settings(BaseSettings):
         description="'local' for file-based (dev), 'server' for remote Qdrant, 'memory' for ephemeral",
     )
     qdrant_path: str = Field(default="./data/qdrant")
+    qdrant_api_key: Optional[str] = Field(default=None, description="API key for Qdrant Cloud authentication")
     # Qdrant performance tuning
     qdrant_upsert_batch_size: int = Field(default=256, description="Preferred batch size when upserting points to Qdrant")
     qdrant_write_concurrency: int = Field(default=2, description="Number of concurrent threads to use for large upsert operations")
@@ -75,6 +76,30 @@ class Settings(BaseSettings):
     )
     openrouter_retry_attempts: int = Field(default=3, description="Number of retry attempts per model")
     openrouter_retry_backoff_base: float = Field(default=0.5, description="Base backoff in seconds")
+    openrouter_prompt_cache_retention: str = Field(
+        default="in_memory",
+        description="Prompt cache retention policy passed to supported providers",
+    )
+    llm_default_max_output_tokens_fast: int = Field(
+        default=192,
+        description="Default completion budget for fast/control-plane model calls",
+    )
+    llm_default_max_output_tokens_smart: int = Field(
+        default=384,
+        description="Default completion budget for smart generation model calls",
+    )
+    llm_request_timeout: float = Field(
+        default=5.0,
+        description="Timeout in seconds for LLM completion requests",
+    )
+    llm_router_max_output_tokens: int = Field(
+        default=96,
+        description="Token cap for intent/routing classification calls",
+    )
+    llm_verifier_max_output_tokens: int = Field(
+        default=128,
+        description="Token cap for verification and other structured control-plane calls",
+    )
 
     # ── Langfuse Observability ──────────────────────────
     langfuse_public_key: Optional[str] = Field(default="pk-lf-public", alias="LANGFUSE_PUBLIC_KEY")
@@ -140,7 +165,31 @@ class Settings(BaseSettings):
 
     # ── Agent Orchestration ──────────────────────────────
     enable_multi_agent: bool = Field(default=True, description="Enable LangGraph-based multi-agent orchestration")
-    
+    enable_online_evaluations: bool = Field(
+        default=False,
+        description="Enable expensive online faithfulness/relevance scoring in the request path",
+    )
+    online_evaluation_sample_rate: float = Field(
+        default=0.05,
+        description="Sampling rate for online evaluation when enabled",
+    )
+    enable_hyde: bool = Field(
+        default=True,
+        description="Enable HyDE query expansion when retrieval confidence is weak",
+    )
+    hyde_min_query_words: int = Field(
+        default=6,
+        description="Minimum query length before HyDE expansion can trigger",
+    )
+    enable_graph_retrieval: bool = Field(
+        default=True,
+        description="Enable graph-based retrieval augmentation",
+    )
+    crag_skip_high_confidence_threshold: float = Field(
+        default=0.82,
+        description="If top retrieval confidence is above this threshold, skip CRAG verification",
+    )
+
     # ── Worker Pool ──────────────────────────────────────
     enable_workers: bool = Field(default=True)
     worker_workspace_id: str = Field(default="default_workspace")

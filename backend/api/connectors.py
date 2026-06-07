@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.core.database import get_db
@@ -193,6 +193,8 @@ async def create_connector(
     """
     from sqlalchemy import select
 
+    import uuid
+
     # Dedup: check if connector already exists for this workspace+type
     stmt = select(Connector).where(
         Connector.workspace_id == workspace_id,
@@ -200,6 +202,12 @@ async def create_connector(
     )
     result = await db.execute(stmt)
     existing = result.scalars().first()
+
+    connector_id = existing.id if existing else str(uuid.uuid4())
+    
+    # Auto configure local storage for manually uploaded files
+    if request.type == ConnectorType.FILE_UPLOAD:
+        request.config = {"upload_dir": f"data/uploads/{workspace_id}/{connector_id}"}
 
     encrypted_config = encrypt_config(request.config or {})
 
@@ -211,6 +219,7 @@ async def create_connector(
         return serialize_connector(existing, await _latest_sync_for_connector(db, existing.id))
 
     new_connector = Connector(
+        id=connector_id,
         workspace_id=workspace_id,
         type=request.type,
         config=encrypted_config
@@ -459,9 +468,68 @@ async def get_auth_url(
                 f"?client_id={settings.slack_client_id}"
                 f"&scope={scopes}"
                 f"&redirect_uri={settings.slack_redirect_uri}"
-                f"&state={create_oauth_state(workspace_id or 'default-workspace')}"
             ),
             "configured": True,
         }
 
     raise HTTPException(status_code=400, detail=f"OAuth not supported for '{source_type}'. Supported: notion, google_drive, slack")
+
+
+@router.post("/connectors/{connector_id}/upload")
+async def upload_file(
+    connector_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    import os
+
+    # 1. Fetch connector & check workspace access
+    stmt = select(Connector).where(Connector.id == connector_id)
+    connector = (await db.execute(stmt)).scalars().first()
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+        
+    await verify_workspace_access(connector.workspace_id, db, current_user)
+    
+    # 2. Get upload directory path
+    try:
+        config = decrypt_config(connector.config)
+    except:
+        config = connector.config or {}
+        
+    upload_dir = config.get("upload_dir")
+    if not upload_dir:
+        upload_dir = f"data/uploads/{connector.workspace_id}/{connector.id}"
+        config["upload_dir"] = upload_dir
+        connector.config = encrypt_config(config)
+        await db.flush()
+        
+    # Create dir if not exists
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # 3. Sanitize filename to prevent path traversal
+    safe_filename = os.path.basename(file.filename)
+    if not safe_filename:
+        raise HTTPException(status_code=400, detail="Invalid file name")
+        
+    file_path = os.path.join(upload_dir, safe_filename)
+    
+    # 4. Read file content and enforce strict 50MB limit before writing to disk
+    MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+    contents = await file.read()
+    if len(contents) > MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="File size exceeds maximum ingestion limit (50MB)"
+        )
+
+    # 5. Save file bytes to upload directory
+    try:
+        with open(file_path, "wb") as f:
+            f.write(contents)
+    except Exception as e:
+        logger.error(f"Failed to save uploaded file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        
+    return {"status": "success", "filename": safe_filename}

@@ -35,53 +35,41 @@ class IntentClassification(BaseModel):
 
 class SupervisorAgent:
     """
-    Acts as the main entry point for queries. Evaluates intent and
-    decides which specialist agent/orchestrator should handle the request.
+    LLM-based intent classifier for non-trivial queries.
+
+    Called ONLY by AdaptiveRouter after its own heuristics have been
+    exhausted, so this class intentionally does NOT duplicate heuristic
+    checks (greetings, action verbs, factual prefixes, comparison tokens).
     """
 
     def __init__(self):
-        self.client = LLMClient(model_type="smart")
+        self.client = LLMClient(model_type="fast")
 
     async def classify_intent(self, query: str) -> IntentClassification:
-        """Analyze query to determine the best reasoning path."""
-        # Fast-path heuristics to avoid LLM call if possible
-        lower_query = query.lower().strip()
-        if len(lower_query.split()) < 3 and "?" not in lower_query:
-            if lower_query in ["hi", "hello", "thanks", "ok"]:
-                return IntentClassification(
-                    intent=QueryIntent.CONVERSATIONAL,
-                    reasoning="Simple greeting or acknowledgment"
-                )
+        """Classify query intent via LLM. Heuristics live in AdaptiveRouter."""
 
-        prompt = f"""Classify the intent of the following user query to route it to the correct AI specialist.
-
-Intent Categories:
-1. quick_lookup: A direct factual question that likely needs only one quick search (e.g., "What is our PTO policy?", "Who is the CEO?").
-2. deep_analysis: A complex question requiring multi-step research and synthesis (e.g., "Why did our Q3 revenue drop?", "Design an architecture for X").
-3. comparison: Explicitly asks to compare two or more things (e.g., "Compare React vs Vue based on our guidelines").
-4. action_request: Asks the AI to DO something in an external system (e.g., "Create a GitHub issue", "Send a Slack message").
-5. conversational: Chit-chat or follow-ups that don't need external knowledge (e.g., "Thanks", "Can you explain that more simply?").
+        prompt = f"""Classify this query's intent. Pick ONE category:
+- quick_lookup: simple factual question (1 search needed)
+- deep_analysis: complex, multi-step research required
+- comparison: explicitly comparing 2+ things
+- action_request: user wants an external action performed
+- conversational: chit-chat, follow-up, or clarification
 
 Query: "{query}"
 
-Output ONLY valid JSON matching this schema:
-{{
-  "intent": "quick_lookup|deep_analysis|comparison|action_request|conversational",
-  "reasoning": "Brief explanation",
-  "required_tools": ["github", "slack"] // only if explicitly requested, otherwise empty list
-}}"""
+Respond with ONLY valid JSON: {{"intent":"...","reasoning":"...","required_tools":[]}}"""
 
         try:
-            response = self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a highly efficient query router. Output ONLY valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                model=settings.openrouter_smart_model,
-                temperature=0
+            content = await self.client.chat_completion(
+                system_prompt="Output ONLY valid JSON.",
+                user_prompt=prompt,
+                temperature=0,
+                max_tokens=64,
+                prompt_cache_key="supervisor-intent-classifier:v1",
             )
             
-            content = response.choices[0].message.content or ""
+            if not content:
+                raise ValueError("Empty response from LLM")
             
             # Try to load directly first
             try:
@@ -114,4 +102,3 @@ Output ONLY valid JSON matching this schema:
                 intent=QueryIntent.QUICK_LOOKUP,
                 reasoning=f"Error parsing LLM response: {e}"
             )
-

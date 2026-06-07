@@ -55,7 +55,7 @@ async def verify_phase1():
         # Run ingestion
         for doc in test_docs:
             logger.info(f"Ingesting: {doc.title}")
-            await pipeline._process_document(doc, workspace_id)
+            await pipeline.runner.process(doc, workspace_id)
         
         # 2. Verification: Database Records
         async with async_session() as session:

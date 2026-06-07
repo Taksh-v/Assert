@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { 
+import {
   Bot, 
   User, 
   Loader2, 
@@ -10,13 +10,12 @@ import {
   Activity, 
   BookOpen, 
   Cpu, 
-  ChevronRight, 
-  ChevronLeft,
   ShieldCheck,
   Award,
-  Workflow
+  Workflow,
+  AlertCircle
 } from "lucide-react";
-import { apiFetch, getActiveWorkspace } from "@/lib/auth";
+import { apiFetch, getActiveWorkspace, isAdminWorkspaceRole } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import GroundingIndicator from "@/components/GroundingIndicator";
@@ -30,6 +29,12 @@ interface CitationSource {
   section_heading?: string;
   confidence?: number;
   verified?: boolean;
+}
+
+interface UserProfile {
+  tone?: string;
+  complexity?: string;
+  expertise?: string;
 }
 
 interface Message {
@@ -46,6 +51,8 @@ interface Message {
   relevance_score?: number;
   eval_reasoning?: string;
   response_time_ms?: number;
+  disclaimer?: string;
+  user_profile?: UserProfile;
 }
 
 interface TracePhase {
@@ -54,7 +61,16 @@ interface TracePhase {
   duration_ms?: number;
   detail?: string;
   description: string;
-  metadata?: Record<string, any>;
+  metadata?: TraceMetadata;
+}
+
+interface TraceMetadata {
+  tier?: string;
+  intent?: string;
+  sources_found?: number;
+  faithfulness?: number | null;
+  relevance?: number | null;
+  reasoning?: string | null;
 }
 
 function buildMessageTrace(
@@ -87,7 +103,7 @@ function buildMessageTrace(
         duration = endVal - live.start;
       }
       
-      let metadata: Record<string, any> | undefined = undefined;
+      let metadata: TraceMetadata | undefined = undefined;
       if (p.key === "routing" && msg.tier) {
         metadata = { tier: msg.tier, intent: msg.intent };
       } else if (p.key === "retrieval" && msg.citations) {
@@ -103,20 +119,19 @@ function buildMessageTrace(
       return {
         name: p.name,
         description: p.description,
-        status: live.status as any,
+        status: live.status as TracePhase["status"],
         duration_ms: live.status === "pending" || live.status === "skipped" ? undefined : duration,
         detail: live.detail,
         metadata
       };
     } else {
       const tier = msg.tier || "fast_rag";
-      const isDirect = tier === "direct";
       const isSwarm = tier === "full_swarm" || tier === "tool_exec";
       const isRag = tier === "fast_rag";
 
       let status: "pending" | "running" | "completed" | "failed" | "skipped" = "completed";
       let detail = "";
-      let metadata: Record<string, any> | undefined = undefined;
+      let metadata: TraceMetadata | undefined = undefined;
       let duration: number | undefined = undefined;
 
       if (p.key === "retrieval" || p.key === "verification") {
@@ -182,7 +197,7 @@ export default function ChatIdPage() {
   const [isConvLoading, setIsConvLoading] = useState(true);
   const [convTitle, setConvTitle] = useState("Conversation");
   const [thinkingLogs, setThinkingLogs] = useState<string[]>([]);
-  const [showInspector, setShowInspector] = useState(true);
+  const isAdmin = isAdminWorkspaceRole(getActiveWorkspace()?.role);
   const [activeLensTab, setActiveLensTab] = useState<"bi" | "trace" | "signals">("bi");
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [liveTrace, setLiveTrace] = useState<Record<string, { start: number; end?: number; status: "pending" | "running" | "completed" | "failed" | "skipped"; detail?: string }>>({});
@@ -193,6 +208,7 @@ export default function ChatIdPage() {
   });
   
   const [highlightedCitation, setHighlightedCitation] = useState<number | null>(null);
+  const visibleLensTab = !isAdmin && activeLensTab === "signals" ? "bi" : activeLensTab;
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -202,12 +218,38 @@ export default function ChatIdPage() {
       const response = await apiFetch(`/api/conversations/${id}`);
       if (response.ok) {
         const data = await response.json();
-        setMessages(data.messages);
+        const parsedMessages = (data.messages || []).map((msg: Message) => {
+          if (msg.eval_reasoning) {
+            const parts = msg.eval_reasoning.split("\n\n[USER_PROFILE]: ");
+            if (parts.length > 1) {
+              try {
+                const user_profile = JSON.parse(parts[1]);
+                let disclaimer = msg.disclaimer;
+                if (!disclaimer && msg.tier !== "direct" && ((msg.faithfulness_score !== undefined && msg.faithfulness_score !== null && msg.faithfulness_score < 0.70) || (msg.relevance_score !== undefined && msg.relevance_score !== null && msg.relevance_score < 0.70))) {
+                  disclaimer = "⚠️ This response could not be fully verified against internal documents. Please review with caution.";
+                }
+                return {
+                  ...msg,
+                  eval_reasoning: parts[0],
+                  user_profile,
+                  disclaimer
+                };
+              } catch (e) {
+                console.error("Failed to parse user profile", e);
+              }
+            }
+          }
+          let disclaimer = msg.disclaimer;
+          if (!disclaimer && msg.tier !== "direct" && ((msg.faithfulness_score !== undefined && msg.faithfulness_score !== null && msg.faithfulness_score < 0.70) || (msg.relevance_score !== undefined && msg.relevance_score !== null && msg.relevance_score < 0.70))) {
+            disclaimer = "⚠️ This response could not be fully verified against internal documents. Please review with caution.";
+          }
+          return { ...msg, disclaimer };
+        });
+        setMessages(parsedMessages);
         setConvTitle(data.title);
         
-        // Auto-select the last assistant message for inspection
-        if (data.messages && data.messages.length > 0) {
-          const assistantMsgs = data.messages.filter((m: Message) => m.answer);
+        if (parsedMessages && parsedMessages.length > 0) {
+          const assistantMsgs = parsedMessages.filter((m: Message) => m.answer);
           if (assistantMsgs.length > 0) {
             setSelectedMessageId(assistantMsgs[assistantMsgs.length - 1].id);
           }
@@ -320,7 +362,6 @@ export default function ChatIdPage() {
       return;
     }
     const workspaceId = activeWs.id;
-    // Optimistically add user query to state
     const tempUserMsgId = "user-" + Date.now();
     const tempAssistantMsgId = "assistant-" + Date.now();
 
@@ -369,7 +410,6 @@ export default function ChatIdPage() {
       let responseRelevance = 1.0;
       let responseEvalReasoning = "";
 
-      // Append empty assistant container to messages
       setMessages((prev) => [
         ...prev,
         {
@@ -447,6 +487,8 @@ export default function ChatIdPage() {
               responseFaithfulness = data.faithfulness_score !== undefined ? data.faithfulness_score : 1.0;
               responseRelevance = data.relevance_score !== undefined ? data.relevance_score : 1.0;
               responseEvalReasoning = data.eval_reasoning || "";
+              const responseDisclaimer = data.disclaimer || null;
+              const responseUserProfile = data.user_profile || null;
 
               setMessages((prev) =>
                 prev.map((msg) =>
@@ -459,6 +501,8 @@ export default function ChatIdPage() {
                       faithfulness_score: responseFaithfulness,
                       relevance_score: responseRelevance,
                       eval_reasoning: responseEvalReasoning,
+                      disclaimer: responseDisclaimer,
+                      user_profile: responseUserProfile,
                     }
                     : msg
                 )
@@ -515,7 +559,6 @@ export default function ChatIdPage() {
         }
       }
 
-      // Fallback in case of empty answer
       if (!accumulatedAnswer.trim()) {
         const fallback = thinkingLogs.length ? thinkingLogs[thinkingLogs.length - 1] : "No response from assistant.";
         setMessages((prev) =>
@@ -524,7 +567,6 @@ export default function ChatIdPage() {
         setStreamState({ phase: "fallback", detail: fallback });
       }
 
-      // Update sidebar conversations
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event(CONVERSATIONS_CHANGE_EVENT));
       }
@@ -561,7 +603,6 @@ export default function ChatIdPage() {
     }
   };
 
-  // Handle pending queries passed from the landing page.
   useEffect(() => {
     if (isConvLoading) return;
     const pendingQuery = sessionStorage.getItem("assest_pending_query");
@@ -571,11 +612,9 @@ export default function ChatIdPage() {
         void handleSend(pendingQuery);
       }, 100);
     }
-  // Pending query is a one-shot handoff from the home page; handleSend reads current state at execution time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isConvLoading]);
 
-  // Find currently active inspected message
   const activeMsg = messages.find(m => m.id === selectedMessageId) || messages[messages.length - 1];
 
   const getSourcesList = (): CitationSource[] => {
@@ -585,42 +624,37 @@ export default function ChatIdPage() {
   const handleCitationClick = (citationId: number) => {
     setHighlightedCitation(citationId);
     setActiveLensTab("bi");
-    setShowInspector(true);
     setTimeout(() => setHighlightedCitation(null), 3000);
   };
 
   return (
-    <div className="flex h-full bg-background text-foreground relative overflow-hidden font-sans">
-      {/* Dynamic Radial glow background */}
-      <div className="absolute inset-0 bg-[#060608] z-0 pointer-events-none" />
-      <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-primary/2 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-secondary/2 rounded-full blur-[120px] pointer-events-none" />
+    <div className="flex h-full bg-[var(--bg-root)] text-[var(--text-primary)] relative overflow-hidden font-sans animate-fade-in flex-col lg:flex-row">
+      {/* Decorative gradient atmosphere */}
+      <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-[var(--accent)]/5 rounded-full blur-[120px] pointer-events-none" />
 
-      {/* Center Conversation Pane */}
-      <div className="flex-1 flex flex-col min-w-0 border-r border-border h-full relative z-10">
+      {/* Left Panel (60% width) */}
+      <div className="w-full lg:w-[60%] flex flex-col min-w-0 border-r border-[var(--border-subtle)] h-full relative z-10">
+        
         {/* Thread Header */}
-        <header className="border-b border-border px-6 py-3.5 bg-[#0d0d11]/60 backdrop-blur-xl z-20 shrink-0 flex items-center justify-between">
+        <header className="border-b border-[var(--border-subtle)] px-6 py-4 bg-[var(--bg-sidebar)]/80 backdrop-blur-xl z-20 shrink-0 flex items-center">
           <div className="flex items-center gap-3">
-            <span className="text-[9px] uppercase tracking-widest text-zinc-500 font-black">AI Command Workspace</span>
-            <span className="text-zinc-700">/</span>
-            <h2 className="text-[11px] font-bold text-white max-w-[280px] md:max-w-[400px] truncate">
+            <span className="label-caps text-[10px] text-[var(--text-muted)]">Thread</span>
+            <span className="text-[var(--text-muted)] font-mono">/</span>
+            <h2 className="text-sm font-bold text-[var(--text-primary)] max-w-[280px] md:max-w-[400px] truncate font-display">
               {convTitle}
             </h2>
+            {getSourcesList().length > 0 && (
+              <span className="text-[10px] font-bold text-[var(--accent)] bg-[var(--accent-muted)] border border-[var(--accent)]/20 px-2.5 py-0.5 rounded ml-2 font-mono">
+                {getSourcesList().length} CITED
+              </span>
+            )}
           </div>
-          
-          <button
-            onClick={() => setShowInspector(!showInspector)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-[#111116]/80 text-[9px] font-bold uppercase tracking-wider text-zinc-400 hover:text-white hover:border-[#00f5ff]/30 transition-all cursor-pointer shadow-lg"
-          >
-            {showInspector ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
-            Observability Panel
-          </button>
         </header>
 
         {/* Conversation Stream */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto p-6 space-y-8 pb-36 scrollbar-thin max-w-3xl w-full mx-auto"
+          className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8 pb-36 scrollbar-thin max-w-3xl w-full mx-auto"
         >
           {messages.map((msg, i) => {
             const isAssistant = !!msg.answer;
@@ -630,20 +664,20 @@ export default function ChatIdPage() {
               <div key={msg.id || i} className="space-y-3 animate-fade-in">
                 {/* User Card */}
                 {msg.question && !isAssistant && (
-                  <div className="flex gap-3">
-                    <div className="h-6 w-6 rounded-full bg-zinc-900 border border-border flex items-center justify-center shrink-0">
-                      <User className="h-3 w-3 text-zinc-400" />
-                    </div>
-                    <div className="flex-1 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[9px] font-bold text-white">Client</span>
-                        <span className="text-[8px] text-zinc-600">
-                          {parseUTCDate(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+                  <div className="flex flex-col space-y-2 items-end animate-fade-in">
+                    {/* Header */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-[var(--text-muted)]">
+                        {parseUTCDate(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wide">You</span>
+                      <div className="h-6 w-6 rounded bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] flex items-center justify-center">
+                        <User className="h-3 w-3 text-[var(--text-secondary)]" />
                       </div>
-                      <p className="text-[11px] text-zinc-200 leading-relaxed font-medium mt-0.5">
-                        {msg.question}
-                      </p>
+                    </div>
+                    {/* Body */}
+                    <div className="inline-block bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] text-sm rounded-lg px-4 py-3 text-left text-[var(--text-primary)] leading-relaxed shadow-sm max-w-[85%]">
+                      {msg.question}
                     </div>
                   </div>
                 )}
@@ -652,48 +686,57 @@ export default function ChatIdPage() {
                 {isAssistant && (
                   <div 
                     onClick={() => setSelectedMessageId(msg.id)}
-                    className={`flex gap-3.5 p-4 rounded-xl border transition-all cursor-pointer relative group ${
+                    className={`flex flex-col p-4 rounded-lg border transition-all cursor-pointer relative group space-y-3 ${
                       isInspected 
-                        ? "border-[#00f5ff]/20 bg-[#0d0d12]/80 shadow-[0_0_15px_rgba(0,245,255,0.02)]" 
-                        : "border-transparent bg-transparent hover:bg-white/[0.01]"
+                        ? "border-[rgba(0,245,255,0.2)] bg-[var(--accent-muted)]/20" 
+                        : "border-transparent bg-transparent hover:bg-[var(--bg-surface-hover)]/40"
                     }`}
                   >
                     {isInspected && (
-                      <div className="absolute top-0 left-0 w-1 h-full bg-[#00f5ff] rounded-l-xl" />
+                      <div className="absolute top-0 left-0 w-[3px] h-full bg-[var(--accent)] rounded-l-lg" />
                     )}
-                    <div className="h-6 w-6 rounded-full bg-white border border-border flex items-center justify-center shrink-0">
-                      <Bot className="h-3 w-3 text-black" />
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] font-black text-white uppercase tracking-wider">Assest Assistant</span>
-                          <span className="text-[8px] text-zinc-600">
-                            {parseUTCDate(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                          {msg.tier && (
-                            <span className="text-[7px] font-black text-zinc-400 uppercase bg-[#141419] px-1.5 py-0.5 rounded border border-border tracking-wider">
-                              {msg.tier}
-                            </span>
-                          )}
+                    
+                    {/* Header */}
+                    <div className="flex items-center justify-between border-b border-[var(--border-subtle)]/40 pb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-6 w-6 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-center">
+                          <Bot className="h-3 w-3 text-[var(--accent)]" />
                         </div>
-                        {isInspected && (
-                          <span className="text-[8px] font-black text-[#ff00e5] uppercase tracking-widest bg-[#ff00e5]/5 px-2 py-0.5 rounded">
-                            Inspecting
+                        <span className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wide">Assest Assistant</span>
+                        <span className="text-[10px] font-mono text-[var(--text-muted)]">
+                          {parseUTCDate(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        {msg.tier && (
+                          <span className="text-[10px] font-bold font-mono text-[var(--text-secondary)] uppercase bg-[var(--bg-surface)] px-2 py-0.5 rounded border border-[var(--border-subtle)]">
+                            {msg.tier}
                           </span>
                         )}
                       </div>
-
-                      {/* Content Grounding Indicator */}
-                      {msg.grounding_score !== undefined && msg.tier && (
-                        <GroundingIndicator
-                          groundingScore={msg.grounding_score}
-                          tier={msg.tier}
-                          citationCount={msg.citations?.length || 0}
-                        />
+                      {isInspected && (
+                        <span className="text-[9px] font-bold text-[var(--accent)] uppercase tracking-widest bg-[var(--accent-muted)] border border-[var(--accent)]/30 px-2 py-0.5 rounded font-mono">
+                          Inspecting
+                        </span>
                       )}
+                    </div>
 
-                      {/* Output content */}
+                    {/* Content Grounding Indicator */}
+                    {msg.grounding_score !== undefined && msg.tier && (
+                      <GroundingIndicator
+                        groundingScore={msg.grounding_score}
+                        tier={msg.tier}
+                        citationCount={msg.citations?.length || 0}
+                      />
+                    )}
+
+                    {msg.disclaimer && (
+                      <div className="flex items-start gap-2 p-3 rounded-lg border border-[var(--warning)]/20 bg-[var(--warning-muted)]/10 text-xs text-[var(--warning)] font-medium animate-fade-in">
+                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-[var(--warning)]" />
+                        <span>{msg.disclaimer}</span>
+                      </div>
+                    )}
+
+                    {/* Output content */}
+                    <div className="text-sm text-[var(--text-secondary)] leading-relaxed pl-1">
                       <MarkdownRenderer
                         content={msg.answer}
                         citations={msg.citations}
@@ -708,17 +751,17 @@ export default function ChatIdPage() {
 
           {/* Thinking Stepper */}
           {isLoading && thinkingLogs.length > 0 && (
-            <div className="flex gap-3 animate-fade-in p-4 rounded-xl border border-dashed border-border bg-[#0d0d12]/30">
-              <div className="h-6 w-6 rounded-full bg-zinc-900 border border-border flex items-center justify-center shrink-0">
-                <Cpu className="h-3 w-3 text-[#00f5ff] animate-spin" />
+            <div className="flex gap-4 animate-fade-in p-5 rounded-lg border border-dashed border-[var(--border-subtle)] bg-[var(--bg-surface)]">
+              <div className="h-8 w-8 rounded bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] flex items-center justify-center shrink-0">
+                <Cpu className="h-4 w-4 text-[var(--accent)] animate-spin" />
               </div>
               <div className="flex-1 space-y-2">
-                <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Retrieval Pipeline Status</span>
+                <span className="label-caps text-[10px] text-[var(--text-muted)]">Pipeline Processing</span>
                 <div className="space-y-1.5">
                   {thinkingLogs.slice(-2).map((log, li) => (
-                    <div key={li} className="flex items-center gap-2 text-[9px] text-[#00f5ff] font-bold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#00f5ff] animate-ping" />
-                      <span>{log}</span>
+                    <div key={li} className="flex items-center gap-2 text-xs text-[var(--accent)] font-semibold font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-ping" />
+                      <span>{log.toUpperCase()}</span>
                     </div>
                   ))}
                 </div>
@@ -728,110 +771,106 @@ export default function ChatIdPage() {
         </div>
 
         {/* Input Dock */}
-        <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#060608] via-[#060608]/95 to-transparent z-15 shrink-0">
+        <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[var(--bg-root)] via-[var(--bg-root)]/95 to-transparent z-15 shrink-0">
           <div className="max-w-3xl mx-auto">
-            <div className="relative group">
-              <div className="absolute inset-0 bg-[#00f5ff]/[0.01] rounded-2xl blur-lg transition-all" />
-              <div className="relative flex items-center gap-2 p-2 rounded-xl border border-border bg-[#0b0b0f] focus-within:border-zinc-800 transition-all shadow-2xl">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Ask the brain anything..."
-                  className="flex-1 bg-transparent py-3 px-4 text-[11px] text-white placeholder-zinc-500 focus:outline-none"
-                  disabled={isLoading}
-                />
-                <button
-                  onClick={() => handleSend()}
-                  disabled={!input.trim() || isLoading}
-                  className="h-8.5 px-4 rounded-lg bg-white hover:bg-[#00f5ff] hover:text-black text-black text-[9px] font-black tracking-widest uppercase flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer disabled:opacity-30 disabled:hover:bg-white disabled:hover:text-black"
-                >
-                  {isLoading ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <>
-                      <span>Submit</span>
-                      <Send className="h-3 w-3" />
-                    </>
-                  )}
-                </button>
-              </div>
+            <div className="relative flex items-center gap-2 p-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-glow)] transition-all shadow-[var(--shadow-elevated)]">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                placeholder="Ask follow up..."
+                className="composer-input flex-1 bg-transparent py-3.5 px-5 text-sm text-slate-900 placeholder-[var(--text-muted)] focus:outline-none console-input font-medium"
+                disabled={isLoading}
+              />
+              <button
+                onClick={() => handleSend()}
+                disabled={!input.trim() || isLoading}
+                className="h-10 px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] hover:shadow-[0_0_10px_rgba(0,245,255,0.3)] text-black text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed font-mono uppercase mr-1"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-black" />
+                ) : (
+                  <>
+                    <span>Send</span>
+                    <Send className="h-3.5 w-3.5 text-black stroke-[2.5]" />
+                  </>
+                )}
+              </button>
             </div>
-            <p className="text-center text-[7px] text-zinc-600 uppercase tracking-widest pt-2.5">
-              Click any AI message to sync telemetry details.
-            </p>
           </div>
         </div>
       </div>
 
       {/* Right Observability Panel */}
-      {showInspector && (
-        <div className="w-[420px] border-l border-border bg-[#09090c]/95 backdrop-blur-3xl flex flex-col h-full overflow-y-auto shrink-0 select-none z-10">
+      <div className="w-full lg:w-[40%] border-t lg:border-t-0 border-l border-[var(--border-subtle)] bg-[var(--bg-sidebar)]/95 backdrop-blur-3xl flex flex-col h-[50vh] lg:h-full overflow-y-auto shrink-0 select-none z-10">
           {/* Header */}
-          <div className="p-4 border-b border-border flex items-center justify-between shrink-0 bg-[#0f0f13]/60">
+          <div className="p-4 border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0 bg-[var(--bg-surface)]">
             <div className="flex items-center gap-2">
-              <Workflow className="h-3.5 w-3.5 text-[#00f5ff]" />
-              <span className="text-[9px] font-black uppercase tracking-widest text-white">Observability HUD</span>
+              <Workflow className="h-4 w-4 text-[var(--accent)]" />
+              <span className="text-xs font-semibold text-[var(--text-primary)] tracking-wider uppercase">
+                {isAdmin ? "Observability HUD" : "Thread Details"}
+              </span>
             </div>
-            <span className="text-[7px] font-black text-zinc-500 uppercase tracking-widest border border-white/[0.05] px-1.5 py-0.5 rounded">
-              Backend-backed
+            <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wide border border-[var(--border-subtle)] px-2 py-0.5 rounded">
+              {isAdmin ? "Active Session" : "User Lens"}
             </span>
           </div>
 
           {/* Sub-Header / Tab Navigation */}
-          <div className="grid grid-cols-3 border-b border-border bg-[#060608] text-center">
+          <div className={`grid border-b border-[var(--border-subtle)] bg-[var(--bg-root)] text-center ${isAdmin ? "grid-cols-3" : "grid-cols-2"}`}>
             <button
               onClick={() => setActiveLensTab("bi")}
-              className={`py-2.5 text-[8px] font-black uppercase tracking-widest transition-all cursor-pointer ${
-                activeLensTab === "bi" 
-                  ? "text-[#00f5ff] border-b-2 border-[#00f5ff]" 
-                  : "text-zinc-500 hover:text-zinc-300"
+              className={`py-2.5 text-[11px] font-semibold tracking-wider uppercase transition-all cursor-pointer ${
+                visibleLensTab === "bi" 
+                  ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" 
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               }`}
             >
               Quality
             </button>
             <button
               onClick={() => setActiveLensTab("trace")}
-              className={`py-2.5 text-[8px] font-black uppercase tracking-widest transition-all cursor-pointer ${
-                activeLensTab === "trace" 
-                  ? "text-[#00f5ff] border-b-2 border-[#00f5ff]" 
-                  : "text-zinc-500 hover:text-zinc-300"
+              className={`py-2.5 text-[11px] font-semibold tracking-wider uppercase transition-all cursor-pointer ${
+                visibleLensTab === "trace" 
+                  ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" 
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
               }`}
             >
               Trace
             </button>
-            <button
-              onClick={() => setActiveLensTab("signals")}
-              className={`py-2.5 text-[8px] font-black uppercase tracking-widest transition-all cursor-pointer ${
-                activeLensTab === "signals" 
-                  ? "text-[#00f5ff] border-b-2 border-[#00f5ff]" 
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              Signals
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setActiveLensTab("signals")}
+                className={`py-2.5 text-[11px] font-semibold tracking-wider uppercase transition-all cursor-pointer ${
+                  visibleLensTab === "signals" 
+                    ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" 
+                    : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                Signals
+              </button>
+            )}
           </div>
 
           <div className="p-4 flex-1 space-y-5 overflow-y-auto scrollbar-thin">
-            {activeLensTab === "bi" ? (
-              // Quality Indicators
+            {visibleLensTab === "bi" ? (
+              /* Quality Indicators */
               <div className="space-y-4">
-                {/* SVG Quality Meters */}
                 <div className="space-y-2">
-                  <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest block">LLM-graded metrics</span>
+                  <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase block">LLM-graded metrics</span>
                   
                   <div className="grid grid-cols-3 gap-2">
                     {/* Faithfulness */}
-                    <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
                       <div className="relative w-16 h-16 flex items-center justify-center mt-1">
                         <svg className="w-full h-full transform -rotate-90">
-                          <circle cx="32" cy="32" r="26" className="stroke-zinc-900 fill-transparent" strokeWidth="3.5" />
+                          <circle cx="32" cy="32" r="26" className="stroke-zinc-800 fill-transparent" strokeWidth="3" />
                           <circle 
                             cx="32" 
                             cy="32" 
                             r="26" 
-                            className="stroke-emerald-400 fill-transparent transition-all duration-1000 ease-out" 
+                            className="stroke-[var(--success)] fill-transparent transition-all duration-1000 ease-out" 
                             strokeWidth="3.5" 
                             strokeDasharray={2 * Math.PI * 26} 
                             strokeDashoffset={2 * Math.PI * 26 - ((activeMsg?.faithfulness_score !== undefined ? activeMsg.faithfulness_score : 0) * 2 * Math.PI * 26)} 
@@ -839,25 +878,25 @@ export default function ChatIdPage() {
                           />
                         </svg>
                         <div className="absolute flex flex-col items-center justify-center">
-                          <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                          <span className="text-[10px] font-black text-white mt-0.5">
+                          <ShieldCheck className="h-3.5 w-3.5 text-[var(--success)]" />
+                          <span className="text-xs font-bold text-[var(--text-primary)] mt-0.5">
                             {activeMsg?.faithfulness_score !== undefined ? `${Math.round(activeMsg.faithfulness_score * 100)}%` : "N/A"}
                           </span>
                         </div>
                       </div>
-                      <span className="text-[7px] font-black uppercase tracking-widest text-zinc-500 mt-2">Faithfulness</span>
+                      <span className="text-[11px] font-semibold text-[var(--text-muted)] mt-2">Faithful</span>
                     </div>
 
                     {/* Relevance */}
-                    <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
                       <div className="relative w-16 h-16 flex items-center justify-center mt-1">
                         <svg className="w-full h-full transform -rotate-90">
-                          <circle cx="32" cy="32" r="26" className="stroke-zinc-900 fill-transparent" strokeWidth="3.5" />
+                          <circle cx="32" cy="32" r="26" className="stroke-zinc-800 fill-transparent" strokeWidth="3" />
                           <circle 
                             cx="32" 
                             cy="32" 
                             r="26" 
-                            className="stroke-indigo-400 fill-transparent transition-all duration-1000 ease-out" 
+                            className="stroke-[var(--accent)] fill-transparent transition-all duration-1000 ease-out" 
                             strokeWidth="3.5" 
                             strokeDasharray={2 * Math.PI * 26} 
                             strokeDashoffset={2 * Math.PI * 26 - ((activeMsg?.relevance_score !== undefined ? activeMsg.relevance_score : 0) * 2 * Math.PI * 26)} 
@@ -865,25 +904,25 @@ export default function ChatIdPage() {
                           />
                         </svg>
                         <div className="absolute flex flex-col items-center justify-center">
-                          <Award className="h-3.5 w-3.5 text-indigo-400" />
-                          <span className="text-[10px] font-black text-white mt-0.5">
+                          <Award className="h-3.5 w-3.5 text-[var(--accent)]" />
+                          <span className="text-xs font-bold text-[var(--text-primary)] mt-0.5">
                             {activeMsg?.relevance_score !== undefined ? `${Math.round(activeMsg.relevance_score * 100)}%` : "N/A"}
                           </span>
                         </div>
                       </div>
-                      <span className="text-[7px] font-black uppercase tracking-widest text-zinc-500 mt-2">Relevance</span>
+                      <span className="text-[11px] font-semibold text-[var(--text-muted)] mt-2">Relevant</span>
                     </div>
 
                     {/* Grounding */}
-                    <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2 flex flex-col items-center justify-center relative overflow-hidden group">
                       <div className="relative w-16 h-16 flex items-center justify-center mt-1">
                         <svg className="w-full h-full transform -rotate-90">
-                          <circle cx="32" cy="32" r="26" className="stroke-zinc-900 fill-transparent" strokeWidth="3.5" />
+                          <circle cx="32" cy="32" r="26" className="stroke-zinc-800 fill-transparent" strokeWidth="3" />
                           <circle 
                             cx="32" 
                             cy="32" 
                             r="26" 
-                            className="stroke-[#00f5ff] fill-transparent transition-all duration-1000 ease-out" 
+                            className="stroke-indigo-400 fill-transparent transition-all duration-1000 ease-out" 
                             strokeWidth="3.5" 
                             strokeDasharray={2 * Math.PI * 26} 
                             strokeDashoffset={2 * Math.PI * 26 - ((activeMsg?.grounding_score !== undefined ? activeMsg.grounding_score : 0) * 2 * Math.PI * 26)} 
@@ -891,29 +930,69 @@ export default function ChatIdPage() {
                           />
                         </svg>
                         <div className="absolute flex flex-col items-center justify-center">
-                          <Activity className="h-3.5 w-3.5 text-[#00f5ff]" />
-                          <span className="text-[10px] font-black text-white mt-0.5">
+                          <Activity className="h-3.5 w-3.5 text-indigo-400" />
+                          <span className="text-xs font-bold text-[var(--text-primary)] mt-0.5">
                             {activeMsg?.grounding_score !== undefined ? `${Math.round(activeMsg.grounding_score * 100)}%` : "N/A"}
                           </span>
                         </div>
                       </div>
-                      <span className="text-[7px] font-black uppercase tracking-widest text-zinc-500 mt-2">Grounding</span>
+                      <span className="text-[11px] font-semibold text-[var(--text-muted)] mt-2">Grounded</span>
                     </div>
                   </div>
                 </div>
 
+                {/* Cognitive Profile */}
+                {activeMsg?.user_profile && (
+                  <div className="space-y-2 animate-fade-in">
+                    <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase block">Cognitive Profile</span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {/* Tone Badge */}
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 flex flex-col items-center justify-center">
+                        <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider">Tone</span>
+                        <span className={`text-xs font-bold capitalize mt-1 ${
+                          activeMsg.user_profile.tone === "frustrated" ? "text-red-600 font-semibold" :
+                          activeMsg.user_profile.tone === "confused" ? "text-amber-600 font-semibold" :
+                          activeMsg.user_profile.tone === "curious" ? "text-cyan-600 font-semibold" : "text-[var(--text-primary)]"
+                        }`}>
+                          {activeMsg.user_profile.tone || "neutral"}
+                        </span>
+                      </div>
+                      {/* Complexity Badge */}
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 flex flex-col items-center justify-center">
+                        <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider">Complexity</span>
+                        <span className={`text-xs font-bold capitalize mt-1 ${
+                          activeMsg.user_profile.complexity === "high" ? "text-red-600" :
+                          activeMsg.user_profile.complexity === "medium" ? "text-amber-600" : "text-green-600"
+                        }`}>
+                          {activeMsg.user_profile.complexity || "medium"}
+                        </span>
+                      </div>
+                      {/* Expertise Badge */}
+                      <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 flex flex-col items-center justify-center">
+                        <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider">Expertise</span>
+                        <span className={`text-xs font-bold capitalize mt-1 ${
+                          activeMsg.user_profile.expertise === "advanced" ? "text-purple-600" :
+                          activeMsg.user_profile.expertise === "intermediate" ? "text-cyan-600" : "text-green-600"
+                        }`}>
+                          {activeMsg.user_profile.expertise || "intermediate"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Scorer Reasoning */}
                 {activeMsg?.eval_reasoning && (
-                  <div className="space-y-1.5">
-                    <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest block">Evaluator Rationale</span>
-                    <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-3 text-[9px] leading-relaxed text-zinc-400 space-y-2.5 font-medium">
+                  <div className="space-y-2">
+                    <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase block">Evaluator Rationale</span>
+                    <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 text-xs leading-relaxed text-[var(--text-secondary)] space-y-2.5">
                       {activeMsg.eval_reasoning.split("\n\n").map((part, pi) => {
                         const isFaith = part.startsWith("Faithfulness:");
                         const text = part.replace(/^(Faithfulness:|Relevance:)/, "").trim();
                         return (
                           <div key={pi} className="space-y-0.5">
-                            <span className="text-[7px] font-black text-white uppercase tracking-widest block">
-                              {isFaith ? "Faithfulness verdict" : "Relevance verdict"}
+                            <span className="text-[11px] font-semibold text-[var(--text-primary)] uppercase tracking-wider block">
+                              {isFaith ? "Faithfulness Verdict" : "Relevance Verdict"}
                             </span>
                             <p>{text}</p>
                           </div>
@@ -924,12 +1003,12 @@ export default function ChatIdPage() {
                 )}
 
                 {/* Grounding Source Graph */}
-                <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-3.5 space-y-3 relative overflow-hidden">
+                <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 space-y-3 relative overflow-hidden">
                   <div className="flex items-center justify-between">
-                    <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest">Grounding Map</span>
-                    <span className="text-[8px] font-black text-zinc-500 uppercase">{getSourcesList().length} connections</span>
+                    <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase">Grounding Map</span>
+                    <span className="text-xs font-semibold text-[var(--text-muted)]">{getSourcesList().length} links</span>
                   </div>
-                  <div className="relative w-full h-[180px] border border-white/[0.02] bg-[#060608] rounded-lg">
+                  <div className="relative w-full h-[180px] border border-[var(--border-subtle)] bg-[var(--bg-root)] rounded-lg">
                     <svg className="w-full h-full" viewBox="0 0 300 180">
                       {getSourcesList().map((src, idx) => {
                         const angle = (idx / getSourcesList().length) * 2 * Math.PI;
@@ -942,20 +1021,20 @@ export default function ChatIdPage() {
                               y1="90"
                               x2={targetX}
                               y2={targetY}
-                              className="stroke-[#00f5ff]/20 stroke-[1] animate-draw-path"
+                              className="stroke-[var(--accent)]/30 stroke-[1.5]"
                               strokeDasharray="3 2"
                             />
                             <circle
                               cx={targetX}
                               cy={targetY}
                               r="6"
-                              className="fill-[#ff00e5]/20 stroke-[#ff00e5] stroke-[1] cursor-pointer"
+                              className="fill-indigo-500/20 stroke-[var(--accent)] stroke-[1.5] cursor-pointer"
                             />
                             <text
                               x={targetX}
                               y={targetY - 9}
                               textAnchor="middle"
-                              className="fill-zinc-500 text-[6px] font-black"
+                              className="fill-[var(--text-muted)] text-[11px] font-medium"
                             >
                               Doc {src.id}
                             </text>
@@ -963,24 +1042,23 @@ export default function ChatIdPage() {
                         );
                       })}
                       
-                      {/* Central Query Node */}
                       <circle
                         cx="150"
                         cy="90"
                         r="12"
-                        className="fill-[#00f5ff]/20 stroke-[#00f5ff] stroke-[1.5] animate-cyber-pulse"
+                        className="fill-indigo-500/10 stroke-[var(--accent)] stroke-[1.5] animate-pulse"
                       />
-                      <text x="150" y="93" textAnchor="middle" className="fill-white text-[7px] font-black uppercase tracking-wider">Query</text>
+                      <text x="150" y="93" textAnchor="middle" className="fill-[var(--text-primary)] text-[11px] font-bold uppercase tracking-wider">Query</text>
                     </svg>
                   </div>
                 </div>
 
                 {/* Grounded Source List */}
                 <div className="space-y-2">
-                  <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest block">Retrieved Vector Chunks</span>
+                  <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase block">Retrieved Vector Chunks</span>
                   <div className="space-y-1.5">
                     {getSourcesList().length === 0 ? (
-                      <div className="text-[9px] font-black text-zinc-600 uppercase text-center py-6 border border-dashed border-border rounded-xl">
+                      <div className="text-xs text-[var(--text-muted)] text-center py-6 border border-dashed border-[var(--border-subtle)] rounded-xl">
                         No sources loaded
                       </div>
                     ) : (
@@ -990,28 +1068,28 @@ export default function ChatIdPage() {
                         return (
                           <div
                             key={idx}
-                            className={`flex flex-col p-2.5 rounded-lg border transition-all ${
+                            className={`flex flex-col p-3 rounded-lg border transition-all ${
                               isHighlighted
-                                ? "border-[#00f5ff] bg-[#00f5ff]/5 ring-1 ring-[#00f5ff]/20"
-                                : "border-border bg-[#0c0c0e] hover:border-zinc-800"
+                                ? "border-[var(--accent)] bg-[var(--accent-muted)] ring-1 ring-[var(--accent)]/20"
+                                : "border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-zinc-800"
                             }`}
                           >
-                            <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-1.5 overflow-hidden">
-                                <span className="flex items-center justify-center w-3.5 h-3.5 rounded bg-zinc-900 border border-border text-white text-[8px] font-black shrink-0">
+                                <span className="flex items-center justify-center w-4 h-4 rounded bg-zinc-900 border border-[var(--border-subtle)] text-white text-[11px] font-bold shrink-0">
                                   {src.id}
                                 </span>
-                                <BookOpen className="h-3 w-3 text-zinc-500 shrink-0" />
-                                <span className="text-[9px] font-bold text-white truncate">{src.title}</span>
+                                <BookOpen className="h-3.5 w-3.5 text-[var(--text-secondary)] shrink-0" />
+                                <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{src.title}</span>
                               </div>
                               {confidence !== null && (
-                                <span className="text-[7px] font-black text-[#00f5ff] bg-[#00f5ff]/5 px-1.5 py-0.5 rounded border border-[#00f5ff]/10">
-                                  {confidence}% similarity
+                                <span className="text-[11px] font-semibold text-[var(--accent)] bg-[var(--accent-muted)] px-1.5 py-0.5 rounded border border-[var(--accent)]/10 shrink-0">
+                                  {confidence}% sim
                                 </span>
                               )}
                             </div>
                             {src.section_heading && (
-                              <span className="text-[7px] text-zinc-500 truncate block mb-1">
+                              <span className="text-xs text-[var(--text-muted)] truncate block">
                                 Section: {src.section_heading}
                               </span>
                             )}
@@ -1022,44 +1100,44 @@ export default function ChatIdPage() {
                   </div>
                 </div>
               </div>
-            ) : activeLensTab === "trace" ? (
+            ) : visibleLensTab === "trace" ? (
               <div className="space-y-4 animate-fade-in">
                 <div className="flex items-center justify-between">
-                  <span className="text-[8px] font-black uppercase text-zinc-500 tracking-widest block">Execution path telemetry</span>
+                  <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase block">Execution Path Telemetry</span>
                   {activeMsg?.response_time_ms && (
-                    <span className="text-[9px] font-black text-[#00f5ff] bg-[#00f5ff]/5 px-2 py-0.5 rounded border border-[#00f5ff]/20">
-                      LATENCY: {activeMsg.response_time_ms} ms
+                    <span className="text-xs font-semibold text-[var(--accent)] bg-[var(--accent-muted)] px-2 py-0.5 rounded border border-[var(--accent)]/20">
+                      {activeMsg.response_time_ms} ms
                     </span>
                   )}
                 </div>
 
-                <div className="rounded-xl border border-white/[0.04] bg-[#0c0c0e] p-4 relative overflow-hidden space-y-4">
+                <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 relative overflow-hidden">
                   <div className="relative pl-6 space-y-6">
-                    <div className="absolute left-[11px] top-2 bottom-2 w-[1.5px] bg-zinc-900 -z-0" />
+                    <div className="absolute left-[11px] top-2 bottom-2 w-[1.5px] bg-[var(--border-subtle)] -z-0" />
                     
                     {buildMessageTrace(activeMsg, activeMsg?.id?.startsWith("assistant-") ? liveTrace : undefined).map((phase, idx) => {
                       const isHovered = hoveredPhase === phase.name;
                       
-                      let ringColor = "border-zinc-800 bg-zinc-950 text-zinc-600";
+                      let ringColor = "border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-muted)]";
                       let statusText = "Pending";
-                      let statusBadgeColor = "text-zinc-500 bg-zinc-900/30 border-zinc-800";
+                      let statusBadgeColor = "text-[var(--text-muted)] bg-[var(--bg-surface)] border-[var(--border-subtle)]";
                       
                       if (phase.status === "completed") {
-                        ringColor = "border-emerald-500/30 bg-[#0d2118] text-emerald-400";
+                        ringColor = "border-[var(--success-muted)] bg-[var(--success-muted)] text-[var(--success)]";
                         statusText = "Completed";
-                        statusBadgeColor = "text-emerald-400 bg-emerald-500/5 border-emerald-500/20";
+                        statusBadgeColor = "text-[var(--success)] bg-[var(--success-muted)] border-[var(--success-muted)]";
                       } else if (phase.status === "running") {
-                        ringColor = "border-[#00f5ff]/50 bg-[#0d242a] text-[#00f5ff] animate-pulse shadow-[0_0_10px_rgba(0,245,255,0.2)]";
+                        ringColor = "border-[var(--accent)] bg-indigo-500/10 text-[var(--accent)] animate-pulse shadow-[var(--shadow-glow)]";
                         statusText = "Running";
-                        statusBadgeColor = "text-[#00f5ff] bg-[#00f5ff]/5 border-[#00f5ff]/20";
+                        statusBadgeColor = "text-[var(--accent)] bg-[var(--accent-muted)] border-[var(--accent-muted)]";
                       } else if (phase.status === "failed") {
-                        ringColor = "border-rose-500/40 bg-[#251216] text-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.15)]";
+                        ringColor = "border-[var(--danger-muted)] bg-[var(--danger-muted)] text-[var(--danger)]";
                         statusText = "Failed";
-                        statusBadgeColor = "text-rose-400 bg-rose-500/5 border-rose-500/20";
+                        statusBadgeColor = "text-[var(--danger)] bg-[var(--danger-muted)] border-[var(--danger-muted)]";
                       } else if (phase.status === "skipped") {
-                        ringColor = "border-zinc-900 bg-zinc-950/40 text-zinc-700 opacity-60";
+                        ringColor = "border-[var(--border-subtle)] bg-[var(--bg-surface-hover)]/30 text-[var(--text-muted)] opacity-60";
                         statusText = "Skipped";
-                        statusBadgeColor = "text-zinc-600 bg-zinc-950/50 border-zinc-950";
+                        statusBadgeColor = "text-[var(--text-muted)] bg-[var(--bg-surface)]/40 border-[var(--border-subtle)]";
                       }
 
                       return (
@@ -1069,13 +1147,13 @@ export default function ChatIdPage() {
                           onMouseEnter={() => setHoveredPhase(phase.name)}
                           onMouseLeave={() => setHoveredPhase(null)}
                         >
-                          <div className={`relative z-10 w-6 h-6 rounded-full border flex items-center justify-center text-[10px] font-black transition-all ${ringColor}`}>
+                          <div className={`relative z-10 w-6 h-6 rounded-full border flex items-center justify-center text-xs font-bold transition-all ${ringColor}`}>
                             {phase.status === "completed" ? (
                               <span>✓</span>
                             ) : phase.status === "failed" ? (
                               <span>✗</span>
                             ) : phase.status === "skipped" ? (
-                              <span className="text-[7px] font-black uppercase text-zinc-700 scale-[0.8]">skip</span>
+                              <span className="text-[10px] font-semibold text-zinc-750">skip</span>
                             ) : (
                               <span>{idx + 1}</span>
                             )}
@@ -1083,78 +1161,80 @@ export default function ChatIdPage() {
 
                           <div className="flex-1 space-y-1">
                             <div className="flex items-center justify-between">
-                              <h4 className={`text-[10px] font-black uppercase tracking-wider ${phase.status === "running" ? "text-[#00f5ff]" : "text-white"}`}>
+                              <h4 className={`text-xs font-semibold uppercase tracking-wider ${phase.status === "running" ? "text-[var(--accent)]" : "text-[var(--text-primary)]"}`}>
                                 {phase.name}
                               </h4>
                               <div className="flex items-center gap-1.5">
                                 {phase.duration_ms !== undefined && (
-                                  <span className="text-[8px] font-black text-zinc-500 font-mono">{phase.duration_ms}ms</span>
+                                  <span className="text-xs font-semibold text-[var(--text-muted)] font-mono">{phase.duration_ms}ms</span>
                                 )}
-                                <span className={`text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${statusBadgeColor}`}>
+                                <span className={`text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border ${statusBadgeColor}`}>
                                   {statusText}
                                 </span>
                               </div>
                             </div>
                             
-                            <p className="text-[9px] text-zinc-500 leading-normal font-medium">
+                            <p className="text-xs text-[var(--text-muted)] leading-normal font-normal">
                               {phase.detail || phase.description}
                             </p>
 
                             {isHovered && (
-                              <div className="mt-2 p-2.5 rounded-lg border border-[#00f5ff]/20 bg-[#070709] text-[9px] font-medium text-zinc-400 space-y-2 leading-relaxed animate-fade-in z-20 relative">
-                                <div className="flex items-center justify-between border-b border-white/[0.03] pb-1.5">
-                                  <span className="text-[7px] font-black uppercase tracking-widest text-[#00f5ff]">Telemetry Node Inspection</span>
+                              <div className="mt-2 p-3 rounded-lg border border-[var(--accent)]/20 bg-[var(--bg-root)] text-xs font-normal text-[var(--text-secondary)] space-y-2 leading-relaxed animate-fade-in z-20 relative">
+                                <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-1.5">
+                                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent)]">Node Inspection</span>
                                   {phase.duration_ms !== undefined && (
-                                    <span className="text-[8px] font-black text-white">{phase.duration_ms} ms elapsed</span>
+                                    <span className="text-xs text-[var(--text-primary)] font-bold">{phase.duration_ms} ms</span>
                                   )}
                                 </div>
-                                <p className="text-zinc-300 font-semibold">{phase.description}</p>
+                                <p className="text-[var(--text-primary)] font-medium">{phase.description}</p>
                                 {phase.detail && (
-                                  <div className="bg-zinc-950 p-1.5 rounded border border-white/[0.02] text-[8px] font-mono text-zinc-500 whitespace-pre-wrap break-all">
+                                  <div className="bg-zinc-950 p-2 rounded border border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-muted)] whitespace-pre-wrap break-all">
                                     {phase.detail}
                                   </div>
                                 )}
                                 
                                 {phase.metadata && (
-                                  <div className="space-y-1.5 pt-1.5 border-t border-white/[0.03]">
+                                  <div className="space-y-1.5 pt-1.5 border-t border-[var(--border-subtle)]">
                                     {phase.name === "Routing" && (
-                                      <div className="grid grid-cols-2 gap-1.5">
+                                      <div className="grid grid-cols-2 gap-2">
                                         <div>
-                                          <span className="text-[7px] text-zinc-600 uppercase block font-black">Execution Tier</span>
-                                          <span className="text-[8px] text-white uppercase font-bold">{phase.metadata.tier}</span>
+                                          <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Tier</span>
+                                          <span className="text-xs text-[var(--text-primary)] uppercase font-bold">{phase.metadata.tier}</span>
                                         </div>
                                         <div>
-                                          <span className="text-[7px] text-zinc-600 uppercase block font-black">Intent Type</span>
-                                          <span className="text-[8px] text-white uppercase font-bold">{phase.metadata.intent}</span>
+                                          <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Intent</span>
+                                          <span className="text-xs text-[var(--text-primary)] uppercase font-bold">{phase.metadata.intent}</span>
                                         </div>
                                       </div>
                                     )}
                                     {phase.name === "Retrieval" && (
                                       <div>
-                                        <span className="text-[7px] text-zinc-600 uppercase block font-black">Knowledge Grounding</span>
-                                        <span className="text-[8px] text-white font-bold">{phase.metadata.sources_found} sources retrieved</span>
+                                        <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Grounding Sources</span>
+                                        <span className="text-xs text-[var(--text-primary)] font-bold">{phase.metadata.sources_found} items retrieved</span>
                                       </div>
                                     )}
                                     {phase.name === "Evaluation" && (
                                       <div className="space-y-1.5">
                                         <div className="grid grid-cols-2 gap-2">
                                           <div>
-                                            <span className="text-[7px] text-zinc-600 uppercase block font-black">Faithfulness</span>
-                                            <span className="text-[8px] text-emerald-400 font-black">
-                                              {phase.metadata.faithfulness !== undefined ? `${Math.round(phase.metadata.faithfulness * 100)}%` : "N/A"}
+                                            <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Faithfulness</span>
+                                            <span className="text-xs text-[var(--success)] font-bold">
+                                              {phase.metadata.faithfulness !== undefined && phase.metadata.faithfulness !== null ? `${Math.round(phase.metadata.faithfulness * 100)}%` : "N/A"}
                                             </span>
                                           </div>
                                           <div>
-                                            <span className="text-[7px] text-zinc-600 uppercase block font-black">Relevance</span>
-                                            <span className="text-[8px] text-indigo-400 font-black">
-                                              {phase.metadata.relevance !== undefined ? `${Math.round(phase.metadata.relevance * 100)}%` : "N/A"}
+                                            <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Relevance</span>
+                                            <span className="text-xs text-[var(--accent)] font-bold">
+                                              {phase.metadata.relevance !== undefined && phase.metadata.relevance !== null ? `${Math.round(phase.metadata.relevance * 100)}%` : "N/A"}
                                             </span>
                                           </div>
                                         </div>
                                         {phase.metadata.reasoning && (
                                           <div>
-                                            <span className="text-[7px] text-zinc-600 uppercase block font-black">Evaluator Verdict</span>
-                                            <span className="text-[8px] text-zinc-500 leading-normal block italic">"{phase.metadata.reasoning.split("\n\n")[0]?.replace(/^(Faithfulness:|Relevance:)/, "")?.trim() || ""}"</span>
+                                            <span className="text-[11px] text-[var(--text-muted)] uppercase block font-semibold">Rationale</span>
+                                            <span className="text-xs text-[var(--text-secondary)] leading-normal block italic">
+                                              {phase.metadata.reasoning.split("\n\n")[0]?.replace(/^(Faithfulness:|Relevance:)/, "")?.trim() || ""}
+                                            </span>
                                           </div>
                                         )}
                                       </div>
@@ -1170,14 +1250,17 @@ export default function ChatIdPage() {
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : isAdmin ? (
               <div className="space-y-4">
                 <SystemSignalsPanel />
+              </div>
+            ) : (
+              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 text-sm text-[var(--text-secondary)] leading-relaxed">
+                User mode keeps the lens simple: compare grounding, trace the response path, and review citations without exposing infra noise.
               </div>
             )}
           </div>
         </div>
-      )}
-    </div>
+      </div>
   );
 }

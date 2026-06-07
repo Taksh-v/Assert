@@ -17,7 +17,11 @@ def mock_db():
 
 @pytest.fixture
 def query_service(mock_db):
-    return QueryService(mock_db)
+    qs = QueryService(mock_db)
+    qs.retriever.search = AsyncMock(return_value=[])
+    qs.cache.check_cache = AsyncMock(return_value=None)
+    qs._should_run_quality_eval = MagicMock(return_value=False)
+    return qs
 
 @pytest.mark.asyncio
 async def test_execute_query_conversational(query_service, mock_db):
@@ -133,3 +137,67 @@ async def test_stream_query_conversational(query_service, mock_db):
         assert any("Analyzing query intent..." in e for e in events)
         assert any("Route: direct (conversational)" in e for e in events)
         assert any('"token": "Hello "' in e for e in events)
+
+
+@pytest.mark.asyncio
+async def test_execute_query_metadata_count(query_service, mock_db):
+    query_service._get_or_create_conversation = AsyncMock(return_value="00000000-0000-0000-0000-000000000000")
+
+    # Mock the count database results
+    mock_conv = MagicMock(spec=Conversation)
+    mock_result_count = MagicMock()
+    mock_result_count.scalar.return_value = 5
+
+    mock_result_docs = MagicMock()
+    mock_result_docs.all.return_value = [("Doc1", "http://doc1"), ("Doc2", "http://doc2")]
+    mock_result_docs.scalar_one.return_value = mock_conv
+
+    # Sequence of database execute results:
+    # 1. workspace role query
+    # 2. count query execution
+    # 3. doc list query execution
+    # 4. load conversation (to update updated_at)
+    mock_role_res = MagicMock()
+    mock_role_res.scalar.return_value = "employee"
+    mock_db.execute.side_effect = [mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
+
+    result = await query_service.execute_query(
+        question="how many documents are in the system?",
+        workspace_id="test_ws",
+        user_id="test_user"
+    )
+
+    assert "currently 5 active documents" in result["answer"]
+    assert result["sources"] == [{"title": "Doc1", "url": "http://doc1"}, {"title": "Doc2", "url": "http://doc2"}]
+    assert result["response_tier"] == ResponseTier.DIRECT.value
+    assert result["metadata"]["method"] == "system_metadata_query"
+
+
+@pytest.mark.asyncio
+async def test_execute_query_metadata_list(query_service, mock_db):
+    query_service._get_or_create_conversation = AsyncMock(return_value="00000000-0000-0000-0000-000000000000")
+
+    # Mock the count database results
+    mock_conv = MagicMock(spec=Conversation)
+    mock_result_count = MagicMock()
+    mock_result_count.scalar.return_value = 2
+
+    mock_result_docs = MagicMock()
+    mock_result_docs.all.return_value = [("Doc1", "http://doc1"), ("Doc2", "http://doc2")]
+    mock_result_docs.scalar_one.return_value = mock_conv
+
+    mock_role_res = MagicMock()
+    mock_role_res.scalar.return_value = "employee"
+    mock_db.execute.side_effect = [mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
+
+    result = await query_service.execute_query(
+        question="show all documents",
+        workspace_id="test_ws",
+        user_id="test_user"
+    )
+
+    assert "Here are the 2 active documents" in result["answer"]
+    assert "- [Doc1](http://doc1)" in result["answer"]
+    assert result["sources"] == [{"title": "Doc1", "url": "http://doc1"}, {"title": "Doc2", "url": "http://doc2"}]
+    assert result["response_tier"] == ResponseTier.DIRECT.value
+

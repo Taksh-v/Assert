@@ -39,7 +39,7 @@ import backend.models  # noqa: F401
 
 # Import routers
 from backend.api.health import router as health_router
-# from backend.api.webhooks import router as webhooks_router
+from backend.api.webhooks import router as webhooks_router
 
 settings = get_settings()
 
@@ -138,7 +138,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ── Routers ─────────────────────────────────────────────
 app.include_router(health_router)
 app.include_router(health_router, prefix="/api")
-# app.include_router(webhooks_router)
+app.include_router(webhooks_router, prefix="/api")
 
 from backend.api.query import router as query_router
 from backend.api.connectors import router as connectors_router
@@ -147,6 +147,7 @@ from backend.api.auth import router as auth_router
 from backend.api.conversations import router as conversations_router
 from backend.api.users import router as users_router
 from backend.api.reasoning import router as reasoning_router
+from backend.api.observability import router as observability_router
 from backend.api.llm import router as llm_router
 from backend.api.orchestrator import router as orchestrator_router
 from backend.api.orchestrator_durable import router as orchestrator_durable_router
@@ -159,6 +160,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(conversations_router)
 app.include_router(reasoning_router, prefix="/api")
+app.include_router(observability_router, prefix="/api")
 app.include_router(llm_router, prefix="/api")
 app.include_router(orchestrator_router, prefix="/api")
 app.include_router(orchestrator_durable_router, prefix="/api")

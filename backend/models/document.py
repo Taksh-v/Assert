@@ -12,8 +12,8 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
-    connector_id = Column(String, ForeignKey("connectors.id"), nullable=True)
+    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("connectors.id"), nullable=True, index=True)
     
     source_url = Column(String, nullable=False)
     title = Column(String, nullable=True)
