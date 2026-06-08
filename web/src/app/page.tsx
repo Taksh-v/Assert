@@ -14,7 +14,7 @@ import {
   HeartPulse,
   Cpu,
 } from "lucide-react";
-import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser } from "@/lib/auth";
+import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import { parseUTCDate } from "@/lib/date";
 import ConnectorIcon from "@/components/ConnectorIcon";
@@ -70,9 +70,19 @@ function statusClass(status?: string) {
 
 function getGreeting(name: string) {
   const hr = new Date().getHours();
-  if (hr < 12) return `Good morning, ${name}`;
-  if (hr < 17) return `Good afternoon, ${name}`;
-  return `Good evening, ${name}`;
+  let base = "Good night";
+  
+  if (hr >= 5 && hr < 12) base = "Good morning";
+  else if (hr >= 12 && hr < 17) base = "Good afternoon";
+  else if (hr >= 17 && hr < 21) base = "Good evening";
+  
+  const displayName = name && name !== "there" ? name : "";
+  
+  return (
+    <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)] sm:text-3xl font-display">
+      {base}{displayName ? `, ${displayName}` : ""}
+    </h1>
+  );
 }
 
 export default function ChatPage() {
@@ -81,14 +91,17 @@ export default function ChatPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [user, setUser] = useState(getCurrentUser());
   const router = useRouter();
 
-  const user = getCurrentUser();
   const activeWorkspace = getActiveWorkspace();
-  const userName = user?.full_name || user?.email?.split("@")[0] || "there";
+  const userName = user?.full_name || user?.email?.split("@")[0] || "";
   const workspaceName = activeWorkspace?.name || "your workspace";
 
   useEffect(() => {
+    const handleAuthChange = () => setUser(getCurrentUser());
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+    
     let cancelled = false;
 
     async function loadDashboard() {
@@ -132,6 +145,7 @@ export default function ChatPage() {
     void loadDashboard();
     return () => {
       cancelled = true;
+      window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
     };
   }, [activeWorkspace?.id]);
 
@@ -213,9 +227,7 @@ export default function ChatPage() {
               Workspace Composer
             </div>
             <div className="space-y-2">
-              <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)] sm:text-3xl font-display">
-                {getGreeting(userName)}
-              </h1>
+              {getGreeting(userName)}
               <p className="max-w-2xl text-xs text-[var(--text-secondary)] leading-relaxed font-mono uppercase tracking-wide">
                 Grounded reasoning and document search within{" "}
                 <span className="font-semibold text-[var(--text-primary)]">{workspaceName}</span>.
