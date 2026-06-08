@@ -71,16 +71,14 @@ function statusClass(status?: string) {
 function getGreeting(name: string) {
   const hr = new Date().getHours();
   let base = "Good night";
-  
+
   if (hr >= 5 && hr < 12) base = "Good morning";
   else if (hr >= 12 && hr < 17) base = "Good afternoon";
   else if (hr >= 17 && hr < 21) base = "Good evening";
-  
-  const displayName = name && name !== "there" ? name : "";
-  
+
   return (
     <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)] sm:text-3xl font-display">
-      {base}{displayName ? `, ${displayName}` : ""}
+      {base}{name ? `, ${name}` : ""}
     </h1>
   );
 }
@@ -101,7 +99,7 @@ export default function ChatPage() {
   useEffect(() => {
     const handleAuthChange = () => setUser(getCurrentUser());
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
-    
+
     let cancelled = false;
 
     async function loadDashboard() {
@@ -252,7 +250,7 @@ export default function ChatPage() {
 
         {/* 3-Column Split-Deck Grid Layout */}
         <div className="grid gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-          
+
           {/* Column 1: Command Center (Composer + Prompts) */}
           <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-elevated)] flex flex-col justify-between group/card relative overflow-hidden backdrop-blur-md">
             <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/2 to-transparent pointer-events-none" />
@@ -459,13 +457,7 @@ export default function ChatPage() {
               )}
             </div>
 
-            <div className="mt-6 border-t border-[var(--border-subtle)]/50 pt-5">
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-root)] p-3.5 text-center">
-                <p className="text-[9px] font-mono text-[var(--text-muted)] uppercase tracking-wider leading-relaxed">
-                  Data localized in AWS Mumbai. Scrubbing fully active for PAN, GSTIN, Aadhaar and credentials.
-                </p>
-              </div>
-            </div>
+
           </section>
 
         </div>
