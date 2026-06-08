@@ -128,12 +128,65 @@ export default function AuthPortal() {
           throw new Error(errData.detail || "Registration failed. Email might be in use.");
         }
 
-        setSuccess("Account created successfully! Switching to Sign In...");
-        setTimeout(() => {
-          setIsLogin(true);
-          setSuccess(null);
-          setPassword("");
-        }, 1500);
+        setSuccess("Account created! Entering Brain...");
+        
+        // --- AUTO-LOGIN ---
+        const params = new URLSearchParams();
+        params.append("username", email);
+        params.append("password", password);
+
+        const loginRes = await apiFetch("/api/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: params,
+        });
+
+        if (!loginRes.ok) {
+          throw new Error("Account created but auto-login failed. Please sign in manually.");
+        }
+
+        const loginData = await loginRes.json();
+        const token = loginData.access_token;
+        setAuthToken(token);
+
+        const userRes = await apiFetch("/api/users/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          setCurrentUser({
+            id: userData.id,
+            email: userData.email,
+            full_name: userData.full_name || fullName,
+          });
+
+          const workspaceRes = await apiFetch("/api/workspaces", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (workspaceRes.ok) {
+            const workspaces = await workspaceRes.json() as WorkspaceInfo[];
+            if (workspaces && workspaces.length > 0) {
+              setActiveWorkspace(workspaces[0]);
+            } else {
+              const createWsRes = await apiFetch("/api/workspaces", {
+                method: "POST",
+                headers: { 
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ name: "My Workspace" })
+              });
+              if (createWsRes.ok) {
+                const newWs = await createWsRes.json();
+                setActiveWorkspace(newWs);
+              }
+            }
+          }
+        }
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
