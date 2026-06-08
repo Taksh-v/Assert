@@ -469,6 +469,7 @@ async def get_auth_url(
                 f"?client_id={settings.slack_client_id}"
                 f"&scope={scopes}"
                 f"&redirect_uri={settings.slack_redirect_uri}"
+                f"&state={create_oauth_state(workspace_id or 'default-workspace')}"
             ),
             "configured": True,
         }
