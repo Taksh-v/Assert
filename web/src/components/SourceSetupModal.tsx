@@ -100,6 +100,10 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   }, [formatError]);
 
   const handleOAuth = async () => {
+    if (!workspaceId) {
+      setErrorMessage("No active workspace selected. Please select one before connecting.");
+      return;
+    }
     setIsLoading(true);
     setErrorMessage("");
     try {
