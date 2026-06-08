@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { MessageSquare, Link2, Brain, Plus, Trash2, Home, BarChart3 } from "lucide-react";
-import { apiFetch, getActiveWorkspace, getCurrentUser, isAdminWorkspaceRole } from "@/lib/auth";
+import { MessageSquare, Link2, Brain, Plus, Trash2, Home, BarChart3, LogOut, ChevronDown } from "lucide-react";
+import { apiFetch, getActiveWorkspace, getCurrentUser, isAdminWorkspaceRole, signOut } from "@/lib/auth";
 
 interface Conversation {
   id: string;
@@ -20,6 +20,7 @@ export default function Sidebar() {
   const router = useRouter();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   
   const user = getCurrentUser();
   const workspace = getActiveWorkspace();
@@ -29,6 +30,24 @@ export default function Sidebar() {
   const initials = user?.full_name 
     ? user.full_name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
     : user?.email ? user.email.slice(0, 2).toUpperCase() : "US";
+
+  // Add click outside listener
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.profile-menu-container')) {
+        setShowProfileMenu(false);
+      }
+    };
+    if (showProfileMenu) document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showProfileMenu]);
+
+  const handleSignOut = () => {
+    setShowProfileMenu(false);
+    signOut();
+    router.push("/");
+  };
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -98,20 +117,47 @@ export default function Sidebar() {
         </div>
 
         {/* Profile & Workspace metadata (Merged Top Panel) */}
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 flex items-center gap-2.5 shadow-md hover:border-[var(--border-focus)] transition-all duration-300 group">
-          <div className="h-7 w-7 rounded bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] flex items-center justify-center text-[10px] font-bold text-[var(--text-primary)] shrink-0 font-mono relative">
-            {initials}
-            <span className="absolute bottom-[-1px] right-[-1px] h-2 w-2 rounded-full border border-[var(--bg-surface)] bg-[var(--success)] shadow-[0_0_6px_var(--success)]" />
-          </div>
-          <div className="flex flex-col overflow-hidden min-w-0">
-            <span className="text-[11px] font-semibold text-[var(--text-primary)] truncate font-display tracking-tight group-hover:text-[var(--accent)] transition-colors duration-200">
-              {user?.full_name || user?.email?.split("@")[0] || "User"}
-            </span>
-            <span className="text-[9px] font-mono text-[var(--text-muted)] truncate flex items-center gap-1.5 mt-0.5 uppercase tracking-wider">
-              <span>{workspace?.name || "WORKSPACE"}</span>
-              {isAdmin && <span className="text-[8px] font-bold text-[var(--success)] bg-[var(--success-muted)] px-1 rounded border border-[var(--success)]/10 font-mono">ADM</span>}
-            </span>
-          </div>
+        <div className="relative profile-menu-container">
+          <button 
+            onClick={() => setShowProfileMenu(!showProfileMenu)}
+            className="w-full text-left rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3 flex items-center justify-between shadow-md hover:border-[var(--border-focus)] transition-all duration-300 group"
+          >
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="h-7 w-7 rounded bg-[var(--bg-surface-hover)] border border-[var(--border-subtle)] flex items-center justify-center text-[10px] font-bold text-[var(--text-primary)] shrink-0 font-mono relative">
+                {initials}
+                <span className="absolute bottom-[-1px] right-[-1px] h-2 w-2 rounded-full border border-[var(--bg-surface)] bg-[var(--success)] shadow-[0_0_6px_var(--success)]" />
+              </div>
+              <div className="flex flex-col overflow-hidden min-w-0">
+                <span className="text-[11px] font-semibold text-[var(--text-primary)] truncate font-display tracking-tight group-hover:text-[var(--accent)] transition-colors duration-200">
+                  {user?.full_name || user?.email?.split("@")[0] || "User"}
+                </span>
+                <span className="text-[9px] font-mono text-[var(--text-muted)] truncate flex items-center gap-1.5 mt-0.5 uppercase tracking-wider">
+                  <span>{workspace?.name || "WORKSPACE"}</span>
+                  {isAdmin && <span className="text-[8px] font-bold text-[var(--success)] bg-[var(--success-muted)] px-1 rounded border border-[var(--success)]/10 font-mono">ADM</span>}
+                </span>
+              </div>
+            </div>
+            <ChevronDown className={`h-3.5 w-3.5 text-[var(--text-muted)] transition-transform duration-200 ${showProfileMenu ? "rotate-180" : ""}`} />
+          </button>
+
+          {/* Dropdown Menu */}
+          {showProfileMenu && (
+            <div className="absolute top-full left-0 right-0 mt-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-lg z-50 overflow-hidden animate-fade-in origin-top">
+              <div className="p-3 border-b border-[var(--border-subtle)]/40 bg-[var(--bg-root)]/50">
+                <p className="text-[10px] font-semibold text-[var(--text-primary)] truncate">{user?.full_name || "User"}</p>
+                <p className="text-[9px] font-mono text-[var(--text-muted)] truncate mt-0.5">{user?.email}</p>
+              </div>
+              <div className="p-1.5">
+                <button
+                  onClick={handleSignOut}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors duration-200"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
