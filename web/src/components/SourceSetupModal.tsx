@@ -49,6 +49,28 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [uploadProgress, setUploadProgress] = useState<Record<string, string>>({});
   const [isUploading, setIsUploading] = useState(false);
+
+  const formatError = (errorData: any): string => {
+    if (!errorData) return "An unknown error occurred";
+    if (typeof errorData === 'string') return errorData;
+    
+    // Handle FastAPI/Pydantic validation errors
+    if (errorData.detail) {
+      if (typeof errorData.detail === 'string') return errorData.detail;
+      if (Array.isArray(errorData.detail)) {
+        return errorData.detail
+          .map((err: any) => {
+            const field = err.loc ? err.loc.join(".") : "";
+            return `${field ? field + ": " : ""}${err.msg || JSON.stringify(err)}`;
+          })
+          .join(", ");
+      }
+      return JSON.stringify(errorData.detail);
+    }
+    
+    return errorData.message || JSON.stringify(errorData);
+  };
+
   const sourceIconSrc =
     type === "notion"
       ? "https://www.notion.so/favicon.ico"
@@ -65,7 +87,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         setDiscoveredItems(data.items || []);
       } else {
         const errorData = await discoveryRes.json();
-        setErrorMessage(errorData.detail || "Discovery failed");
+        setErrorMessage(formatError(errorData));
         setStep("error");
       }
     } catch (error) {
@@ -75,7 +97,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     } finally {
       setIsDiscovering(false);
     }
-  }, []);
+  }, [formatError]);
 
   const handleOAuth = async () => {
     setIsLoading(true);
@@ -86,7 +108,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
       if (!response.ok) {
         const errorData = await response.json();
-        setErrorMessage(errorData.detail || "OAuth not configured for this source");
+        setErrorMessage(formatError(errorData));
         setOauthConfigured(false);
         setIsLoading(false);
         return;
@@ -151,7 +173,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         await discoverResources(data.connector_id);
       } else {
         const errorData = await response.json();
-        setErrorMessage(errorData.detail || "Slack direct connection failed");
+        setErrorMessage(formatError(errorData));
         setStep("error");
       }
     } catch {
@@ -169,7 +191,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         body: JSON.stringify({
           workspace_id: workspaceId,
           type: "file_upload",
-          config: {},
+          config: { upload_dir: "" }, // Explicitly provide empty config to satisfy schema
         }),
       });
       if (response.ok) {
@@ -180,7 +202,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         return data.id;
       } else {
         const errorData = await response.json();
-        setErrorMessage(errorData.detail || "Failed to initialize upload area");
+        setErrorMessage(formatError(errorData));
         setStep("error");
       }
     } catch (error) {
@@ -189,7 +211,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
       setStep("error");
     }
     return null;
-  }, [workspaceId, discoverResources]);
+  }, [workspaceId, discoverResources, formatError]);
 
   const handleFileUpload = async (files: FileList) => {
     if (!connectorId) return;
@@ -223,7 +245,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
           });
         } else {
           const errorData = await response.json();
-          setErrorMessage(`Failed to upload ${file.name}: ${errorData.detail || "Unknown error"}`);
+          setErrorMessage(`Failed to upload ${file.name}: ${formatError(errorData)}`);
           setUploadProgress((prev) => ({ ...prev, [file.name]: "Failed" }));
           setIsUploading(false);
           return;
@@ -249,7 +271,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         const connectors = await response.json() as Array<{ id: string; type: string; status: string; config_summary?: Record<string, unknown> }>;
         const match = connectors.find(
           (c) => c.type === type &&
-            c.status === "active" &&
+            (c.status === "active" || c.status === "error") &&
             (type === "file_upload" || c.config_summary?.oauth || c.config_summary?.direct_token)
         );
         if (match) {
@@ -290,7 +312,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
           setIsDiscovering(true);
           void discoverResources(cId);
         } else if (event.data.status === "error") {
-          setErrorMessage(event.data.error || "OAuth flow failed");
+          setErrorMessage(formatError(event.data.error) || "OAuth flow failed");
           setStep("error");
         }
         setIsLoading(false);
@@ -299,7 +321,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [discoverResources]);
+  }, [discoverResources, formatError]);
 
   const handleManualToken = async () => {
     setIsLoading(true);
@@ -324,7 +346,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
 
       if (!response.ok) {
         const errorData = await response.json();
-        setErrorMessage(errorData.detail || "Failed to create connector");
+        setErrorMessage(formatError(errorData));
         setIsLoading(false);
         return;
       }
@@ -358,7 +380,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
         onClose();
       } else {
         const errorData = await response.json();
-        setErrorMessage(errorData.detail || "Sync failed");
+        setErrorMessage(formatError(errorData));
         setStep("error");
       }
     } catch {

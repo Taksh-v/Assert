@@ -207,7 +207,8 @@ async def create_connector(
     
     # Auto configure local storage for manually uploaded files
     if request.type == ConnectorType.FILE_UPLOAD:
-        request.config = {"upload_dir": f"data/uploads/{workspace_id}/{connector_id}"}
+        upload_dir = f"data/uploads/{workspace_id}/{connector_id}"
+        request.config = {"upload_dir": upload_dir}
 
     encrypted_config = encrypt_config(request.config or {})
 
@@ -496,10 +497,11 @@ async def upload_file(
     try:
         config = decrypt_config(connector.config)
     except:
-        config = connector.config or {}
+        config = {}
         
     upload_dir = config.get("upload_dir")
     if not upload_dir:
+        # Reconstruct path if missing
         upload_dir = f"data/uploads/{connector.workspace_id}/{connector.id}"
         config["upload_dir"] = upload_dir
         connector.config = encrypt_config(config)

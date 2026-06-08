@@ -699,7 +699,9 @@ function ConnectorsContent() {
 
                         {selectedInstance?.latest_sync?.error && (
                           <div className="rounded-2xl border border-rose-500/20 bg-rose-950/20 p-4 text-sm leading-6 text-rose-400 font-mono">
-                            {selectedInstance.latest_sync.error}
+                            {typeof selectedInstance.latest_sync.error === 'string' 
+                              ? selectedInstance.latest_sync.error 
+                              : JSON.stringify(selectedInstance.latest_sync.error)}
                           </div>
                         )}
                       </div>
