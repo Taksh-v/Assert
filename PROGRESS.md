@@ -300,4 +300,11 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **SSE Streaming Token Buffering**: Implemented a buffering wrapper around `_stream_query_raw` inside `stream_query` that batches token SSE payloads in chunks of 4 tokens/words while yielding immediately on punctuation, newlines, and the first token to reduce network and UI rendering overhead.
 - [x] **Automated verification**: Created `backend/tests/test_stream_buffering.py` and verified correct buffering logic and evaluation bypass behavior. All tests passed.
 
+### 43. Phase 43: Vercel & Hugging Face Production Integration — [VERIFIED]
+- [x] **Backend Endpoint Aliasing**: Added `/users/me` as a secondary route decorator to the `/me` user profile endpoint to map both frontend-expected paths.
+- [x] **Resolved Conversation Routing 404**: Reconfigured the prefix in `backend/api/conversations.py` from `/api/conversations` to `/conversations` to prevent double-prefixing inside `main.py` which resolved a critical 404 error when retrieving conversations on Vercel.
+- [x] **Private Space Auth Mapping**: Updated the Next.js API proxy (`[...path]/route.ts`) to map the user's JWT from the standard `Authorization` header to `x-user-authorization`, and configured `get_current_user` in `backend/api/users.py` to check `x-user-authorization` before checking standard auth. This frees up the main `Authorization` header on Vercel backend calls to carry the `HF_TOKEN` credentials required to cross the private Hugging Face Space proxy.
+- [x] **Production Verification**: Committed and pushed all changes to the `hf` space remote, deployed the frontend to Vercel, and verified by running the 128 pytest tests successfully.
+
+
 
