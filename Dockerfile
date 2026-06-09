@@ -40,7 +40,6 @@ ENV PYTHONPATH=/app
 # 7. Expose port (HF Spaces defaults to 7860; we override via PORT env var)
 EXPOSE 7860
 
-# 8. Start both the background worker and the API server
-# We use & to run the worker in the background and exec for the API server
-# Removing log redirection so output is visible in the HF Space container logs
-CMD ["bash", "-c", "python -u backend/worker_main.py & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]
+# 8. Start the system: Admin creation -> Seeding -> Services
+# We use && to ensure db is prepared before starting the API server
+CMD ["bash", "-c", "python scripts/create_admin.py && python seed_data.py && python -u backend/worker_main.py & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]

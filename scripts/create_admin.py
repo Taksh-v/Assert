@@ -1,0 +1,77 @@
+
+import asyncio
+import logging
+from backend.core.database import async_session, init_db
+from backend.core.security import get_password_hash
+from backend.models.user import User
+from backend.models.workspace import Workspace
+from backend.models.workspace_member import WorkspaceMember, WorkspaceRole
+from sqlalchemy import select
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def create_admin():
+    logger.info("🛠 Checking for admin user...")
+    await init_db()
+    
+    email = "admin@assest.ai"
+    password = "admin-password"
+    
+    async with async_session() as session:
+        # 1. Check if admin exists
+        stmt = select(User).where(User.email == email)
+        result = await session.execute(stmt)
+        admin = result.scalars().first()
+        
+        if admin:
+            logger.info("✅ Admin user already exists.")
+            return
+
+        logger.info(f"👤 Creating admin user: {email}")
+        admin = User(
+            email=email,
+            hashed_password=get_password_hash(password),
+            full_name="Admin",
+            is_active=True,
+            is_superuser=True
+        )
+        session.add(admin)
+        await session.flush()
+        
+        # 2. Check for default workspace
+        stmt = select(Workspace).where(Workspace.slug == "default-workspace")
+        result = await session.execute(stmt)
+        workspace = result.scalars().first()
+        
+        if not workspace:
+            logger.info("🏢 Creating default workspace...")
+            workspace = Workspace(
+                name="Default Workspace",
+                slug="default-workspace"
+            )
+            session.add(workspace)
+            await session.flush()
+        
+        # 3. Add admin to workspace as OWNER
+        stmt = select(WorkspaceMember).where(
+            WorkspaceMember.workspace_id == workspace.id,
+            WorkspaceMember.user_id == admin.id
+        )
+        result = await session.execute(stmt)
+        membership = result.scalars().first()
+        
+        if not membership:
+            logger.info("🔗 Adding admin to default workspace...")
+            membership = WorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=admin.id,
+                role=WorkspaceRole.OWNER
+            )
+            session.add(membership)
+        
+        await session.commit()
+        logger.info("🚀 Admin user and workspace setup complete.")
+
+if __name__ == "__main__":
+    asyncio.run(create_admin())
