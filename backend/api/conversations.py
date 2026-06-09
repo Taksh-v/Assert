@@ -13,7 +13,7 @@ from backend.api.users import get_current_user
 from backend.models.user import User
 from backend.api.connectors import verify_workspace_access
 
-router = APIRouter(prefix="/api/conversations", tags=["Conversations"])
+router = APIRouter(prefix="/conversations", tags=["Conversations"])
 logger = logging.getLogger(__name__)
 
 

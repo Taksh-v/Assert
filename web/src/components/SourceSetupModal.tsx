@@ -30,27 +30,35 @@ interface SourceSetupModalProps {
   onClose: () => void;
   onConnect: (config: Record<string, string>) => void;
   workspaceId: string;
+  initialConnectorId?: string;
 }
 
-export default function SourceSetupModal({ type, metadata, onClose, onConnect, workspaceId }: SourceSetupModalProps) {
-  const [step, setStep] = useState<"setup" | "discover" | "syncing" | "done" | "error">("setup");
+export default function SourceSetupModal({ type, metadata, onClose, onConnect, workspaceId, initialConnectorId }: SourceSetupModalProps) {
+  const [step, setStep] = useState<"setup" | "discover" | "syncing" | "done" | "error">(() => {
+    if (initialConnectorId) return "discover";
+    return "setup";
+  });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(() => !!initialConnectorId);
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [connectorId, setConnectorId] = useState<string | null>(null);
+  const [connectorId, setConnectorId] = useState<string | null>(initialConnectorId || null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [syncProgress, setSyncProgress] = useState<string>("");
   const [doneMessage, setDoneMessage] = useState<string>("Your brain is now live. Ask questions and get grounded answers from your connected sources.");
-  const [, setOauthConfigured] = useState<boolean>(true);
+  const [oauthConfigured, setOauthConfigured] = useState<boolean>(true);
   const [hasDirectToken, setHasDirectToken] = useState<boolean>(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(() => {
+    if (initialConnectorId) return false;
+    if (type === "file_upload") return true;
+    return false;
+  });
   const [uploadProgress, setUploadProgress] = useState<Record<string, string>>({});
   const [isUploading, setIsUploading] = useState(false);
 
-  const formatError = (errorData: any): string => {
+  const formatError = useCallback((errorData: any): string => {
     if (!errorData) return "An unknown error occurred";
     if (typeof errorData === 'string') return errorData;
     
@@ -69,7 +77,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     }
     
     return errorData.message || JSON.stringify(errorData);
-  };
+  }, []);
 
   const sourceIconSrc =
     type === "notion"
@@ -292,18 +300,36 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
     return false;
   }, [discoverResources, type, workspaceId]);
 
-  // Check for existing connector on mount
+  // Check for existing connector and verify OAuth config on mount
   useEffect(() => {
     const init = async () => {
-      setIsInitialLoading(true);
-      const found = await checkForExistingConnector();
-      if (!found && type === "file_upload") {
+      if (initialConnectorId) {
+        await discoverResources(initialConnectorId);
+      } else if (type === "file_upload") {
+        setIsInitialLoading(true);
         await handleFileUploadConnectorCreation();
+        setIsInitialLoading(false);
+      } else {
+        // Asynchronously check if OAuth is configured on the backend
+        try {
+          const response = await apiFetch(`/api/oauth/authorize/${type}?workspace_id=${workspaceId}`);
+          if (!response.ok) {
+            setOauthConfigured(false);
+            setShowAdvanced(true);
+          } else {
+            const data = await response.json();
+            if (data.direct_token) {
+              setHasDirectToken(true);
+            }
+          }
+        } catch {
+          setOauthConfigured(false);
+          setShowAdvanced(true);
+        }
       }
-      setIsInitialLoading(false);
     };
     void init();
-  }, [checkForExistingConnector, type, handleFileUploadConnectorCreation]);
+  }, [initialConnectorId, type, workspaceId, discoverResources, handleFileUploadConnectorCreation]);
 
   // Listen for OAuth popup messages
   useEffect(() => {
@@ -497,32 +523,46 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
                 </div>
               )}
 
-              <button
-                onClick={handleOAuth}
-                disabled={isLoading}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <>
-                    <ConnectorIcon type={type} className="h-5 w-5 shrink-0" />
-                    <span>{type === "slack" && hasDirectToken ? "Connect Slack" : `Authorize ${metadata.name}`}</span>
-                    <ChevronRight className="h-4 w-4" />
-                  </>
-                )}
-              </button>
+              {oauthConfigured ? (
+                <button
+                  onClick={handleOAuth}
+                  disabled={isLoading}
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      <ConnectorIcon type={type} className="h-5 w-5 shrink-0" />
+                      <span>{type === "slack" && hasDirectToken ? "Connect Slack" : `Authorize ${metadata.name}`}</span>
+                      <ChevronRight className="h-4 w-4" />
+                    </>
+                  )}
+                </button>
+              ) : (
+                <div className="flex flex-col gap-3 rounded-xl border border-amber-950 bg-amber-950/20 p-4 text-amber-400">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="h-5 w-5 shrink-0" />
+                    <p className="text-sm font-medium">OAuth is not configured on the server</p>
+                  </div>
+                  <p className="text-xs text-amber-400/80 leading-relaxed">
+                    Set client credentials in `.env` to enable one-click authorization. Alternatively, use manual token setup below to connect.
+                  </p>
+                </div>
+              )}
 
               <div className="flex flex-col items-center gap-4 pt-1">
-                <button
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="inline-flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-slate-500 transition hover:text-slate-300"
-                >
-                  <Settings className="h-3.5 w-3.5" />
-                  {showAdvanced ? "Hide advanced setup" : "Manual token setup"}
-                </button>
+                {oauthConfigured && (
+                  <button
+                    onClick={() => setShowAdvanced(!showAdvanced)}
+                    className="inline-flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-slate-500 transition hover:text-slate-300"
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                    {showAdvanced ? "Hide advanced setup" : "Manual token setup"}
+                  </button>
+                )}
 
-                {showAdvanced && (
+                {(showAdvanced || !oauthConfigured) && (
                   <div className="w-full space-y-3 animate-fade-in">
                     <input
                       type="password"

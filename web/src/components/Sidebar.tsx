@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MessageSquare, Link2, Brain, Plus, Trash2, Home, BarChart3, LogOut, ChevronDown } from "lucide-react";
-import { apiFetch, getActiveWorkspace, getCurrentUser, isAdminWorkspaceRole, signOut } from "@/lib/auth";
+import { apiFetch, getActiveWorkspace, getCurrentUser, isAdminWorkspaceRole, signOut, AUTH_CHANGE_EVENT } from "@/lib/auth";
 
 interface Conversation {
   id: string;

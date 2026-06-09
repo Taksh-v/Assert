@@ -724,6 +724,7 @@ function ConnectorsContent() {
             void fetchConnectors();
             setNotification({ type: "success", message: "Sync started in background." });
           }}
+          initialConnectorId={connectors.find((c) => c.type.toLowerCase() === setupSource.toLowerCase())?.id}
         />
       )}
     </div>

@@ -202,7 +202,7 @@ def test_conversations_auth_and_bola():
     from backend.models.user import User
 
     app = FastAPI()
-    app.include_router(conv_router)
+    app.include_router(conv_router, prefix="/api")
     client = TestClient(app)
 
     # 1. Unauthenticated: get_current_user should block
