@@ -306,5 +306,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Private Space Auth Mapping**: Updated the Next.js API proxy (`[...path]/route.ts`) to map the user's JWT from the standard `Authorization` header to `x-user-authorization`, and configured `get_current_user` in `backend/api/users.py` to check `x-user-authorization` before checking standard auth. This frees up the main `Authorization` header on Vercel backend calls to carry the `HF_TOKEN` credentials required to cross the private Hugging Face Space proxy.
 - [x] **Production Verification**: Committed and pushed all changes to the `hf` space remote, deployed the frontend to Vercel, and verified by running the 128 pytest tests successfully.
 
+### 44. Phase 44: PostgreSQL Async Driver Hardening — [VERIFIED]
+- [x] **Automatic Driver Mapping**: Modified `backend/core/database.py` to automatically rewrite `postgresql://` and `postgres://` URLs to `postgresql+asyncpg://` before engine creation. This resolves the `ModuleNotFoundError: No module named 'psycopg2'` error in asynchronous environments where a standard Postgres URL is provided.
+- [x] **Driver Fallback Provisioning**: Added `psycopg2-binary` to `requirements.txt` and `backend/requirements.txt` to ensure compatibility with synchronous database tools and fallbacks.
+- [x] **SSL Configuration**: Maintained secure SSL context stripping and manual context injection for `asyncpg` compatibility in managed database environments.
+
 
 

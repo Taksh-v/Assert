@@ -24,7 +24,13 @@ if db_url.startswith("sqlite"):
         "check_same_thread": False,
         "timeout": 60,
     }
-elif "postgresql" in db_url:
+elif "postgresql" in db_url or db_url.startswith("postgres://"):
+    # Fix scheme for asyncpg if it's missing
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
     if "sslmode=" in db_url:
