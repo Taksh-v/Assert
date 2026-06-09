@@ -1,12 +1,5 @@
 from fastapi import APIRouter, Response
 from backend.core.config import get_settings
-
-router = APIRouter(tags=["System"])
-settings = get_settings()
-
-
-from fastapi import APIRouter
-from backend.core.config import get_settings
 from backend.core.database import async_session
 from backend.core.vector_store import VectorStore
 from backend.core.llm_client import LLMClient
@@ -43,7 +36,7 @@ async def health_check():
             "executive": {"status": "unknown", "engine": "LiteLLM/Ollama"},
             "attention": {"status": "unknown", "engine": "Qdrant"},
             "memory": {"status": "unknown", "engine": "PostgreSQL"},
-            "cache": {"status": "unknown", "engine": "Redis"}
+            "cache": {"status": "unknown", "engine": "Qdrant Cache"}
         }
     }
 
@@ -73,16 +66,31 @@ async def health_check():
         async with async_session() as session:
             await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=2.0)
             health["layers"]["memory"]["status"] = "connected"
-    except Exception:
-        health["layers"]["memory"]["status"] = "offline"
+            
+            # Count users for provisioning verification
+            user_count = (await session.execute(text("SELECT count(*) FROM users"))).scalar()
+            ws_count = (await session.execute(text("SELECT count(*) FROM workspaces"))).scalar()
+            health["layers"]["memory"]["provisioned"] = {
+                "users": user_count,
+                "workspaces": ws_count
+            }
+    except Exception as e:
+        health["layers"]["memory"]["status"] = f"offline: {str(e)}"
 
-    # 4. Check Cache Layer (Redis)
+    # 4. Check Cache Layer (Semantic Cache on Qdrant)
     try:
-        import redis.asyncio as redis
-        r = redis.from_url(settings.redis_url, socket_timeout=2.0, socket_connect_timeout=2.0)
-        await r.ping()
-        health["layers"]["cache"]["status"] = "connected"
-        await r.close()
+        from backend.core.vector_store import get_qdrant_client_ctx
+        from backend.query.semantic_cache import CACHE_COLLECTION_NAME
+        with get_qdrant_client_ctx() as client:
+            if client:
+                collections = client.get_collections().collections
+                exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
+                if exists:
+                    health["layers"]["cache"]["status"] = "connected"
+                else:
+                    health["layers"]["cache"]["status"] = "offline"
+            else:
+                health["layers"]["cache"]["status"] = "offline"
     except Exception:
         health["layers"]["cache"]["status"] = "offline"
 
@@ -92,6 +100,32 @@ async def health_check():
         
     return health
 
+@router.get("/health/db-stats")
+async def get_db_stats():
+    """Returns row counts for key tables and vector counts from Qdrant."""
+    stats = {"postgres": {}, "qdrant": {}}
+    
+    # 1. Postgres Row Counts
+    try:
+        async with async_session() as session:
+            for table in ["users", "memories", "conversations"]:
+                res = await session.execute(text(f"SELECT count(*) FROM {table}"))
+                stats["postgres"][table] = res.scalar()
+    except Exception as e:
+        stats["postgres"] = {"error": str(e)}
+
+    # 2. Qdrant Vector Counts
+    try:
+        from backend.core.vector_store import get_qdrant_client_ctx
+        with get_qdrant_client_ctx() as client:
+            collections = client.get_collections().collections
+            for col in collections:
+                info = client.get_collection(col.name)
+                stats["qdrant"][col.name] = info.points_count
+    except Exception as e:
+        stats["qdrant"] = {"error": str(e)}
+        
+    return stats
 
 @router.get("/metrics")
 async def metrics():
