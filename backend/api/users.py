@@ -51,6 +51,7 @@ async def get_current_user(
             token = x_user_auth
 
     if token:
+        # 1. Try internal JWT (signed with app_secret_key)
         try:
             payload = jwt.decode(token, settings.app_secret_key, algorithms=[ALGORITHM])
             user_id: str = payload.get("sub")
@@ -61,7 +62,58 @@ async def get_current_user(
                 if user:
                     return user
         except JWTError:
-            pass
+            # 2. Try Supabase JWT (signed with supabase_jwt_secret) if internal fails
+            if settings.supabase_jwt_secret:
+                try:
+                    # Supabase uses HS256. We trust the Supabase sub (user_id) and email.
+                    # We skip 'aud' verification because it can be 'authenticated' or the client_id.
+                    payload = jwt.decode(
+                        token,
+                        settings.supabase_jwt_secret,
+                        algorithms=["HS256"],
+                        options={"verify_aud": False}
+                    )
+                    user_id: str = payload.get("sub")
+                    email: str = payload.get("email")
+
+                    if user_id:
+                        stmt = select(User).where(User.id == user_id)
+                        result = await db.execute(stmt)
+                        user = result.scalars().first()
+
+                        if not user and email:
+                            # Auto-provision user from Supabase identity
+                            user = User(
+                                id=user_id,
+                                email=email,
+                                hashed_password="SUPABASE_AUTH",
+                                full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0],
+                                is_active=True
+                            )
+                            db.add(user)
+                            await db.flush()
+
+                            # Create a default personal workspace for the new Supabase user
+                            workspace = Workspace(
+                                name=f"{user.full_name}'s Workspace",
+                                slug=f"ws-{user_id[:8]}"
+                            )
+                            db.add(workspace)
+                            await db.flush()
+
+                            membership = WorkspaceMember(
+                                workspace_id=workspace.id,
+                                user_id=user.id,
+                                role=WorkspaceRole.OWNER
+                            )
+                            db.add(membership)
+                            await db.commit()
+                            await db.refresh(user)
+
+                        if user:
+                            return user
+                except JWTError as e:
+                    logger.debug(f"Supabase JWT verification failed: {e}")
 
     # In production, do not fall back. Force authenticated access.
     if not settings.is_development:

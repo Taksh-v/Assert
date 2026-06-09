@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         default=None,
         description="Supabase service role key for server-side storage and admin tasks",
     )
+    supabase_jwt_secret: Optional[str] = Field(
+        default=None,
+        description="Supabase JWT secret for verifying tokens",
+    )
     supabase_storage_bucket: str = Field(default="raw-storage")
 
     # ── Vector Database (Qdrant) ─────────────────────────
