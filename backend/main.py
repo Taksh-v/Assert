@@ -16,6 +16,7 @@ from backend.api.webhooks import router as webhooks_router
 from backend.api.query import router as query_router
 from backend.api.connectors import router as connectors_router
 from backend.api.workspaces import router as workspaces_router
+from backend.api.documents import router as documents_router
 from backend.api.auth import router as auth_router
 from backend.api.identity_oauth import router as identity_oauth_router
 from backend.api.users import router as users_router
@@ -69,6 +70,7 @@ app.include_router(webhooks_router, prefix="/api")
 app.include_router(query_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(workspaces_router, prefix="/api")
+app.include_router(documents_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(identity_oauth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
