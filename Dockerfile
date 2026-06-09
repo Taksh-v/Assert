@@ -41,4 +41,6 @@ ENV PYTHONPATH=/app
 EXPOSE 7860
 
 # 8. Start both the background worker and the API server
-CMD ["bash", "-c", "python -u backend/worker_main.py > /app/logs/worker.log 2>&1 & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]
+# We use & to run the worker in the background and exec for the API server
+# Removing log redirection so output is visible in the HF Space container logs
+CMD ["bash", "-c", "python -u backend/worker_main.py & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]
