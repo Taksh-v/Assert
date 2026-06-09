@@ -49,7 +49,7 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    _connect_args = {"ssl": ctx}
+    _connect_args["ssl"] = ctx
 
 
 engine = create_async_engine(

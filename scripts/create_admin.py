@@ -8,17 +8,36 @@ from backend.models.workspace import Workspace
 from backend.models.workspace_member import WorkspaceMember, WorkspaceRole
 from sqlalchemy import select
 
+from sqlalchemy.pool import NullPool
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def create_admin():
     logger.info("🛠 Checking for admin user...")
-    await init_db()
+    # Use a separate engine for provisioning to ensure pool isolation
+    from backend.core.database import db_url, _connect_args
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    
+    prov_engine = create_async_engine(
+        db_url, 
+        connect_args=_connect_args,
+        poolclass=NullPool
+    )
+    
+    # We still use the shared Base/models, but a dedicated engine/session for this script
+    ProvSession = sessionmaker(prov_engine, class_=AsyncSession, expire_on_commit=False)
+    
+    # Ensure tables exist
+    from backend.core.database import Base
+    async with prov_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     
     email = "admin@assest.ai"
     password = "admin-password"
     
-    async with async_session() as session:
+    async with ProvSession() as session:
         # 1. Check if admin exists
         stmt = select(User).where(User.email == email)
         result = await session.execute(stmt)

@@ -316,7 +316,9 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Process Orchestration**: Simplified startup sequence to ensure both processes share the container's standard output streams for easier remote debugging.
 
 ### 46. Phase 46: PgBouncer & Managed Database Compatibility — [VERIFIED]
-- [x] **Disabled Prepared Statements**: Set `statement_cache_size=0` and `prepared_statement_cache_size=0` for `asyncpg` connections in `backend/core/database.py`. This resolves the `DuplicatePreparedStatementError` encountered when connecting to databases using PgBouncer in transaction or statement pooling modes (common in Supabase and other managed providers) by completely disabling the prepared statement cache.
+- [x] **Disabled Prepared Statements**: Set `statement_cache_size=0` and `prepared_statement_cache_size=0` for `asyncpg` connections in `backend/core/database.py`.
+- [x] **Connection Configuration Fix**: Resolved a critical bug in `backend/core/database.py` where SSL configuration was overwriting the `_connect_args` dictionary, causing PgBouncer settings to be lost.
+- [x] **Provisioning Isolation**: Updated `scripts/create_admin.py` to use a dedicated engine with `NullPool` to prevent connection state pollution during automated provisioning.
 
 ### 47. Phase 47: Automated Provisioning & Seeding — [VERIFIED]
 - [x] **Admin Bootstrap Script**: Created `scripts/create_admin.py` to automatically provision a default admin user (`admin@assest.ai`) and a default workspace upon startup.
