@@ -13,7 +13,8 @@ import {
   ShieldCheck,
   Award,
   Workflow,
-  AlertCircle
+  AlertCircle,
+  Paperclip
 } from "lucide-react";
 import { apiFetch, getActiveWorkspace, isAdminWorkspaceRole } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
@@ -194,6 +195,8 @@ export default function ChatIdPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [isConvLoading, setIsConvLoading] = useState(true);
   const [convTitle, setConvTitle] = useState("Conversation");
   const [thinkingLogs, setThinkingLogs] = useState<string[]>([]);
@@ -211,6 +214,40 @@ export default function ChatIdPage() {
   const visibleLensTab = !isAdmin && activeLensTab === "signals" ? "bi" : activeLensTab;
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const activeWs = getActiveWorkspace();
+    if (!file || !activeWs?.id) return;
+
+    setIsUploading(true);
+    setUploadStatus(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("workspace_id", activeWs.id);
+
+    try {
+      const response = await apiFetch("/api/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to upload document");
+      }
+
+      setUploadStatus({ success: true, message: "Document ingested successfully!" });
+      setTimeout(() => setUploadStatus(null), 5000);
+    } catch (error) {
+      console.error("Upload error:", error);
+      setUploadStatus({ success: false, message: error instanceof Error ? error.message : "Upload failed" });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   const fetchConversation = useCallback(async () => {
     setIsConvLoading(true);
@@ -772,20 +809,48 @@ export default function ChatIdPage() {
 
         {/* Input Dock */}
         <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[var(--bg-root)] via-[var(--bg-root)]/95 to-transparent z-15 shrink-0">
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-3xl mx-auto space-y-3">
+            {uploadStatus && (
+              <div className={`rounded-lg border px-3 py-2 text-[10px] font-medium animate-fade-in ${
+                uploadStatus.success 
+                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-500" 
+                  : "border-rose-500/20 bg-rose-500/5 text-rose-500"
+              }`}>
+                {uploadStatus.message}
+              </div>
+            )}
             <div className="relative flex items-center gap-2 p-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-glow)] transition-all shadow-[var(--shadow-elevated)]">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                className="hidden"
+                accept=".pdf,.txt,.docx,.md"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading || isLoading}
+                title="Upload document"
+                className="ml-2 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
+              >
+                {isUploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Paperclip className="h-4 w-4" />
+                )}
+              </button>
               <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
                 placeholder="Ask follow up..."
-                className="composer-input flex-1 bg-transparent py-3.5 px-5 text-sm text-slate-900 placeholder-[var(--text-muted)] focus:outline-none console-input font-medium"
+                className="composer-input flex-1 bg-transparent py-3.5 px-3 text-sm text-slate-900 placeholder-[var(--text-muted)] focus:outline-none console-input font-medium"
                 disabled={isLoading}
               />
               <button
                 onClick={() => handleSend()}
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim() || isLoading || isUploading}
                 className="h-10 px-4 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] hover:shadow-[0_0_10px_rgba(0,245,255,0.3)] text-black text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed font-mono uppercase mr-1"
               >
                 {isLoading ? (

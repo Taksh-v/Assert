@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  CheckCircle2,
-  Clock,
   Database,
   Loader2,
   Send,
@@ -13,6 +11,7 @@ import {
   Sparkles,
   HeartPulse,
   Cpu,
+  Paperclip,
 } from "lucide-react";
 import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
@@ -86,13 +85,56 @@ function getGreeting(name: string) {
 export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [user, setUser] = useState(getCurrentUser());
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeWorkspace = getActiveWorkspace();
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !activeWorkspace?.id) return;
+
+    setIsUploading(true);
+    setUploadStatus(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("workspace_id", activeWorkspace.id);
+
+    try {
+      const response = await apiFetch("/api/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to upload document");
+      }
+
+      setUploadStatus({ success: true, message: "Document uploaded and ingested successfully!" });
+      
+      // Auto-clear success message after 5 seconds
+      setTimeout(() => setUploadStatus(null), 5000);
+      
+      // Refresh connectors to show new document count if needed
+      const connectorsResponse = await apiFetch(`/api/connectors?workspace_id=${activeWorkspace.id}`);
+      if (connectorsResponse.ok) {
+        setConnectors(await connectorsResponse.json() as Connector[]);
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      setUploadStatus({ success: false, message: error instanceof Error ? error.message : "Failed to upload document" });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
   const userName = user?.full_name || user?.email?.split("@")[0] || "";
   const workspaceName = activeWorkspace?.name || "your workspace";
 
@@ -276,6 +318,25 @@ export default function ChatPage() {
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)]/40 pt-3">
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      accept=".pdf,.txt,.docx,.md"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading || isLoading || !activeWorkspace?.id}
+                      title="Upload document"
+                      className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {isUploading ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Paperclip className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                     <span className="rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">
                       {connectors.length || 0} Grounded Sources
                     </span>
@@ -286,13 +347,23 @@ export default function ChatPage() {
 
                   <button
                     onClick={() => handleSend()}
-                    disabled={!input.trim() || isLoading || !activeWorkspace?.id}
+                    disabled={!input.trim() || isLoading || isUploading || !activeWorkspace?.id}
                     className="inline-flex items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-white shadow-[var(--shadow-glow)] transition-all duration-200 hover:bg-[var(--accent-hover)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
                     Query
                   </button>
                 </div>
+
+                {uploadStatus && (
+                  <div className={`mt-3 rounded-lg border px-3 py-2 text-[10px] font-medium animate-fade-in ${
+                    uploadStatus.success 
+                      ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-500" 
+                      : "border-rose-500/20 bg-rose-500/5 text-rose-500"
+                  }`}>
+                    {uploadStatus.message}
+                  </div>
+                )}
               </div>
             </div>
 
