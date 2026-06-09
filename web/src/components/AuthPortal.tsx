@@ -149,8 +149,8 @@ export default function AuthPortal() {
 
         const loginData = await loginRes.json();
         const token = loginData.access_token;
-        setAuthToken(token);
-
+        
+        // Fetch user info to get the ID and confirm Name
         const userRes = await apiFetch("/api/users/me", {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -187,6 +187,10 @@ export default function AuthPortal() {
             }
           }
         }
+
+        // SET TOKEN LAST so AppShell switches only after all state is ready
+        setAuthToken(token);
+        setSuccess("Success! Entering Brain...");
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
