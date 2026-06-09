@@ -21,15 +21,25 @@ export default function Sidebar() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [user, setUser] = useState(getCurrentUser());
+  const [workspace, setWorkspace] = useState(getActiveWorkspace());
   
-  const user = getCurrentUser();
-  const workspace = getActiveWorkspace();
   const workspaceId = workspace?.id;
   const isAdmin = isAdminWorkspaceRole(workspace?.role);
   
   const initials = user?.full_name 
     ? user.full_name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
     : user?.email ? user.email.slice(0, 2).toUpperCase() : "US";
+
+  // Listen for auth/workspace changes
+  useEffect(() => {
+    const handleAuthChange = () => {
+      setUser(getCurrentUser());
+      setWorkspace(getActiveWorkspace());
+    };
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+    return () => window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+  }, []);
 
   // Add click outside listener
   useEffect(() => {
@@ -246,7 +256,7 @@ export default function Sidebar() {
             </div>
             <div className="flex flex-col items-start overflow-hidden text-left">
               <span className="truncate text-xs font-semibold text-[var(--text-primary)]">
-                {user?.full_name || "User"}
+                {user?.full_name || user?.email?.split("@")[0] || "User"}
               </span>
               <span className="truncate text-[10px] text-[var(--text-muted)] group-hover:text-[var(--text-secondary)] transition-colors">
                 {user?.email}
@@ -259,7 +269,7 @@ export default function Sidebar() {
           {showProfileMenu && (
             <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-lg z-50 overflow-hidden animate-fade-in origin-bottom">
               <div className="p-3 border-b border-[var(--border-subtle)]/40 bg-[var(--bg-root)]/50">
-                <p className="text-[10px] font-semibold text-[var(--text-primary)] truncate">{user?.full_name || "User"}</p>
+                <p className="text-[10px] font-semibold text-[var(--text-primary)] truncate">{user?.full_name || user?.email?.split("@")[0] || "User"}</p>
                 <p className="text-[9px] font-mono text-[var(--text-muted)] truncate mt-0.5">{user?.email}</p>
               </div>
               <div className="p-1.5">
