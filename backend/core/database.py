@@ -31,6 +31,11 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
     elif db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
 
+    # PgBouncer (used by Supabase/managed DBs) does not support prepared statements
+    # in 'transaction' or 'statement' pooling modes.
+    # We must disable them by setting statement_cache_size to 0.
+    _connect_args["statement_cache_size"] = 0
+
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
     if "sslmode=" in db_url:

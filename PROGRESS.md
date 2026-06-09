@@ -315,5 +315,8 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Console Log Passthrough**: Updated `Dockerfile` CMD to remove file-based log redirection, ensuring that both background worker and web server logs are visible in the Hugging Face Space log console.
 - [x] **Process Orchestration**: Simplified startup sequence to ensure both processes share the container's standard output streams for easier remote debugging.
 
+### 46. Phase 46: PgBouncer & Managed Database Compatibility — [VERIFIED]
+- [x] **Disabled Prepared Statements**: Set `statement_cache_size=0` for `asyncpg` connections in `backend/core/database.py`. This resolves the `DuplicatePreparedStatementError` encountered when connecting to databases using PgBouncer in transaction or statement pooling modes (common in Supabase and other managed providers).
+
 
 
