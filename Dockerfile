@@ -40,7 +40,7 @@ ENV PYTHONPATH=/app
 # 7. Expose port (HF Spaces defaults to 7860; we override via PORT env var)
 EXPOSE 7860
 
-ENV CACHE_BUST=1
-# 8. Start the system: Admin creation -> Seeding -> Services
+ENV CACHE_BUST=2
+# 8. Start the system: Admin creation -> Services
 # We use && to ensure db is prepared before starting the API server
-CMD ["bash", "-c", "python scripts/create_admin.py && python seed_data.py && python -u backend/worker_main.py & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]
+CMD ["bash", "-c", "python scripts/create_admin.py && python -u backend/worker_main.py & exec python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --log-level info"]

@@ -70,6 +70,43 @@ async def create_admin():
             )
             session.add(membership)
         
+        # 4. Seed demo connectors
+        from backend.models.connector import Connector, ConnectorType, ConnectorStatus
+        connectors_to_add = [
+            {
+                "type": ConnectorType.NOTION,
+                "config": {"mock": True, "workspace_name": "Demo Notion"},
+                "status": ConnectorStatus.ACTIVE
+            },
+            {
+                "type": ConnectorType.GOOGLE_DRIVE,
+                "config": {"mock": True, "folder_id": "root"},
+                "status": ConnectorStatus.ACTIVE
+            },
+            {
+                "type": ConnectorType.SLACK,
+                "config": {"mock": True, "channels": ["general"]},
+                "status": ConnectorStatus.ACTIVE
+            }
+        ]
+
+        for c_data in connectors_to_add:
+            stmt = select(Connector).where(
+                Connector.workspace_id == workspace.id,
+                Connector.type == c_data["type"]
+            )
+            res = await session.execute(stmt)
+            if not res.scalars().first():
+                logger.info(f"🔌 Adding {c_data['type']} connector...")
+                connector = Connector(
+                    workspace_id=workspace.id,
+                    type=c_data["type"],
+                    config=c_data["config"],
+                    status=c_data["status"],
+                    last_synced_at=datetime.utcnow()
+                )
+                session.add(connector)
+        
         await session.commit()
         logger.info("🚀 Admin user and workspace setup complete.")
 
