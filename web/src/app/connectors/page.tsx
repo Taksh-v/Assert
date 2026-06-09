@@ -89,13 +89,6 @@ const CONNECTOR_METADATA: Record<string, ConnectorMetadata> = {
     color: "#181717",
     icon: "H",
   },
-  file_upload: {
-    name: "File Upload",
-    category: "Files",
-    description: "Upload local files (PDF, plain text, html, images, audio) directly.",
-    color: "#00F5FF",
-    icon: "F",
-  },
 };
 
 let globalConnectorsCache: Connector[] | null = null;
