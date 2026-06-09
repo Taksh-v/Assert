@@ -16,6 +16,7 @@ export function isAdminWorkspaceRole(role?: string | null): boolean {
 }
 
 import { getBrowserApiBasePath } from "./config";
+import { supabase } from "./supabase";
 
 const TOKEN_KEY = "assest_identity_v1";
 const USER_KEY = "assest_auth_user";
@@ -30,9 +31,10 @@ function triggerAuthChange() {
   }
 }
 
-export function getAuthToken(): string | null {
+export async function getAuthToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
 }
 
 export function setAuthToken(token: string) {
@@ -72,16 +74,18 @@ export function setActiveWorkspace(workspace: WorkspaceInfo) {
   triggerAuthChange();
 }
 
-export function signOut() {
+export async function signOut() {
+  await supabase.auth.signOut();
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(WORKSPACE_KEY);
   triggerAuthChange();
 }
 
-export function isAuthenticated(): boolean {
+export async function isAuthenticated(): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  return !!localStorage.getItem(TOKEN_KEY);
+  const token = await getAuthToken();
+  return !!token;
 }
 
 /**
@@ -132,7 +136,7 @@ function toBackendProxyPath(path: string) {
  * Triggers sign out on 401 Unauthorized errors.
  */
 export async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  const token = getAuthToken();
+  const token = await getAuthToken();
   const url = toBackendProxyPath(path);
 
   const headers = new Headers(options.headers || {});

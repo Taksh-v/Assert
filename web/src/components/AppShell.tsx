@@ -11,11 +11,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
-    setAuth(isAuthenticated());
+    
+    const checkAuth = async () => {
+      const authStatus = await isAuthenticated();
+      setAuth(authStatus);
+    };
 
-    const handleAuthChange = () => {
-      console.log("[AppShell] Auth change detected, new state:", isAuthenticated());
-      setAuth(isAuthenticated());
+    checkAuth();
+
+    const handleAuthChange = async () => {
+      const authStatus = await isAuthenticated();
+      console.log("[AppShell] Auth change detected, new state:", authStatus);
+      setAuth(authStatus);
     };
 
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);

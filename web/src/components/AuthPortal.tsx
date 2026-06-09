@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
 
 // Custom Brand Icons (SVGs) for maximum reliability
 const GoogleIcon = () => (
@@ -203,6 +204,16 @@ export default function AuthPortal() {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (error) console.error("Google login error:", error.message);
+  };
+
   const handleSocialLogin = (provider: string) => {
     const providerLower = provider.toLowerCase();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -336,7 +347,7 @@ export default function AuthPortal() {
           <div className="space-y-3 mb-8">
             <div className="grid grid-cols-3 gap-3">
               <button 
-                onClick={() => handleSocialLogin('Google')}
+                onClick={handleGoogleLogin}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
                 <GoogleIcon />
