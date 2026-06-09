@@ -31,6 +31,11 @@ function buildBackendUrl(pathSegments: string[] = [], search: string) {
 function buildForwardHeaders(request: NextRequest) {
   const headers = new Headers(request.headers);
 
+  const incomingAuth = headers.get("authorization");
+  if (incomingAuth) {
+    headers.set("x-user-authorization", incomingAuth);
+  }
+
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
   }
@@ -41,6 +46,11 @@ function buildForwardHeaders(request: NextRequest) {
   const internalApiKey = process.env.ASSEST_BACKEND_API_KEY;
   if (internalApiKey && !headers.has("x-api-key")) {
     headers.set("x-api-key", internalApiKey);
+  }
+
+  const hfToken = process.env.HF_TOKEN;
+  if (hfToken) {
+    headers.set("authorization", `Bearer ${hfToken}`);
   }
 
   return headers;

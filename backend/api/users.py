@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -39,9 +39,17 @@ class Token(BaseModel):
     token_type: str
 
 async def get_current_user(
+    request: Request,
     token: Optional[str] = Depends(OAuth2PasswordBearer(tokenUrl="api/login", auto_error=False)),
     db: AsyncSession = Depends(get_db)
 ) -> User:
+    x_user_auth = request.headers.get("x-user-authorization")
+    if x_user_auth:
+        if x_user_auth.lower().startswith("bearer "):
+            token = x_user_auth[7:]
+        else:
+            token = x_user_auth
+
     if token:
         try:
             payload = jwt.decode(token, settings.app_secret_key, algorithms=[ALGORITHM])
