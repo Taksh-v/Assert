@@ -26,11 +26,19 @@ if db_url.startswith("sqlite"):
     }
 elif "postgresql" in db_url:
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
-    # We must strip it and pass 'ssl=True' in connect_args instead.
+    # We must strip it and pass 'ssl' context/bool in connect_args instead.
     if "sslmode=" in db_url:
         import re
         db_url = re.sub(r"[?&]sslmode=[^&]+", "", db_url)
-    _connect_args = {"ssl": True}
+
+    # For Supabase/managed DBs, we often need to allow self-signed certs
+    # or just require SSL without strict verification in some dev environments.
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    _connect_args = {"ssl": ctx}
+
 
 engine = create_async_engine(
     db_url,
