@@ -171,7 +171,7 @@ async def test_oauth_state_nonce_single_use():
 @pytest.mark.asyncio
 async def test_get_current_user_production_unauthorized():
     """Verify that get_current_user raises a 401 HTTPException in production when token is missing or invalid."""
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Request
     from backend.api.users import get_current_user
     
     # Mock settings.is_development to False (Production environment)
@@ -179,15 +179,18 @@ async def test_get_current_user_production_unauthorized():
         mock_settings.is_development = False
         mock_settings.app_secret_key = "test-secret"
         
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        
         # Test case 1: Token is completely missing
         with pytest.raises(HTTPException) as excinfo:
-            await get_current_user(token=None, db=AsyncMock())
+            await get_current_user(mock_request, token=None, db=AsyncMock())
         assert excinfo.value.status_code == 401
         assert "Invalid or missing authentication token" in excinfo.value.detail
         
         # Test case 2: Token is invalid
         with pytest.raises(HTTPException) as excinfo:
-            await get_current_user(token="invalid-token", db=AsyncMock())
+            await get_current_user(mock_request, token="invalid-token", db=AsyncMock())
         assert excinfo.value.status_code == 401
         assert "Invalid or missing authentication token" in excinfo.value.detail
 

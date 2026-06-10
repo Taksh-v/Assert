@@ -60,12 +60,17 @@ export default function Sidebar() {
   };
 
   const fetchConversations = useCallback(async () => {
-    setLoading(true);
+    if (!workspaceId) {
+      setConversations([]);
+      return;
+    }
+
+    // Only show loading if we have no conversations yet
+    if (conversations.length === 0) {
+      setLoading(true);
+    }
+
     try {
-      if (!workspaceId) {
-        setConversations([]);
-        return;
-      }
       const response = await apiFetch(`/api/conversations?workspace_id=${workspaceId}`);
       if (response.ok) {
         const data = await response.json();
@@ -76,7 +81,7 @@ export default function Sidebar() {
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, conversations.length]);
 
   useEffect(() => {
     queueMicrotask(() => void fetchConversations());

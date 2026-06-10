@@ -30,10 +30,27 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 1 week
 import base64
 import hashlib
 
+def _get_fernet_for_secret(secret: str) -> Fernet:
+    """Derive a 32-byte Fernet key from the given secret string."""
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode()).digest())
+    return Fernet(key)
+
+def _get_encryption_secret() -> str:
+    """Get the primary secret key for encrypting new configurations.
+    Prefer settings.app_secret_key if it is not the default placeholder.
+    Otherwise, fallback to settings.supabase_jwt_secret if configured.
+    Otherwise, use the default placeholder.
+    """
+    default_placeholder = "change-me-to-a-random-64-char-string"
+    if settings.app_secret_key and settings.app_secret_key != default_placeholder:
+        return settings.app_secret_key
+    if settings.supabase_jwt_secret:
+        return settings.supabase_jwt_secret
+    return default_placeholder
+
 def _get_fernet() -> Fernet:
     """Derive a 32-byte Fernet key from the app_secret_key."""
-    key = base64.urlsafe_b64encode(hashlib.sha256(settings.app_secret_key.encode()).digest())
-    return Fernet(key)
+    return _get_fernet_for_secret(_get_encryption_secret())
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return _bcrypt_verify(plain_password, hashed_password)
@@ -111,19 +128,41 @@ def encrypt_config(config: dict) -> str:
         raise
 
 def decrypt_config(encrypted_config: str) -> dict:
-    """Decrypt an encrypted configuration string back to a dictionary."""
+    """Decrypt an encrypted configuration string back to a dictionary with robust fallbacks."""
     if not encrypted_config:
         return {}
-    try:
-        f = _get_fernet()
-        decrypted_data = f.decrypt(encrypted_config.encode())
-        return json.loads(decrypted_data.decode())
-    except Exception as e:
-        logger.error(f"Decryption failed: {e}")
-        # SECURITY: Do NOT fall back to parsing as plain JSON.
-        # If decryption fails, the config is corrupted or tampered with.
-        raise ValueError(
-            "Failed to decrypt connector configuration. "
-            "The config may be corrupted or the encryption key may have changed. "
-            "Re-authenticate the connector to fix this."
-        )
+    
+    # Try the primary secret key first
+    primary_secret = _get_encryption_secret()
+    secrets_to_try = [primary_secret]
+    
+    # Add other possible secrets as fallbacks
+    default_placeholder = "change-me-to-a-random-64-char-string"
+    
+    if settings.app_secret_key and settings.app_secret_key not in secrets_to_try:
+        secrets_to_try.append(settings.app_secret_key)
+        
+    if settings.supabase_jwt_secret and settings.supabase_jwt_secret not in secrets_to_try:
+        secrets_to_try.append(settings.supabase_jwt_secret)
+        
+    if default_placeholder not in secrets_to_try:
+        secrets_to_try.append(default_placeholder)
+        
+    last_err = None
+    for secret in secrets_to_try:
+        try:
+            f = _get_fernet_for_secret(secret)
+            decrypted_data = f.decrypt(encrypted_config.encode())
+            return json.loads(decrypted_data.decode())
+        except Exception as e:
+            last_err = e
+            continue
+            
+    logger.error(f"Decryption failed: {last_err}")
+    # SECURITY: Do NOT fall back to parsing as plain JSON.
+    # If decryption fails, the config is corrupted or tampered with.
+    raise ValueError(
+        "Failed to decrypt connector configuration. "
+        "The config may be corrupted or the encryption key may have changed. "
+        "Re-authenticate the connector to fix this."
+    )

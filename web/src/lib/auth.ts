@@ -31,14 +31,41 @@ function triggerAuthChange() {
   }
 }
 
+let cachedToken: string | null = null;
+let tokenExpiry = 0;
+
 export async function getAuthToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
-  const { data: { session } } = await supabase.auth.getSession();
-  return session?.access_token ?? null;
+
+  // Use memory cache if token is less than 5 minutes old
+  if (cachedToken && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      cachedToken = session.access_token;
+      // Cache for 5 minutes
+      tokenExpiry = Date.now() + 5 * 60 * 1000;
+      return cachedToken;
+    }
+  } catch (err) {
+    console.warn("Failed to get Supabase session:", err);
+  }
+
+  const localToken = localStorage.getItem(TOKEN_KEY);
+  if (localToken) {
+    cachedToken = localToken;
+    tokenExpiry = Date.now() + 5 * 60 * 1000;
+  }
+  return cachedToken;
 }
 
 export function setAuthToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
+  cachedToken = token;
+  tokenExpiry = Date.now() + 5 * 60 * 1000;
   triggerAuthChange();
 }
 
@@ -85,7 +112,23 @@ export async function signOut() {
 export async function isAuthenticated(): Promise<boolean> {
   if (typeof window === "undefined") return false;
   const token = await getAuthToken();
-  return !!token;
+  if (!token) return false;
+
+  // Hydrate local user profile if it's missing (e.g. after Google OAuth redirect)
+  if (!getCurrentUser()) {
+    try {
+      const res = await apiFetch("/users/me");
+      if (res.ok) {
+        const userData = await res.json() as UserInfo;
+        setCurrentUser(userData);
+        await ensureDefaultWorkspace();
+      }
+    } catch (err) {
+      console.error("Failed to auto-hydrate user session:", err);
+    }
+  }
+
+  return true;
 }
 
 /**

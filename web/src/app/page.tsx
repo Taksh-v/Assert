@@ -145,14 +145,18 @@ export default function ChatPage() {
     let cancelled = false;
 
     async function loadDashboard() {
-      const currentWs = await ensureDefaultWorkspace();
+      // Don't await if we already have it in localStorage
+      const currentWs = getActiveWorkspace() || await ensureDefaultWorkspace();
 
       if (!currentWs?.id) {
         setDashboardLoading(false);
         return;
       }
 
-      setDashboardLoading(true);
+      // If we have existing data, don't show full-page loader
+      if (connectors.length === 0) {
+        setDashboardLoading(true);
+      }
 
       try {
         const [connectorsResponse, healthResponse] = await Promise.all([
@@ -160,16 +164,14 @@ export default function ChatPage() {
           apiFetch("/api/health"),
         ]);
 
-        if (!connectorsResponse.ok) {
-          throw new Error(`Connectors endpoint returned ${connectorsResponse.status}`);
-        }
-
-        const nextConnectors = (await connectorsResponse.json()) as Connector[];
-        const nextHealth = healthResponse.ok ? ((await healthResponse.json()) as HealthResponse) : null;
+        const [nextConnectors, nextHealth] = await Promise.all([
+          connectorsResponse.ok ? connectorsResponse.json() : Promise.resolve([]),
+          healthResponse.ok ? healthResponse.json() : Promise.resolve(null)
+        ]);
 
         if (!cancelled) {
-          setConnectors(nextConnectors);
-          setHealth(nextHealth);
+          setConnectors(nextConnectors as Connector[]);
+          setHealth(nextHealth as HealthResponse);
         }
       } catch (error) {
         if (!cancelled) {

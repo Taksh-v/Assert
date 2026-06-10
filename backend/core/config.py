@@ -208,12 +208,12 @@ class Settings(BaseSettings):
     # ── Worker Pool ──────────────────────────────────────
     enable_workers: bool = Field(default=True)
     worker_workspace_id: str = Field(default="default_workspace")
-    worker_fetch_count: int = Field(default=3)
-    worker_parser_count: int = Field(default=2)
-    worker_enrichment_count: int = Field(default=2)
-    worker_embedding_count: int = Field(default=2)
-    worker_max_concurrent_tasks: int = Field(default=5)
-    worker_batch_size: int = Field(default=10)
+    worker_fetch_count: int = Field(default=5)
+    worker_parser_count: int = Field(default=4)
+    worker_enrichment_count: int = Field(default=4)
+    worker_embedding_count: int = Field(default=4)
+    worker_max_concurrent_tasks: int = Field(default=10)
+    worker_batch_size: int = Field(default=20)
 
     # ── Auto Ingest Scheduler ───────────────────────────
     enable_auto_ingest: bool = Field(
@@ -221,7 +221,7 @@ class Settings(BaseSettings):
         description="Enable periodic automatic ingestion for active connectors",
     )
     auto_ingest_interval_minutes: int = Field(
-        default=60,
+        default=15,
         description="Interval in minutes between auto ingestion passes",
     )
 
@@ -282,6 +282,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 

@@ -193,9 +193,9 @@ class BackgroundScheduler:
             await asyncio.sleep(30 * 60)
 
     async def _auto_ingest_loop(self):
-        """Periodically iterate active connectors and trigger ingestion (default: every 60 minutes)."""
+        """Periodically iterate active connectors and trigger ingestion (default: every 15 minutes)."""
         # Small boot delay to avoid contention at startup
-        await asyncio.sleep(120)
+        await asyncio.sleep(30)
 
         interval = getattr(self.settings, "auto_ingest_interval_minutes", 60)
         if not isinstance(interval, (int, float)):

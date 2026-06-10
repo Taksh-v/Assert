@@ -1,0 +1,1 @@
+- [x] Implement Auto-Login after Registration @frontend

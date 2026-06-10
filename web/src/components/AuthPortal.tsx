@@ -70,9 +70,11 @@ export default function AuthPortal() {
         const token = data.access_token;
         setAuthToken(token);
 
-        const userRes = await apiFetch("/api/users/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // Fetch profile and workspaces in parallel for speed
+        const [userRes, workspaceRes] = await Promise.all([
+          apiFetch("/api/users/me"),
+          apiFetch("/api/workspaces")
+        ]);
 
         if (!userRes.ok) {
           throw new Error("Failed to fetch user profile details.");
@@ -85,10 +87,6 @@ export default function AuthPortal() {
           full_name: userData.full_name,
         });
 
-        const workspaceRes = await apiFetch("/api/workspaces", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
         if (workspaceRes.ok) {
           const workspaces = await workspaceRes.json() as WorkspaceInfo[];
           if (workspaces && workspaces.length > 0) {
@@ -98,7 +96,6 @@ export default function AuthPortal() {
             const createWsRes = await apiFetch("/api/workspaces", {
               method: "POST",
               headers: { 
-                Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({ name: "My Workspace" })
@@ -150,11 +147,13 @@ export default function AuthPortal() {
 
         const loginData = await loginRes.json();
         const token = loginData.access_token;
+        setAuthToken(token);
         
-        // Fetch user info to get the ID and confirm Name
-        const userRes = await apiFetch("/api/users/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        // Parallel fetch for speed
+        const [userRes, workspaceRes] = await Promise.all([
+          apiFetch("/api/users/me"),
+          apiFetch("/api/workspaces")
+        ]);
 
         if (userRes.ok) {
           const userData = await userRes.json();
@@ -162,10 +161,6 @@ export default function AuthPortal() {
             id: userData.id,
             email: userData.email,
             full_name: userData.full_name || fullName,
-          });
-
-          const workspaceRes = await apiFetch("/api/workspaces", {
-            headers: { Authorization: `Bearer ${token}` },
           });
 
           if (workspaceRes.ok) {
@@ -176,7 +171,6 @@ export default function AuthPortal() {
               const createWsRes = await apiFetch("/api/workspaces", {
                 method: "POST",
                 headers: { 
-                  Authorization: `Bearer ${token}`,
                   "Content-Type": "application/json"
                 },
                 body: JSON.stringify({ name: "My Workspace" })
@@ -189,8 +183,6 @@ export default function AuthPortal() {
           }
         }
 
-        // SET TOKEN LAST so AppShell switches only after all state is ready
-        setAuthToken(token);
         setSuccess("Success! Entering Brain...");
       }
     } catch (err: unknown) {
@@ -204,81 +196,17 @@ export default function AuthPortal() {
     }
   };
 
-  const handleGoogleLogin = async () => {
+  const handleSocialLogin = async (provider: 'google' | 'github') => {
     const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider: provider,
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
-    if (error) console.error("Google login error:", error.message);
-  };
-
-  const handleSocialLogin = (provider: string) => {
-    const providerLower = provider.toLowerCase();
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const authUrl = `${apiUrl}/api/auth/identity/${providerLower}/login`;
-    
-    // Open OAuth in a popup
-    const width = 600;
-    const height = 700;
-    const left = window.screenX + (window.outerWidth - width) / 2;
-    const top = window.screenY + (window.outerHeight - height) / 2;
-    
-    const popup = window.open(
-      authUrl,
-      `Login with ${provider}`,
-      `width=${width},height=${height},left=${left},top=${top}`
-    );
-
-    if (!popup) {
-      setError("Popup blocked. Please allow popups to continue.");
-      return;
+    if (error) {
+      console.error(`${provider} login error:`, error.message);
+      setError(`${provider} login failed. Please try again.`);
     }
-
-    // Listen for the success message from the popup
-    const handleMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'oauth-identity-success') {
-        const token = event.data.token;
-        setAuthToken(token);
-        
-        setLoading(true);
-        try {
-          const userRes = await apiFetch("/api/users/me", {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-
-          if (!userRes.ok) throw new Error("Failed to fetch user profile.");
-          const userData = await userRes.json();
-          
-          setCurrentUser({
-            id: userData.id,
-            email: userData.email,
-            full_name: userData.full_name,
-          });
-
-          const workspaceRes = await apiFetch("/api/workspaces", {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-
-          if (workspaceRes.ok) {
-            const workspaces = await workspaceRes.json() as WorkspaceInfo[];
-            if (workspaces && workspaces.length > 0) {
-              setActiveWorkspace(workspaces[0]);
-            }
-          }
-          
-          setSuccess(`Logged in with ${provider}! Redirecting...`);
-          window.removeEventListener('message', handleMessage);
-        } catch (err) {
-          setError("OAuth login succeeded but profile setup failed.");
-        } finally {
-          setLoading(false);
-        }
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
   };
 
   return (
@@ -345,24 +273,18 @@ export default function AuthPortal() {
 
           {/* Social Logins with Custom SVGs */}
           <div className="space-y-3 mb-8">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <button 
-                onClick={handleGoogleLogin}
+                onClick={() => handleSocialLogin('google')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
                 <GoogleIcon />
               </button>
               <button 
-                onClick={() => handleSocialLogin('GitHub')}
+                onClick={() => handleSocialLogin('github')}
                 className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
               >
                 <GitHubIcon />
-              </button>
-              <button 
-                onClick={() => handleSocialLogin('Facebook')}
-                className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
-              >
-                <FacebookIcon />
               </button>
             </div>
             <div className="relative flex items-center justify-center py-2">

@@ -19,6 +19,11 @@ settings = get_settings()
 _connect_args = {}
 db_url = settings.database_url
 
+import os
+if os.getenv("ASSEST_DEV_MODE") == "sandbox":
+    print("🧪 Sandbox Mode: Using local SQLite database.")
+    db_url = "sqlite+aiosqlite:///./data/sandbox.db"
+
 if db_url.startswith("sqlite"):
     _connect_args = {
         "check_same_thread": False,
