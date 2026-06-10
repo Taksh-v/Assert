@@ -86,6 +86,7 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadingFileName, setUploadingFileName] = useState("");
   const [uploadStatus, setUploadStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -101,6 +102,7 @@ export default function ChatPage() {
     if (!file || !activeWorkspace?.id) return;
 
     setIsUploading(true);
+    setUploadingFileName(file.name);
     setUploadStatus(null);
 
     const formData = new FormData();
@@ -117,7 +119,10 @@ export default function ChatPage() {
         throw new Error("Failed to upload document");
       }
 
-      setUploadStatus({ success: true, message: "Document uploaded and ingested successfully!" });
+      setUploadStatus({ 
+        success: true, 
+        message: `File "${file.name}" uploaded successfully and is being processed in the background!` 
+      });
       
       // Auto-clear success message after 5 seconds
       setTimeout(() => setUploadStatus(null), 5000);
@@ -158,30 +163,34 @@ export default function ChatPage() {
         setDashboardLoading(true);
       }
 
-      try {
-        const [connectorsResponse, healthResponse] = await Promise.all([
-          apiFetch(`/api/connectors?workspace_id=${currentWs.id}`),
-          apiFetch("/api/health"),
-        ]);
+      // 1. Fetch connectors (resolves instantly)
+      apiFetch(`/api/connectors?workspace_id=${currentWs.id}`)
+        .then(async (res) => {
+          if (res.ok && !cancelled) {
+            const nextConnectors = await res.json() as Connector[];
+            setConnectors(nextConnectors);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to load connectors", err);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setDashboardLoading(false);
+          }
+        });
 
-        const [nextConnectors, nextHealth] = await Promise.all([
-          connectorsResponse.ok ? connectorsResponse.json() : Promise.resolve([]),
-          healthResponse.ok ? healthResponse.json() : Promise.resolve(null)
-        ]);
-
-        if (!cancelled) {
-          setConnectors(nextConnectors as Connector[]);
-          setHealth(nextHealth as HealthResponse);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error(error instanceof Error ? error.message : "Failed to load workspace state");
-        }
-      } finally {
-        if (!cancelled) {
-          setDashboardLoading(false);
-        }
-      }
+      // 2. Fetch health in the background (slower Qdrant check)
+      apiFetch("/api/health")
+        .then(async (res) => {
+          if (res.ok && !cancelled) {
+            const nextHealth = await res.json() as HealthResponse;
+            setHealth(nextHealth);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to load health status", err);
+        });
     }
 
     void loadDashboard();
@@ -356,6 +365,24 @@ export default function ChatPage() {
                     Query
                   </button>
                 </div>
+
+                {isUploading && (
+                  <div className="mt-3 flex items-start gap-3 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 text-xs text-indigo-200 backdrop-blur-md animate-pulse">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-white tracking-wide uppercase text-[9px] font-mono">Ingestion Pipeline</span>
+                        <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded font-mono">Active</span>
+                      </div>
+                      <p className="text-[11px] text-indigo-200/90 truncate">
+                        Processing: <span className="font-mono text-white font-medium">{uploadingFileName}</span>
+                      </p>
+                      <p className="text-[9px] text-indigo-400/80">
+                        Parsing content, extracting knowledge graphs & building vector indices...
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {uploadStatus && (
                   <div className={`mt-3 rounded-lg border px-3 py-2 text-[10px] font-medium animate-fade-in ${

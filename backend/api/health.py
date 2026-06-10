@@ -49,16 +49,26 @@ async def health_check():
     except Exception:
         health["layers"]["executive"]["status"] = "offline"
 
-    # 2. Check Attention Layer (Vector Store)
+    # 2 & 4. Check Attention (Vector Store) and Cache (Semantic Cache) Layers
     try:
         from backend.core.vector_store import get_qdrant_client_ctx
+        from backend.query.semantic_cache import CACHE_COLLECTION_NAME
         with get_qdrant_client_ctx() as client:
             if client:
                 health["layers"]["attention"]["status"] = "connected"
+                # Check cache layer within the same connection to avoid file lock contention
+                try:
+                    collections = client.get_collections().collections
+                    exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
+                    health["layers"]["cache"]["status"] = "connected" if exists else "offline"
+                except Exception:
+                    health["layers"]["cache"]["status"] = "offline"
             else:
                 health["layers"]["attention"]["status"] = "offline"
+                health["layers"]["cache"]["status"] = "offline"
     except Exception:
         health["layers"]["attention"]["status"] = "error"
+        health["layers"]["cache"]["status"] = "offline"
 
     # 3. Check Memory Layer (Postgres)
     try:
@@ -76,23 +86,6 @@ async def health_check():
             }
     except Exception as e:
         health["layers"]["memory"]["status"] = f"offline: {str(e)}"
-
-    # 4. Check Cache Layer (Semantic Cache on Qdrant)
-    try:
-        from backend.core.vector_store import get_qdrant_client_ctx
-        from backend.query.semantic_cache import CACHE_COLLECTION_NAME
-        with get_qdrant_client_ctx() as client:
-            if client:
-                collections = client.get_collections().collections
-                exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
-                if exists:
-                    health["layers"]["cache"]["status"] = "connected"
-                else:
-                    health["layers"]["cache"]["status"] = "offline"
-            else:
-                health["layers"]["cache"]["status"] = "offline"
-    except Exception:
-        health["layers"]["cache"]["status"] = "offline"
 
     # Overall Status
     if any(l["status"] == "offline" for l in health["layers"].values()):

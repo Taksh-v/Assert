@@ -794,9 +794,12 @@ class QueryService:
                 yield f"data: {json.dumps({'type': 'sources', 'sources': citations_data, 'request_id': request_id})}\n\n"
                 
                 answer_text = cached_result["answer"]
-                for word in answer_text.split(" "):
-                    yield f"data: {json.dumps({'type': 'token', 'token': word + ' ', 'request_id': request_id})}\n\n"
-                    await asyncio.sleep(0.005)
+                words = answer_text.split(" ")
+                chunk_size = 15
+                for i in range(0, len(words), chunk_size):
+                    chunk_text = " ".join(words[i:i+chunk_size]) + " "
+                    yield f"data: {json.dumps({'type': 'token', 'token': chunk_text, 'request_id': request_id})}\n\n"
+                    await asyncio.sleep(0.001)
                 
                 yield f"data: {json.dumps({'type': 'status', 'status': 'Done', 'phase': 'synthesis', 'request_id': request_id})}\n\n"
                 meta_payload = {
@@ -848,10 +851,13 @@ class QueryService:
                 citations_data = [{"id": i+1, "title": s["title"], "url": s["url"]} for i, s in enumerate(sources)]
                 yield f"data: {json.dumps({'type': 'sources', 'sources': citations_data, 'request_id': request_id})}\n\n"
                 
-                # Stream answer tokens
-                for word in answer_text.split(" "):
-                    yield f"data: {json.dumps({'type': 'token', 'token': word + ' ', 'request_id': request_id})}\n\n"
-                    await asyncio.sleep(0.015)
+                # Stream answer tokens in chunks
+                words = answer_text.split(" ")
+                chunk_size = 15
+                for i in range(0, len(words), chunk_size):
+                    chunk_text = " ".join(words[i:i+chunk_size]) + " "
+                    yield f"data: {json.dumps({'type': 'token', 'token': chunk_text, 'request_id': request_id})}\n\n"
+                    await asyncio.sleep(0.001)
                 
                 yield f"data: {json.dumps({'type': 'status', 'status': 'Done', 'phase': 'synthesis', 'request_id': request_id})}\n\n"
                 yield f"data: {json.dumps({'type': 'metadata', 'grounding_score': 1.0, 'intent': 'conversational', 'tier': 'direct', 'request_id': request_id, 'faithfulness_score': 1.0, 'relevance_score': 1.0, 'eval_reasoning': 'Metadata query resolved via local database.'})}\n\n"
@@ -987,10 +993,13 @@ class QueryService:
                 sources = gap_result["sources"]
                 grounding_score = gap_result["grounding_score"]
 
-                # Stream the gap answer token by token
-                for word in answer_text.split(" "):
-                    yield f"data: {json.dumps({'type': 'token', 'token': word + ' '})}\n\n"
-                    await asyncio.sleep(0.02)
+                # Stream the gap answer in chunks
+                words = answer_text.split(" ")
+                chunk_size = 15
+                for i in range(0, len(words), chunk_size):
+                    chunk_text = " ".join(words[i:i+chunk_size]) + " "
+                    yield f"data: {json.dumps({'type': 'token', 'token': chunk_text, 'request_id': request_id})}\n\n"
+                    await asyncio.sleep(0.001)
 
             else:
                 # Emit sources BEFORE generation starts
@@ -1025,9 +1034,12 @@ class QueryService:
                     # Yield fallback tokens
                     best = verified.verified_chunks[0].content.strip() if verified.verified_chunks else ""
                     fallback_text = best[:900] or "I couldn't find this in your company's knowledge base."
-                    for word in fallback_text.split(" "):
-                        yield f"data: {json.dumps({'type': 'token', 'token': word + ' ', 'request_id': request_id})}\n\n"
-                        await asyncio.sleep(0.02)
+                    words = fallback_text.split(" ")
+                    chunk_size = 15
+                    for i in range(0, len(words), chunk_size):
+                        chunk_text = " ".join(words[i:i+chunk_size]) + " "
+                        yield f"data: {json.dumps({'type': 'token', 'token': chunk_text, 'request_id': request_id})}\n\n"
+                        await asyncio.sleep(0.001)
                     answer_text = fallback_text
                     used = [1] if verified.verified_chunks else []
                     cited_sources = [c for c in citation_list if c.id in used]
@@ -1058,11 +1070,13 @@ class QueryService:
 
             yield f"data: {json.dumps({'type': 'status', 'status': f'Reasoning complete (confidence: {grounding_score:.0%})', 'phase': 'synthesis', 'request_id': request_id})}\n\n"
 
-            # Stream the swarm answer
+            # Stream the swarm answer in chunks
             words = answer_text.split(" ")
-            for word in words:
-                yield f"data: {json.dumps({'type': 'token', 'token': word + ' '})}\n\n"
-                await asyncio.sleep(0.015)
+            chunk_size = 15
+            for i in range(0, len(words), chunk_size):
+                chunk_text = " ".join(words[i:i+chunk_size]) + " "
+                yield f"data: {json.dumps({'type': 'token', 'token': chunk_text, 'request_id': request_id})}\n\n"
+                await asyncio.sleep(0.001)
 
         context_str = ""
         if route.tier == ResponseTier.FAST_RAG and 'verified' in locals() and hasattr(verified, 'verified_chunks'):

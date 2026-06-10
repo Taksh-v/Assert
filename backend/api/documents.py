@@ -1,7 +1,7 @@
 import logging
 import os
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
@@ -22,8 +22,21 @@ class DocumentUploadResponse(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
-@router.post("/upload", response_model=DocumentUploadResponse)
+async def run_ingestion_background(raw_doc: dict, workspace_id: str):
+    logger.info(f"Starting background document ingestion for title: {raw_doc.get('title')}")
+    pipeline = IngestionPipeline()
+    try:
+        await pipeline.runner.process(raw_doc, workspace_id)
+        logger.info(f"Successfully finished background document ingestion for: {raw_doc.get('title')}")
+    except Exception as e:
+        logger.exception(f"Background document ingestion failed for {raw_doc.get('title')}: {e}")
+    finally:
+        pipeline.close()
+
+
+@router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     workspace_id: str = Form(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
@@ -31,7 +44,7 @@ async def upload_document(
 ):
     """
     Upload a document directly to a workspace.
-    Bypasses connector logic and goes straight to the ingestion pipeline.
+    Bypasses connector logic and goes straight to the ingestion pipeline in the background.
     """
     # 0. Verify workspace access
     resolved_workspace_id = await verify_workspace_access(workspace_id, db, current_user)
@@ -60,30 +73,12 @@ async def upload_document(
         }
     }
 
-    # 4. Use IngestionPipeline to parse, embed and upsert chunks
-    try:
-        # IngestionPipeline uses HybridParser and VectorStore internally
-        pipeline = IngestionPipeline()
-        package = await pipeline.runner.process(raw_doc, resolved_workspace_id)
-        
-        if package.state.name == "FAILED":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER__ERROR,
-                detail="Document ingestion failed during processing."
-            )
+    # Queue ingestion to run in background
+    background_tasks.add_task(run_ingestion_background, raw_doc, resolved_workspace_id)
 
-        return DocumentUploadResponse(
-            status="success",
-            document_id=package.doc_record.id if package.doc_record else None,
-            title=package.title or file.filename,
-            metadata=package.metadata
-        )
-
-    except Exception as e:
-        logger.exception(f"Error during document upload/ingestion: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ingestion error: {str(e)}"
-        )
-    finally:
-        pipeline.close()
+    return DocumentUploadResponse(
+        status="processing",
+        document_id=None,
+        title=file.filename,
+        metadata={}
+    )

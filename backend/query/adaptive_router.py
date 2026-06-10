@@ -22,6 +22,9 @@ from backend.observability.telemetry import tracer
 logger = logging.getLogger(__name__)
 
 
+_ROUTE_CACHE = {}  # query.lower() -> RouteDecision
+
+
 class RouteDecision(BaseModel):
     """The router's output: which tier to use and why."""
     tier: ResponseTier
@@ -70,17 +73,23 @@ class AdaptiveRouter:
         If reasoning_mode is forced by the user, always route to FULL_SWARM.
         Otherwise, use fast heuristics first, then fall back to LLM classification.
         """
+        cache_key = f"{query.strip().lower()}:{reasoning_mode}"
+        if cache_key in _ROUTE_CACHE:
+            return _ROUTE_CACHE[cache_key]
+
         with tracer.start_as_current_span("router.route") as span:
             span.set_attribute("query", query[:200])
             span.set_attribute("reasoning_mode", reasoning_mode)
 
             if reasoning_mode:
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.FULL_SWARM,
                     intent=QueryIntent.DEEP_ANALYSIS,
                     rationale="Reasoning mode explicitly requested by user",
                     estimated_complexity="high",
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # --- Fast-path heuristics (no LLM call) ---
             lower = query.lower().strip()
@@ -90,13 +99,15 @@ class AdaptiveRouter:
                 len(lower.split()) <= 2 and "?" not in lower
             ):
                 span.set_attribute("route", "direct")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.DIRECT,
                     intent=QueryIntent.CONVERSATIONAL,
                     rationale="Simple greeting or acknowledgment detected",
                     estimated_complexity="low",
                     skip_retrieval=True,
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # 2. Follow-up / context-dependent detection
             follow_up_prefixes = [
@@ -107,45 +118,67 @@ class AdaptiveRouter:
             if any(lower.startswith(prefix) for prefix in follow_up_prefixes):
                 # Follow-ups still need retrieval but can use fast path
                 span.set_attribute("route", "fast_rag_followup")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.FAST_RAG,
                     intent=QueryIntent.QUICK_LOOKUP,
                     rationale="Follow-up question detected, using fast path with conversation context",
                     estimated_complexity="low",
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # 3. Short factual lookup
             if any(lower.startswith(prefix) for prefix in self.FACTUAL_PREFIXES):
                 span.set_attribute("route", "fast_rag_lookup")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.FAST_RAG,
                     intent=QueryIntent.QUICK_LOOKUP,
                     rationale="Short factual lookup detected",
                     estimated_complexity="low",
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # 4. Action keyword detection
             first_word = lower.split()[0] if lower.split() else ""
             if first_word in self.ACTION_KEYWORDS:
                 span.set_attribute("route", "tool_exec")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.TOOL_EXEC,
                     intent=QueryIntent.ACTION_REQUEST,
                     rationale=f"Action verb '{first_word}' detected",
                     estimated_complexity="medium",
                     required_tools=self._guess_tools(lower),
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # 5. Comparison keyword detection
             comparison_tokens = ("compare", "versus", "vs", "tradeoff", "difference between")
             if any(token in lower for token in comparison_tokens):
                 span.set_attribute("route", "fast_rag_comparison")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.FAST_RAG,
                     intent=QueryIntent.COMPARISON,
                     rationale="Comparison request detected",
                     estimated_complexity="medium",
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
+
+            # 6. Common question keywords heuristic (to bypass LLM supervisor calls)
+            question_words = {"how", "why", "what", "who", "where", "when", "which", "list", "show", "describe", "explain", "find", "get"}
+            query_tokens = set(lower.split())
+            if query_tokens & question_words:
+                span.set_attribute("route", "fast_rag_heuristic")
+                decision = RouteDecision(
+                    tier=ResponseTier.FAST_RAG,
+                    intent=QueryIntent.QUICK_LOOKUP,
+                    rationale="Heuristic: query contains question or information retrieval keywords",
+                    estimated_complexity="medium",
+                )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             # --- LLM-based classification (for non-trivial queries) ---
             try:
@@ -157,7 +190,7 @@ class AdaptiveRouter:
                 span.set_attribute("route", tier.value)
                 span.set_attribute("intent", intent.value)
 
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=tier,
                     intent=intent,
                     rationale=classification.reasoning,
@@ -165,17 +198,21 @@ class AdaptiveRouter:
                     required_tools=tools,
                     skip_retrieval=(intent == QueryIntent.CONVERSATIONAL),
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
             except Exception as e:
                 logger.warning("Router classification failed: %s. Defaulting to FAST_RAG.", e)
                 span.record_exception(e)
                 span.set_attribute("route", "fast_rag_fallback")
-                return RouteDecision(
+                decision = RouteDecision(
                     tier=ResponseTier.FAST_RAG,
                     intent=QueryIntent.QUICK_LOOKUP,
                     rationale=f"Classification error, defaulting to fast path: {e}",
                     estimated_complexity="medium",
                 )
+                _ROUTE_CACHE[cache_key] = decision
+                return decision
 
     def _intent_to_tier(self, intent: QueryIntent) -> ResponseTier:
         """Map supervisor intent to response tier."""
