@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
 import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { getSiteUrl } from "@/lib/config";
 
 // Custom Brand Icons (SVGs) for maximum reliability
 const GoogleIcon = () => (
@@ -200,7 +201,7 @@ export default function AuthPortal() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: provider,
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${getSiteUrl()}/auth/callback`,
       },
     });
     if (error) {
