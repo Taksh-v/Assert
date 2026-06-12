@@ -1,4 +1,5 @@
 import logging
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,15 +8,16 @@ from jose import JWTError, jwt
 from backend.core.database import get_db
 from backend.core.config import get_settings
 from backend.core.security import verify_password, get_password_hash, create_access_token, ALGORITHM
+from backend.core.auth_provider import SupabaseAuthProvider
 from backend.models.user import User
 from backend.models.workspace import Workspace
 from backend.models.workspace_member import WorkspaceMember, WorkspaceRole
 from pydantic import BaseModel, EmailStr
-from pydantic import BaseModel
 from typing import Optional, List
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+supabase_auth_provider = SupabaseAuthProvider()
 
 router = APIRouter(tags=["Users"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login")
@@ -62,96 +64,85 @@ async def get_current_user(
                 if user:
                     return user
         except JWTError:
-            # 2. Try Supabase JWT (signed with supabase_jwt_secret) if internal fails
+            # 2. Try Supabase JWT if internal fails
             if settings.supabase_jwt_secret:
-                try:
-                    # Supabase uses HS256. We trust the Supabase sub (user_id) and email.
-                    # We skip 'aud' verification because it can be 'authenticated' or the client_id.
-                    logger.info(f"Attempting to verify Supabase JWT with secret length: {len(settings.supabase_jwt_secret) if settings.supabase_jwt_secret else 0}")
-                    payload = jwt.decode(
-                        token,
-                        settings.supabase_jwt_secret,
-                        algorithms=["HS256"],
-                        options={"verify_aud": False}
-                    )
-                    logger.info(f"Supabase JWT decoded successfully for sub: {payload.get('sub')}")
-                    user_id: str = payload.get("sub")
-                    email: str = payload.get("email")
+                auth_payload = await supabase_auth_provider.verify_token(token)
+                if auth_payload:
+                    user_id = auth_payload.user_id
+                    email = auth_payload.email
+                    full_name = auth_payload.full_name
 
-                    if user_id:
-                        stmt = select(User).where(User.id == user_id)
-                        result = await db.execute(stmt)
-                        user = result.scalars().first()
+                    stmt = select(User).where(User.id == user_id)
+                    result = await db.execute(stmt)
+                    user = result.scalars().first()
 
-                        if not user and email:
-                            logger.info(f"Auto-provisioning new Supabase user: {email}")
-                            try:
-                                # Auto-provision user from Supabase identity
+                    if not user:
+                        logger.info(f"Auto-provisioning new Supabase user: {email}")
+                        try:
+                            # Use a nested transaction (savepoint) to gracefully handle concurrent insertions
+                            async with db.begin_nested():
                                 user = User(
                                     id=user_id,
                                     email=email,
                                     hashed_password="SUPABASE_AUTH",
-                                    full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0],
+                                    full_name=full_name,
                                     is_active=True
                                 )
                                 db.add(user)
-                                await db.flush()
-
-                                # Create a default personal workspace for the new Supabase user
+                                
                                 workspace = Workspace(
                                     name=f"{user.full_name}'s Workspace",
                                     slug=f"ws-{user_id[:8]}"
                                 )
                                 db.add(workspace)
-                                await db.flush()
-
+                                
                                 membership = WorkspaceMember(
                                     workspace_id=workspace.id,
                                     user_id=user.id,
                                     role=WorkspaceRole.OWNER
                                 )
                                 db.add(membership)
-                                await db.commit()
-                                await db.refresh(user)
-                                logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
-                            except Exception as e:
+                            await db.commit()
+                            await db.refresh(user)
+                            logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
+                        except Exception as e:
+                            # If duplicate key or unique violation, rollback savepoint and query again
+                            await db.rollback()
+                            logger.info(f"Collision or parallel auto-provisioning for {email}. Re-fetching user...")
+                            stmt = select(User).where(User.id == user_id)
+                            result = await db.execute(stmt)
+                            user = result.scalars().first()
+                            if not user:
                                 logger.error(f"Failed to auto-provision user: {e}")
-                                await db.rollback()
                                 raise HTTPException(status_code=500, detail="User provisioning failed")
 
-                        if user:
-                            # Verify user has at least one workspace. 
-                            # We use a sub-query check to avoid unnecessary flushes.
-                            stmt_ws = select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
-                            res_ws = await db.execute(stmt_ws)
-                            if not res_ws.scalars().first():
-                                logger.info(f"User {user.email} has no workspaces. Attempting to provision...")
-                                try:
-                                    # We use a nested transaction (savepoint) if supported, 
-                                    # but for standard get_db session, we just add and commit.
-                                    # To prevent deadlocks, we catch IntegrityErrors.
+                    if user:
+                        # Verify user has at least one workspace. 
+                        # We use a sub-query check to avoid unnecessary flushes.
+                        stmt_ws = select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
+                        res_ws = await db.execute(stmt_ws)
+                        if not res_ws.scalars().first():
+                            logger.info(f"User {user.email} has no workspaces. Attempting to provision...")
+                            try:
+                                async with db.begin_nested():
                                     ws = Workspace(
                                         name=f"{user.full_name or email.split('@')[0]}'s Workspace",
                                         slug=f"ws-{user.id[:8]}-{secrets.token_hex(2)}"
                                     )
                                     db.add(ws)
-                                    await db.flush()
-                                    
                                     mem = WorkspaceMember(workspace_id=ws.id, user_id=user.id, role=WorkspaceRole.OWNER)
                                     db.add(mem)
-                                    await db.commit()
-                                    await db.refresh(user)
-                                    logger.info(f"Late-provisioned workspace for {user.email}")
-                                except Exception as ws_err:
-                                    await db.rollback()
-                                    logger.warning(f"Provisioning collision or error (likely handled by parallel request): {ws_err}")
-                                    # Re-fetch to see if it was created by a parallel request
-                                    res_retry = await db.execute(stmt_ws)
-                                    if not res_retry.scalars().first():
-                                        logger.error("User still has no workspace after retry.")
-                            return user
-                except JWTError as e:
-                    logger.error(f"Supabase JWT verification failed: {e}")
+                                await db.commit()
+                                await db.refresh(user)
+                                logger.info(f"Late-provisioned workspace for {user.email}")
+                            except Exception as ws_err:
+                                await db.rollback()
+                                logger.warning(f"Provisioning collision or error (likely handled by parallel request): {ws_err}")
+                                # Re-fetch to see if it was created by a parallel request
+                                res_retry = await db.execute(stmt_ws)
+                                if not res_retry.scalars().first():
+                                    logger.error("User still has no workspace after retry.")
+                        return user
 
     # In production, do not fall back. Force authenticated access.
     if not settings.is_development:
