@@ -74,7 +74,7 @@ async def health_check():
     try:
         # Use a short timeout for the DB check
         async with async_session() as session:
-            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=2.0)
+            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=8.0)
             health["layers"]["memory"]["status"] = "connected"
             
             # Count users for provisioning verification
