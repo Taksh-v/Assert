@@ -49,16 +49,19 @@ class SupabaseAuthProvider(AuthProvider):
                 options={"verify_aud": False}
             )
             
-            user_id = payload.get("sub")
+            # Hybrid check: Supabase uses 'sub', manual might use 'user_id'
+            user_id = payload.get("sub") or payload.get("user_id")
             email = payload.get("email")
             role = payload.get("role")
             
             if not user_id or not email:
-                logger.warning(f"[AUTH] Supabase token payload missing sub/email. sub={user_id}")
+                logger.warning(f"[AUTH] Token payload missing identity fields. sub={user_id}, email={email}")
                 return None
                 
-            if role != "authenticated":
-                logger.warning(f"[AUTH] Supabase token role is '{role}', expected 'authenticated'.")
+            # If a role is present in the token, it MUST be authenticated (Supabase).
+            # Manual tokens created by Assest might omit the role field entirely.
+            if role is not None and role != "authenticated":
+                logger.warning(f"[AUTH] Token role is '{role}', expected 'authenticated'.")
                 return None
                 
             user_metadata = payload.get("user_metadata", {})

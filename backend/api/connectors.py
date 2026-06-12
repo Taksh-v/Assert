@@ -157,7 +157,7 @@ def serialize_connector(connector: Connector, latest_sync: Optional[SyncRun] = N
     try:
         config = decrypt_config(connector.config)
     except:
-        config = connector.config or {}
+        config = {}
         
     # Safe summary: expose non-sensitive config fields only
     safe_keys = {"workspace_name", "team_name", "folder_id", "channels", "oauth", "direct_token"}

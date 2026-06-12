@@ -17,16 +17,29 @@ if ! npx -y vercel whoami > /dev/null 2>&1; then
   npx -y vercel login
 fi
 
-cd web
-
 # 2. Deploy to production with inline environment variables
-# This is MUCH faster than setting them one by one via 'vercel env add'
+# We use both --env (runtime) and --build-env (build-time) to ensure
+# Next.js Server Components and API routes have access to them.
 echo -e "${CYAN}Step 2: Deploying to Vercel Production...${NC}"
+
+# Ensure we are in the web directory
+[[ "$PWD" != */web ]] && cd web
+
 npx -y vercel --prod --yes \
-  --build-env ASSEST_API_URL="https://Taxyhere-assest-brain.hf.space" \
+  --env ASSEST_API_URL="$ASSEST_API_URL" \
+  --env NEXT_PUBLIC_API_BASE_PATH="/api/backend" \
+  --env NEXT_PUBLIC_SITE_URL="https://web-kappa-eight-88.vercel.app" \
+  --env NEXT_PUBLIC_SUPABASE_URL="https://mayvqbzbuqhvmjxyvdib.supabase.co" \
+  --env NEXT_PUBLIC_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
+  --env HF_TOKEN="$HF_TOKEN" \
+  --env SUPABASE_JWT_SECRET="$SUPABASE_JWT_SECRET" \
+  --build-env ASSEST_API_URL="$ASSEST_API_URL" \
   --build-env NEXT_PUBLIC_API_BASE_PATH="/api/backend" \
   --build-env NEXT_PUBLIC_SITE_URL="https://web-kappa-eight-88.vercel.app" \
   --build-env NEXT_PUBLIC_SUPABASE_URL="https://mayvqbzbuqhvmjxyvdib.supabase.co" \
-  --build-env NEXT_PUBLIC_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1heXZxYnpidXFodm1qeHl2ZGliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyODcwNDMsImV4cCI6MjA5NDg2MzA0M30.6Wu3kv4tt5x3uhHHnEtLHsB8pYSuRUjD-J6dJz7AxPk"
+  --build-env NEXT_PUBLIC_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
+  --build-env HF_TOKEN="$HF_TOKEN" \
+  --build-env SUPABASE_JWT_SECRET="$SUPABASE_JWT_SECRET"
 
 echo -e "${GREEN}✅ Frontend deployed to Vercel!${NC}"
+

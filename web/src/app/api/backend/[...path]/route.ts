@@ -76,14 +76,18 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
 
     console.log(`[Proxy] Request ${method} ${targetUrl} (hasBody: ${hasBody})`);
 
+    let bodyBuffer: ArrayBuffer | undefined = undefined;
+    if (hasBody) {
+      bodyBuffer = await request.arrayBuffer();
+    }
+
     try {
       const upstream = await fetch(targetUrl, {
         method,
         headers: buildForwardHeaders(request),
-        body: hasBody ? request.body : undefined,
+        body: bodyBuffer,
         cache: "no-store",
-        ...(hasBody ? { duplex: "half" } : {}),
-      } as RequestInit & { duplex?: "half" });
+      });
 
       console.log(`[Proxy] Response status from backend: ${upstream.status} ${upstream.statusText}`);
 

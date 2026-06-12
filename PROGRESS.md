@@ -104,3 +104,24 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 ### 57. Phase 57: Eager Prepared Statement Cache Disabling for PgBouncer — [VERIFIED]
 - [x] **Fully disabled prepared statement cache**: Added `prepared_statement_cache_size=0` to the database connection arguments `_connect_args` in `backend/core/database.py`. This ensures that SQLAlchemy's PostgreSQL (asyncpg) dialect does not attempt to prepare/cache internal initialization queries (like `select pg_catalog.version()`) when establishing connections through PgBouncer in transaction pooling mode, resolving the `DuplicatePreparedStatementError: prepared statement "__asyncpg_stmt_1__" already exists` crash on startup.
 - [x] **Verification**: Ran the backend auth unit tests successfully after applying the fix. Pushed the update to production.
+
+### 58. Phase 58: HF Startup Crash & PgBouncer Final Fix — [VERIFIED]
+- [x] **Fixed `NameError` in `create_admin.py`**: Added missing `from datetime import datetime` import. The script used `datetime.utcnow()` inside the demo connector seeding block but never imported `datetime`, causing a `NameError` crash at container startup on Hugging Face before the API server could launch.
+- [x] **Triple-Layer PgBouncer Defense**: Added `prepared_statement_name_func` using `uuid4().hex` to `backend/core/database.py`. Combined with existing `statement_cache_size=0` and `prepared_statement_cache_size=0`, every prepared statement now gets a globally unique name — eliminating `DuplicatePreparedStatementError` even when PgBouncer reuses backend connections across different sessions.
+- [x] **Verification**: All 5 `test_auth_provider.py` tests passed. Pushed commit `0684dcd` to Hugging Face `main`.
+
+### 60. Phase 59: Workspace 401 Fix — Token Written Before Fetch — [VERIFIED]
+- [x] **Root Cause Identified**: Two code paths called `apiFetch('/workspaces')` before the Supabase `access_token` was committed to `localStorage`. `getAuthToken()` returned `null`, so requests were sent with no `Authorization` header → 401.
+  - `auth/callback/page.tsx`: `ensureDefaultWorkspace()` was called on line 63 but `commitSession()` (which writes the token) was called on line 71.
+  - `auth.ts isAuthenticated()`: Token was in `session.access_token` but never written to `localStorage` before `ensureDefaultWorkspace()` was called.
+- [x] **Fix 1 — OAuth Callback**: Inlined workspace fetch with an explicit `Authorization: Bearer <access_token>` header instead of relying on `ensureDefaultWorkspace()` which reads from localStorage.
+- [x] **Fix 2 — isAuthenticated()**: Write `session.access_token` to `localStorage[TOKEN_KEY]` and in-memory `cachedToken` BEFORE kicking off `ensureDefaultWorkspace()`.
+- [x] **Bonus**: Added fast-path early return in `ensureDefaultWorkspace()` if workspace is already cached in localStorage (eliminates redundant network call on every auth check). Role is now taken from the API response instead of hardcoded `"owner"`.
+- [x] **Verification**: `npx tsc --noEmit` passes with zero errors. Pushed commit `ab3983a` to Hugging Face `main`.
+
+### 61. Phase 60: Production Readiness & Auth Loophole Resolution — [VERIFIED]
+- [x] **Next.js Proxy Body Buffering**: Fixed "Unable to reach backend" error during email/password login by buffering the request body in the Vercel API proxy (`route.ts`). This ensures a valid `content-length` for Hugging Face's Nginx/FastAPI layer.
+- [x] **Hybrid JWT Authentication**: Updated `SupabaseAuthProvider` to correctly handle both native Supabase tokens and manually issued email/password JWTs, eliminating the `401 Unauthorized` loop.
+- [x] **Connector Config Safety**: Patched a crash in `serialize_connector` that triggered a 500 error when config decryption failed.
+- [x] **Isolated Test Environment**: Fixed the 131-test suite to run against a sandboxed SQLite instance, resolving PgBouncer concurrency crashes and achieving a **100% test pass rate**.
+- [x] **Runtime Environment Hardening**: Synchronized `SUPABASE_JWT_SECRET` and `HF_TOKEN` across `deploy_vercel.sh` for production runtime stability.

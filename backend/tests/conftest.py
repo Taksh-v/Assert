@@ -1,4 +1,11 @@
+import os
 import sys
+
+# Force testing environment before any app modules load
+os.environ["ASSEST_DEV_MODE"] = "sandbox"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./data/test_db.sqlite3"
+os.environ["QDRANT_MODE"] = "memory"
+
 from unittest.mock import MagicMock
 sys.modules["groq"] = MagicMock()
 sys.modules["sentence_transformers"] = MagicMock()
