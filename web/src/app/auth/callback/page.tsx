@@ -16,6 +16,7 @@ export default function AuthCallback() {
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code");
       const error = params.get("error");
+      const hash = window.location.hash;
 
       // 1. Handle explicit errors from the provider
       if (error) {
@@ -27,28 +28,27 @@ export default function AuthCallback() {
       // 2. If there's a code, exchange it for a session
       if (code) {
         processed.current = true;
+        console.log("[AuthCallback] Code detected, exchanging...");
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         
         if (exchangeError) {
           console.error("Auth callback exchange error:", exchangeError.message);
-          
-          // Check if we actually have a session anyway (maybe it was exchanged by the other run)
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            router.push("/");
-            return;
-          }
-          
           router.push("/?error=" + encodeURIComponent(exchangeError.message));
           return;
         }
+      } 
+      // 3. Handle Hash Fragment (implicit flow fallback)
+      else if (hash && hash.includes("access_token")) {
+        console.log("[AuthCallback] Access token found in hash fragment.");
+        processed.current = true;
       }
 
-      // 3. Final verification: do we have a session now?
+      // 4. Final verification: do we have a session now?
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        // Small delay to allow listeners to catch up and avoid race conditions
-        setTimeout(() => router.push("/"), 500);
+        console.log("[AuthCallback] Session verified! Redirecting to home...");
+        // Use window.location.replace to ensure the auth state is clean and avoid browser back-button loops
+        window.location.replace("/");
       } else {
         // No code and no session? Redirect home to re-authenticate
         console.warn("No code or session found in callback.");
