@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Sidebar from "./Sidebar";
 import AuthPortal from "./AuthPortal";
-import { isAuthenticated, AUTH_CHANGE_EVENT } from "@/lib/auth";
+import { isAuthenticated, ensureDefaultWorkspace, AUTH_CHANGE_EVENT } from "@/lib/auth";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -14,6 +14,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     
     const checkAuth = async () => {
       const authStatus = await isAuthenticated();
+      if (authStatus) {
+        await ensureDefaultWorkspace();
+      }
       setAuth(authStatus);
     };
 
@@ -21,6 +24,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
     const handleAuthChange = async () => {
       const authStatus = await isAuthenticated();
+      if (authStatus) {
+        await ensureDefaultWorkspace();
+      }
       console.log("[AppShell] Auth change detected, new state:", authStatus);
       setAuth(authStatus);
     };

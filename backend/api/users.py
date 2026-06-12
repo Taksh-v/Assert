@@ -95,6 +95,7 @@ async def get_current_user(
                                     slug=f"ws-{user_id[:8]}"
                                 )
                                 db.add(workspace)
+                                await db.flush()
                                 
                                 membership = WorkspaceMember(
                                     workspace_id=workspace.id,
@@ -130,6 +131,7 @@ async def get_current_user(
                                         slug=f"ws-{user.id[:8]}-{secrets.token_hex(2)}"
                                     )
                                     db.add(ws)
+                                    await db.flush()
                                     mem = WorkspaceMember(workspace_id=ws.id, user_id=user.id, role=WorkspaceRole.OWNER)
                                     db.add(mem)
                                 await db.commit()
