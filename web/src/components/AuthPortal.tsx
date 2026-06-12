@@ -1,7 +1,8 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 
-import React, { useState } from "react";
-import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, ChevronLeft } from "lucide-react";
 import { apiFetch, commitSession, WorkspaceInfo } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getSiteUrl } from "@/lib/config";
@@ -22,28 +23,77 @@ const GitHubIcon = () => (
   </svg>
 );
 
-const FacebookIcon = () => (
-  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="#1877F2">
-    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-  </svg>
-);
-
 export default function AuthPortal() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Listen for query parameter errors (e.g. from redirect callback)
-  React.useEffect(() => {
+  // Field-specific validation errors (Google-style progressive authentication)
+  const [emailError, setEmailError] = useState<React.ReactNode | null>(null);
+  const [passwordError, setPasswordError] = useState<React.ReactNode | null>(null);
+  const [fullNameError, setFullNameError] = useState<React.ReactNode | null>(null);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Focus management input refs
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+
+  // Last-account memory state
+  const [savedEmail, setSavedEmail] = useState("");
+  const [savedName, setSavedName] = useState("");
+  const [useSavedAccount, setUseSavedAccount] = useState(false);
+
+  // Progressive Wizard steps:
+  // Login: "email" -> "password"
+  // Join: "name_email" -> "create_password"
+  const [step, setStep] = useState<"email" | "password" | "name_email" | "create_password">("email");
+
+  const resetErrors = (loginMode = isLogin) => {
+    setEmailError(null);
+    setPasswordError(null);
+    setFullNameError(null);
+    setGeneralError(null);
+    setStep(loginMode ? "email" : "name_email");
+  };
+
+  // Listen for saved account hydration and query parameter errors (e.g. from redirect callback)
+  useEffect(() => {
     if (typeof window !== "undefined") {
+      // Load last logged-in account if exists
+      const lastEmail = localStorage.getItem("assest_last_email");
+      const lastName = localStorage.getItem("assest_last_name");
+      if (lastEmail) {
+        setSavedEmail(lastEmail);
+        setEmail(lastEmail);
+        if (lastName) {
+          setSavedName(lastName);
+          setFullName(lastName);
+        }
+        setUseSavedAccount(true);
+        setStep("password");
+      }
+
+      // Check URL for callback errors
       const params = new URLSearchParams(window.location.search);
       const urlError = params.get("error");
       if (urlError) {
-        setError(decodeURIComponent(urlError));
+        const decodedErr = decodeURIComponent(urlError);
+        setGeneralError(decodedErr);
+
+        // Auto-hydrate login/password steps for email collision redirection
+        if (decodedErr.includes("already exists") || decodedErr.includes("already registered")) {
+          setIsLogin(true);
+          setStep("email");
+          setUseSavedAccount(false);
+          const emailMatch = decodedErr.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+          if (emailMatch) {
+            setEmail(emailMatch[1]);
+            setStep("password");
+          }
+        }
+
         // Clean up url so it isn't sticky on page refresh
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, document.title, cleanUrl);
@@ -51,19 +101,168 @@ export default function AuthPortal() {
     }
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !password.trim() || (!isLogin && !fullName.trim())) {
-      setError("Please fill in all fields.");
-      return;
+  const [loading, setLoading] = useState(false);
+
+  const handleNextStep = async () => {
+    setEmailError(null);
+    setFullNameError(null);
+    setGeneralError(null);
+    let hasError = false;
+
+    if (isLogin) {
+      if (!email.trim()) {
+        setEmailError("Enter an email address");
+        hasError = true;
+      } else if (!/\S+@\S+\.\S+/.test(email)) {
+        setEmailError("Enter a valid email address");
+        hasError = true;
+      }
+
+      if (hasError) return;
+
+      setLoading(true);
+      try {
+        const response = await apiFetch("/api/users/check-email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ email }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to verify email.");
+        }
+
+        const data = await response.json();
+        if (!data.exists) {
+          setEmailError(
+            <>
+              {"Couldn't find your account."}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLogin(false);
+                  setStep("name_email");
+                  setEmailError(null);
+                  setPasswordError(null);
+                  setFullNameError(null);
+                  setGeneralError(null);
+                  setTimeout(() => {
+                    emailInputRef.current?.focus();
+                  }, 50);
+                }}
+                className="text-indigo-400 hover:text-indigo-300 underline font-semibold focus:outline-none cursor-pointer"
+              >
+                Create one instead
+              </button>
+            </>
+          );
+        } else if (data.auth_type === "oauth") {
+          setEmailError(
+            <>
+              This account uses Google/GitHub to sign in. Please use the Google/GitHub buttons above.
+            </>
+          );
+        } else {
+          setStep("password");
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "An error occurred.";
+        setGeneralError(errMsg);
+      } finally {
+        setLoading(false);
+      }
+
+    } else {
+      if (!fullName.trim()) {
+        setFullNameError("Enter first and last name");
+        hasError = true;
+      }
+
+      if (!email.trim()) {
+        setEmailError("Enter an email address");
+        hasError = true;
+      } else if (!/\S+@\S+\.\S+/.test(email)) {
+        setEmailError("Enter a valid email address");
+        hasError = true;
+      }
+
+      if (hasError) return;
+
+      setLoading(true);
+      try {
+        const response = await apiFetch("/api/users/check-email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ email }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to verify email.");
+        }
+
+        const data = await response.json();
+        if (data.exists) {
+          setEmailError(
+            <>
+              This email is already in use.{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLogin(true);
+                  if (data.auth_type === "password") {
+                    setStep("password");
+                  } else {
+                    setStep("email");
+                  }
+                  setEmailError(null);
+                  setPasswordError(null);
+                  setFullNameError(null);
+                  setGeneralError(null);
+                  setTimeout(() => {
+                    passwordInputRef.current?.focus();
+                  }, 50);
+                }}
+                className="text-indigo-400 hover:text-indigo-300 underline font-semibold focus:outline-none cursor-pointer"
+              >
+                Sign in instead
+              </button>
+            </>
+          );
+        } else {
+          setStep("create_password");
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "An error occurred.";
+        setGeneralError(errMsg);
+      } finally {
+        setLoading(false);
+      }
     }
+  };
 
-    setError(null);
-    setSuccess(null);
-    setLoading(true);
+  const handleFinalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError(null);
+    setGeneralError(null);
+    let hasError = false;
 
-    try {
-      if (isLogin) {
+    if (isLogin) {
+      if (!password.trim()) {
+        setPasswordError("Enter a password");
+        hasError = true;
+      }
+      if (hasError) return;
+
+      setSuccess(null);
+      setLoading(true);
+
+      try {
         const params = new URLSearchParams();
         params.append("username", email);
         params.append("password", password);
@@ -78,7 +277,14 @@ export default function AuthPortal() {
 
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.detail || "Invalid email or password.");
+          const detail = errData.detail || "Invalid email or password.";
+          
+          if (detail.includes("Incorrect password") || detail.includes("Incorrect email or password")) {
+            setPasswordError("Wrong password. Try again or check details.");
+          } else {
+            setGeneralError(detail);
+          }
+          return;
         }
 
         const data = await response.json();
@@ -105,6 +311,13 @@ export default function AuthPortal() {
           full_name: userData.full_name,
         };
 
+        if (typeof window !== "undefined") {
+          localStorage.setItem("assest_last_email", userInfo.email);
+          if (userInfo.full_name) {
+            localStorage.setItem("assest_last_name", userInfo.full_name);
+          }
+        }
+
         let workspace: WorkspaceInfo | null = null;
         if (workspaceRes.ok) {
           const workspaces = await workspaceRes.json() as WorkspaceInfo[];
@@ -127,11 +340,29 @@ export default function AuthPortal() {
           }
         }
 
-        // Atomically commit token + user + workspace — fires a SINGLE auth-change
-        // event so AppShell re-checks auth only once, when everything is ready.
         commitSession(token, userInfo, workspace);
         setSuccess("Success! Logging in...");
-      } else {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
+        setGeneralError(errMsg);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      if (!password.trim()) {
+        setPasswordError("Enter a password");
+        hasError = true;
+      } else if (password.length < 6) {
+        setPasswordError("Use 6 characters or more for your password");
+        hasError = true;
+      }
+
+      if (hasError) return;
+
+      setSuccess(null);
+      setLoading(true);
+
+      try {
         const response = await apiFetch("/api/register", {
           method: "POST",
           headers: {
@@ -146,7 +377,36 @@ export default function AuthPortal() {
 
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.detail || "Registration failed. Email might be in use.");
+          const detail = errData.detail || "Registration failed. Email might be in use.";
+          
+          if (detail.includes("Email already registered")) {
+            setEmailError(
+              <>
+                This email is already in use.{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLogin(true);
+                    setStep("password");
+                    setEmailError(null);
+                    setPasswordError(null);
+                    setFullNameError(null);
+                    setGeneralError(null);
+                    setTimeout(() => {
+                      passwordInputRef.current?.focus();
+                    }, 50);
+                  }}
+                  className="text-indigo-400 hover:text-indigo-300 underline font-semibold focus:outline-none cursor-pointer"
+                >
+                  Sign in instead
+                </button>
+              </>
+            );
+            setStep("name_email");
+          } else {
+            setGeneralError(detail);
+          }
+          return;
         }
 
         setSuccess("Account created! Entering Brain...");
@@ -171,7 +431,6 @@ export default function AuthPortal() {
         const loginData = await loginRes.json();
         const token = loginData.access_token;
         
-        // Parallel fetch for speed — pass the token directly since it's not yet in storage
         const [userRes, workspaceRes] = await Promise.all([
           apiFetch("/api/users/me", {
             headers: { Authorization: `Bearer ${token}` }
@@ -191,6 +450,13 @@ export default function AuthPortal() {
           email: userData.email,
           full_name: userData.full_name || fullName,
         };
+
+        if (typeof window !== "undefined") {
+          localStorage.setItem("assest_last_email", userInfo.email);
+          if (userInfo.full_name) {
+            localStorage.setItem("assest_last_name", userInfo.full_name);
+          }
+        }
 
         let workspace: WorkspaceInfo | null = null;
         if (workspaceRes.ok) {
@@ -214,24 +480,42 @@ export default function AuthPortal() {
           }
         }
 
-        // Atomically commit — fires a single auth-change event
         commitSession(token, userInfo, workspace);
         setSuccess("Success! Entering Brain...");
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
+        setGeneralError(errMsg);
+      } finally {
+        setLoading(false);
       }
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        let msg = err.message;
-        if (msg === "Email already registered") {
-          msg = "An account with this email already exists. Switching you to Sign In.";
-          setIsLogin(true);
-        }
-        setError(msg);
-      } else {
-        setError("An unexpected error occurred.");
-      }
-    } finally {
-      setLoading(false);
     }
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isLogin) {
+      if (step === "email") {
+        handleNextStep();
+      } else {
+        handleFinalSubmit(e);
+      }
+    } else {
+      if (step === "name_email") {
+        handleNextStep();
+      } else {
+        handleFinalSubmit(e);
+      }
+    }
+  };
+
+  const handleBackToEmail = () => {
+    setStep(isLogin ? "email" : "name_email");
+    setPassword("");
+    setPasswordError(null);
+    setGeneralError(null);
+    setTimeout(() => {
+      emailInputRef.current?.focus();
+    }, 50);
   };
 
   const handleSocialLogin = async (provider: 'google' | 'github') => {
@@ -243,9 +527,11 @@ export default function AuthPortal() {
     });
     if (error) {
       console.error(`${provider} login error:`, error.message);
-      setError(`${provider} login failed. Please try again.`);
+      setGeneralError(`${provider} login failed. Please try again.`);
     }
   };
+
+  const isFirstStep = step === "email" || step === "name_email";
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-[#020617] overflow-hidden">
@@ -285,143 +571,330 @@ export default function AuthPortal() {
         <div className="rounded-3xl border border-white/[0.05] bg-white/[0.02] backdrop-blur-xl p-8 shadow-2xl relative overflow-hidden group">
           <div className="absolute inset-0 border border-white/5 rounded-3xl pointer-events-none" />
           
-          {/* Tab Switcher */}
-          <div className="flex rounded-2xl bg-black/20 p-1.5 border border-white/5 mb-8">
-            <button
-              onClick={() => { setIsLogin(true); setError(null); setSuccess(null); }}
-              className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
-                isLogin 
-                  ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
-                  : "text-gray-400 hover:text-gray-200"
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              onClick={() => { setIsLogin(false); setError(null); setSuccess(null); }}
-              className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
-                !isLogin 
-                  ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
-                  : "text-gray-400 hover:text-gray-200"
-              }`}
-            >
-              Join
-            </button>
-          </div>
-
-          {/* Social Logins with Custom SVGs */}
-          <div className="space-y-3 mb-8">
-            <div className="grid grid-cols-2 gap-3">
-              <button 
-                onClick={() => handleSocialLogin('google')}
-                className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
-              >
-                <GoogleIcon />
-              </button>
-              <button 
-                onClick={() => handleSocialLogin('github')}
-                className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn"
-              >
-                <GitHubIcon />
-              </button>
-            </div>
-            <div className="relative flex items-center justify-center py-2">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-white/5"></div>
-              </div>
-              <span className="relative px-4 text-[10px] font-bold uppercase tracking-[0.2em] text-white/20 bg-transparent backdrop-blur-none">
-                or use email
-              </span>
-            </div>
-          </div>
-
-          {/* Form */}
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            {error && (
-              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs animate-shake">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-            {success && (
-              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs animate-fade-in">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                <span>{success}</span>
-              </div>
-            )}
-
-            {!isLogin && (
-              <div className="space-y-1.5 group/field">
-                <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
-                  Identity
-                </label>
-                <div className="relative">
-                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="Enter your name"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
-                  />
+          {useSavedAccount && savedEmail ? (
+            /* Welcome Back Card (Personalized Avatar + Name + Password) */
+            <div className="flex flex-col items-center animate-fade-in">
+              <div className="relative group mb-6">
+                <div className="absolute inset-0 bg-indigo-500/10 rounded-full blur-md group-hover:bg-indigo-500/20 transition duration-500" />
+                <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-[#0f172a] border border-white/10 shadow-inner text-indigo-400 text-2xl font-bold uppercase tracking-wider">
+                  {savedName ? savedName.split(" ").map(n => n[0]).slice(0, 2).join("") : savedEmail[0].toUpperCase()}
                 </div>
               </div>
-            )}
-
-            <div className="space-y-1.5 group/field">
-              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
-                <input
-                  type="email"
-                  required
-                  placeholder="name@work.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
-                />
+              
+              <div className="text-center mb-6 w-full">
+                <h2 className="text-xl font-bold text-white mb-1 truncate px-2">
+                  Welcome back, {savedName ? savedName.split(" ")[0] : "User"}
+                </h2>
+                <p className="text-xs text-white/40 truncate max-w-[280px] mx-auto">
+                  {savedEmail}
+                </p>
               </div>
-            </div>
 
-            <div className="space-y-1.5 group/field">
-              <label className="text-[11px] font-bold text-white/40 uppercase tracking-wider ml-1 group-focus-within/field:text-indigo-400 transition-colors">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-white/20 group-focus-within/field:text-indigo-400/60 transition-colors" />
-                <input
-                  type="password"
-                  required
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-white/[0.03] border border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300"
-                />
-              </div>
-            </div>
+              {/* Password Form for Saved Account */}
+              <form className="w-full space-y-4" onSubmit={handleFormSubmit}>
+                {generalError && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs animate-shake">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>{generalError}</span>
+                  </div>
+                )}
+                {success && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs animate-fade-in">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>{success}</span>
+                  </div>
+                )}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full relative flex items-center justify-center gap-2 py-4 px-4 rounded-xl text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-500 overflow-hidden disabled:opacity-50 transition-all duration-500 shadow-[0_10px_30px_rgba(99,102,241,0.2)] active:scale-[0.98] group/submit mt-4"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  <span className="animate-pulse">Accessing Brain...</span>
-                </>
+                <div className="space-y-1.5 group/field">
+                  <label className={`text-[11px] font-bold uppercase tracking-wider ml-1 transition-colors ${passwordError ? 'text-rose-400' : 'text-white/40 group-focus-within/field:text-indigo-400'}`}>
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className={`absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${passwordError ? 'text-rose-400/60' : 'text-white/20 group-focus-within/field:text-indigo-400/60'}`} />
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={password}
+                      autoFocus
+                      ref={passwordInputRef}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        if (passwordError) setPasswordError(null);
+                      }}
+                      className={`w-full bg-white/[0.03] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300 border ${
+                        passwordError 
+                          ? 'border-rose-500/40 focus:border-rose-500/60 bg-rose-500/[0.02]' 
+                          : 'border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06]'
+                      }`}
+                    />
+                  </div>
+                  {passwordError && (
+                    <p className="text-[10px] text-rose-400 ml-1 mt-1 font-medium flex items-center gap-1.5 animate-fade-in">
+                      <AlertCircle className="h-3 w-3 shrink-0" />
+                      {passwordError}
+                    </p>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full relative flex items-center justify-center gap-2 py-4 px-4 rounded-xl text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-500 overflow-hidden disabled:opacity-50 transition-all duration-500 shadow-[0_10px_30px_rgba(99,102,241,0.2)] active:scale-[0.98] group/submit mt-4"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span className="animate-pulse">Accessing Brain...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="relative z-10">Enter Brain</span>
+                      <ArrowRight className="h-4 w-4 relative z-10 group-hover/submit:translate-x-1 transition-transform" />
+                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseSavedAccount(false);
+                    setEmail("");
+                    setFullName("");
+                    setPassword("");
+                    resetErrors(true);
+                    setTimeout(() => {
+                      emailInputRef.current?.focus();
+                    }, 50);
+                  }}
+                  className="w-full text-center text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition mt-4 focus:outline-none cursor-pointer bg-transparent border-none"
+                >
+                  Use another account
+                </button>
+              </form>
+            </div>
+          ) : (
+            /* Standard progressive auth flow */
+            <>
+              {/* Tab Switcher - only show on first step */}
+              {isFirstStep ? (
+                <div className="flex rounded-2xl bg-black/20 p-1.5 border border-white/5 mb-8 animate-fade-in">
+                  <button
+                    type="button"
+                    onClick={() => { setIsLogin(true); resetErrors(true); }}
+                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
+                      isLogin 
+                        ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
+                        : "text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setIsLogin(false); resetErrors(false); }}
+                    className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-500 ${
+                      !isLogin 
+                        ? "bg-indigo-600 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)]" 
+                        : "text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    Join
+                  </button>
+                </div>
               ) : (
-                <>
-                  <span className="relative z-10">{isLogin ? "Enter Brain" : "Create Brain"}</span>
-                  <ArrowRight className="h-4 w-4 relative z-10 group-hover/submit:translate-x-1 transition-transform" />
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-                </>
+                /* Email Pill Header for Step 2 */
+                <div className="flex items-center gap-3 px-4 py-3 bg-white/[0.03] border border-white/5 rounded-2xl mb-6 animate-fade-in">
+                  <button
+                    type="button"
+                    onClick={handleBackToEmail}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/5 transition-all text-white/50 hover:text-white bg-transparent border-none cursor-pointer"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] font-bold text-white/40 uppercase tracking-wider">
+                      {isLogin ? "Signing in as" : "Creating account for"}
+                    </div>
+                    <div className="text-sm font-medium text-white truncate">
+                      {email}
+                    </div>
+                  </div>
+                </div>
               )}
-            </button>
-          </form>
+
+              {/* Social Logins - only show on first step */}
+              {isFirstStep && (
+                <div className="space-y-3 mb-8 animate-fade-in">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      type="button"
+                      onClick={() => handleSocialLogin('google')}
+                      className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn cursor-pointer"
+                    >
+                      <GoogleIcon />
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => handleSocialLogin('github')}
+                      className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn cursor-pointer"
+                    >
+                      <GitHubIcon />
+                    </button>
+                  </div>
+                  <div className="relative flex items-center justify-center py-2">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-white/5"></div>
+                    </div>
+                    <span className="relative px-4 text-[10px] font-bold uppercase tracking-[0.2em] text-white/20 bg-[#020617]">
+                      or use email
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Form */}
+              <form className="space-y-4" onSubmit={handleFormSubmit}>
+                {generalError && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs animate-shake">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>{generalError}</span>
+                  </div>
+                )}
+                {success && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs animate-fade-in">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>{success}</span>
+                  </div>
+                )}
+
+                {/* JOIN STEP 1: Full Name */}
+                {!isLogin && step === "name_email" && (
+                  <div className="space-y-1.5 group/field animate-fade-in">
+                    <label className={`text-[11px] font-bold uppercase tracking-wider ml-1 transition-colors ${fullNameError ? 'text-rose-400' : 'text-white/40 group-focus-within/field:text-indigo-400'}`}>
+                      Identity
+                    </label>
+                    <div className="relative">
+                      <User className={`absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${fullNameError ? 'text-rose-400/60' : 'text-white/20 group-focus-within/field:text-indigo-400/60'}`} />
+                      <input
+                        type="text"
+                        placeholder="Enter your name"
+                        value={fullName}
+                        onChange={(e) => {
+                          setFullName(e.target.value);
+                          if (fullNameError) setFullNameError(null);
+                        }}
+                        className={`w-full bg-white/[0.03] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300 border ${
+                          fullNameError 
+                            ? 'border-rose-500/40 focus:border-rose-500/60 bg-rose-500/[0.02]' 
+                            : 'border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06]'
+                        }`}
+                      />
+                    </div>
+                    {fullNameError && (
+                      <p className="text-[10px] text-rose-400 ml-1 mt-1 font-medium flex items-center gap-1.5 animate-fade-in">
+                        <AlertCircle className="h-3 w-3 shrink-0" />
+                        {fullNameError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 1 (BOTH): Email */}
+                {isFirstStep && (
+                  <div className="space-y-1.5 group/field animate-fade-in">
+                    <label className={`text-[11px] font-bold uppercase tracking-wider ml-1 transition-colors ${emailError ? 'text-rose-400' : 'text-white/40 group-focus-within/field:text-indigo-400'}`}>
+                      Email
+                    </label>
+                    <div className="relative">
+                      <Mail className={`absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${emailError ? 'text-rose-400/60' : 'text-white/20 group-focus-within/field:text-indigo-400/60'}`} />
+                      <input
+                        type="email"
+                        placeholder="name@work.com"
+                        value={email}
+                        ref={emailInputRef}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          if (emailError) setEmailError(null);
+                        }}
+                        className={`w-full bg-white/[0.03] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300 border ${
+                          emailError 
+                            ? 'border-rose-500/40 focus:border-rose-500/60 bg-rose-500/[0.02]' 
+                            : 'border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06]'
+                        }`}
+                      />
+                    </div>
+                    {emailError && (
+                      <p className="text-[10px] text-rose-400 ml-1 mt-1 font-medium flex items-start gap-1.5 animate-fade-in leading-relaxed">
+                        <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                        <span className="flex-1">{emailError}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 2 (BOTH): Password */}
+                {!isFirstStep && (
+                  <div className="space-y-1.5 group/field animate-fade-in">
+                    <label className={`text-[11px] font-bold uppercase tracking-wider ml-1 transition-colors ${passwordError ? 'text-rose-400' : 'text-white/40 group-focus-within/field:text-indigo-400'}`}>
+                      Password
+                    </label>
+                    <div className="relative">
+                      <Lock className={`absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 transition-colors ${passwordError ? 'text-rose-400/60' : 'text-white/20 group-focus-within/field:text-indigo-400/60'}`} />
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        autoFocus
+                        ref={passwordInputRef}
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          if (passwordError) setPasswordError(null);
+                        }}
+                        className={`w-full bg-white/[0.03] rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder-white/20 focus:outline-none transition-all duration-300 border ${
+                          passwordError 
+                            ? 'border-rose-500/40 focus:border-rose-500/60 bg-rose-500/[0.02]' 
+                            : 'border-white/5 focus:border-indigo-500/40 focus:bg-white/[0.06]'
+                        }`}
+                      />
+                    </div>
+                    {passwordError && (
+                      <p className="text-[10px] text-rose-400 ml-1 mt-1 font-medium flex items-center gap-1.5 animate-fade-in">
+                        <AlertCircle className="h-3 w-3 shrink-0" />
+                        {passwordError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full relative flex items-center justify-center gap-2 py-4 px-4 rounded-xl text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-500 overflow-hidden disabled:opacity-50 transition-all duration-500 shadow-[0_10px_30px_rgba(99,102,241,0.2)] active:scale-[0.98] group/submit mt-4"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      <span className="animate-pulse">
+                        {isFirstStep ? "Verifying..." : "Accessing Brain..."}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="relative z-10">
+                        {isFirstStep 
+                          ? "Next" 
+                          : (isLogin ? "Enter Brain" : "Create Brain")
+                        }
+                      </span>
+                      <ArrowRight className="h-4 w-4 relative z-10 group-hover/submit:translate-x-1 transition-transform" />
+                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                    </>
+                  )}
+                </button>
+              </form>
+            </>
+          )}
         </div>
 
         {/* Footer */}

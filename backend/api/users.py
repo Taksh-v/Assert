@@ -268,3 +268,30 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
 @router.get("/users/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+class EmailCheckRequest(BaseModel):
+    email: str
+
+
+
+class EmailCheckResponse(BaseModel):
+    exists: bool
+    auth_type: str
+
+
+@router.post("/users/check-email", response_model=EmailCheckResponse)
+async def check_email(request: EmailCheckRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Check if a user exists with the given email, and return their auth type.
+    """
+    stmt = select(User).where(User.email == request.email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    
+    if not user:
+        return {"exists": False, "auth_type": "none"}
+    
+    auth_type = "oauth" if user.hashed_password == "SUPABASE_AUTH" else "password"
+    return {"exists": True, "auth_type": auth_type}
+

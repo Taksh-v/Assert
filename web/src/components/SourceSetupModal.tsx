@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, Shield, Lock, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Zap, Brain, UploadCloud, FileText } from "lucide-react";
+import { X, Loader2, CheckCircle2, ChevronRight, Settings, AlertCircle, RefreshCw, Brain, UploadCloud, FileText } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import { parseUTCDate } from "@/lib/date";
 import ConnectorIcon from "./ConnectorIcon";
@@ -47,7 +47,7 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [connectorId, setConnectorId] = useState<string | null>(initialConnectorId || null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [syncProgress, setSyncProgress] = useState<string>("");
-  const [doneMessage, setDoneMessage] = useState<string>("Your brain is now live. Ask questions and get grounded answers from your connected sources.");
+  const [doneMessage] = useState<string>("Your brain is now live. Ask questions and get grounded answers from your connected sources.");
   const [oauthConfigured, setOauthConfigured] = useState<boolean>(true);
   const [hasDirectToken, setHasDirectToken] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState(() => {
@@ -58,33 +58,28 @@ export default function SourceSetupModal({ type, metadata, onClose, onConnect, w
   const [uploadProgress, setUploadProgress] = useState<Record<string, string>>({});
   const [isUploading, setIsUploading] = useState(false);
 
-  const formatError = useCallback((errorData: any): string => {
+  const formatError = useCallback((errorData: unknown): string => {
     if (!errorData) return "An unknown error occurred";
     if (typeof errorData === 'string') return errorData;
     
+    const errObj = errorData as Record<string, unknown>;
     // Handle FastAPI/Pydantic validation errors
-    if (errorData.detail) {
-      if (typeof errorData.detail === 'string') return errorData.detail;
-      if (Array.isArray(errorData.detail)) {
-        return errorData.detail
-          .map((err: any) => {
-            const field = err.loc ? err.loc.join(".") : "";
-            return `${field ? field + ": " : ""}${err.msg || JSON.stringify(err)}`;
+    if (errObj.detail) {
+      if (typeof errObj.detail === 'string') return errObj.detail;
+      if (Array.isArray(errObj.detail)) {
+        return errObj.detail
+          .map((err: unknown) => {
+            const errFieldObj = err as Record<string, unknown>;
+            const field = Array.isArray(errFieldObj.loc) ? errFieldObj.loc.join(".") : "";
+            return `${field ? field + ": " : ""}${String(errFieldObj.msg || JSON.stringify(err))}`;
           })
           .join(", ");
       }
-      return JSON.stringify(errorData.detail);
+      return JSON.stringify(errObj.detail);
     }
     
-    return errorData.message || JSON.stringify(errorData);
+    return String(errObj.message || JSON.stringify(errorData));
   }, []);
-
-  const sourceIconSrc =
-    type === "notion"
-      ? "https://www.notion.so/favicon.ico"
-      : type === "google_drive"
-        ? "https://www.google.com/favicon.ico"
-        : null;
 
   const discoverResources = useCallback(async (cId: string) => {
     setIsDiscovering(true);
