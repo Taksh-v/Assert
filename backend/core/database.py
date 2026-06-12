@@ -14,7 +14,7 @@ from backend.core.config import get_settings
 from uuid import uuid4
 
 
-def _unique_prepared_statement_name(_: str) -> str:
+def _unique_prepared_statement_name(*args, **kwargs) -> str:
     """Generate a globally unique prepared statement name for each asyncpg call.
 
     PgBouncer in transaction/statement pooling mode reuses backend server

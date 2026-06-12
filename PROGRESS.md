@@ -170,3 +170,11 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
   - Google OAuth URL generation — correctly chains to Google with right client_id and redirect URIs ✅
 - [x] **Deployment**: Pushed commit `cc7db68` to Hugging Face `main` and GitHub `hf-deploy`. Redeployed frontend to Vercel production (`dpl_9ggWn3W3yizz61C4S8BUKroDgD6R`).
 
+### 69. Phase 68: Supabase Auth Configuration & PgBouncer UUID Restoration — [VERIFIED]
+- [x] **Supabase Auth Fully Configured via PAT**: Used Supabase PAT to update project auth settings via Management API:
+  - `mailer_autoconfirm: true` — eliminates email confirmation requirement for new sign-ups
+  - `uri_allow_list` expanded to `https://web-kappa-eight-88.vercel.app/**,http://localhost:3000/auth/callback`
+  - Google OAuth client secret refreshed with raw `GOCSPX-` key; `site_url` confirmed correct
+- [x] **PgBouncer UUID Statement Naming Restored**: Re-added `prepared_statement_name_func` to `backend/core/database.py`. The HF Space crashed with `DuplicatePreparedStatementError: prepared statement "__asyncpg_stmt_1d__" already exists` because the third layer of the triple-defense was absent. Added `_unique_prepared_statement_name()` function returning `_s_<uuid4().hex>`.
+- [x] **Full Production Auth Verified**: Email/password and Google OAuth confirmed working end-to-end.
+- [x] **Deployment**: Pushed commit `9fa1233` to Hugging Face `main` and GitHub `hf-deploy`.
