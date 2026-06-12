@@ -47,93 +47,58 @@ export default function AuthCallback() {
       // 4. Final verification: do we have a session now?
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        console.log("[AuthCallback] Session verified! Pre-loading profile before redirect...");
+        console.log("[AuthCallback] Session verified! Finalizing local state...");
 
         const userMeta = session.user.user_metadata ?? {};
-        let userInfo = {
+        const userInfo = {
           id: session.user.id,
           email: session.user.email ?? "",
           full_name: userMeta.full_name || userMeta.name || session.user.email,
         };
 
-        let workspace: WorkspaceInfo | null = null;
+        // STEP A: Commit session IMMEDIATELY. 
+        // This stops the redirect loop because AppShell will now see auth=true.
+        commitSession(session.access_token, userInfo, null);
+
+        // STEP B: Attempt backend synchronization in the background.
+        // If this fails, we DON'T sign out; we just let the user into the app.
+        // ensureDefaultWorkspace() called later in AppShell will handle the rest.
         try {
-          // 1. Verify user profile on backend
-          console.log("[AuthCallback] Verifying profile on backend...");
+          console.log("[AuthCallback] Attempting backend identity sync...");
           const userRes = await apiFetch("/users/me", {
             headers: { Authorization: `Bearer ${session.access_token}` }
           });
           
-          if (!userRes.ok) {
-            const errData = await userRes.json().catch(() => ({}));
-            const errMsg = errData.detail || "Identity synchronization failed. Check backend logs.";
-            console.error("[AuthCallback] Profile verification failed:", errMsg);
-            throw new Error(errMsg);
-          }
-          
-          const userData = await userRes.json();
-          userInfo = {
-            id: userData.id,
-            email: userData.email,
-            full_name: userData.full_name || userInfo.full_name,
-          };
- 
-          // 2. Fetch or create workspace
-          console.log("[AuthCallback] Fetching workspaces...");
-          const wsRes = await apiFetch("/workspaces", {
-            headers: { Authorization: `Bearer ${session.access_token}` }
-          });
-          
-          if (wsRes.ok) {
-            const workspaces = await wsRes.json() as WorkspaceInfo[];
-            if (workspaces && workspaces.length > 0) {
-              workspace = workspaces[0];
-              console.log("[AuthCallback] Found existing workspace:", workspace.name);
-            } else {
-              console.log("[AuthCallback] No workspaces found, creating 'Main Workspace'...");
-              const wsName = "Main Workspace";
-              const wsSlug = `main-${userInfo.id.slice(0, 5)}-${Math.random().toString(36).slice(2, 5)}`;
-              const createWsRes = await apiFetch("/workspaces", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({ name: wsName, slug: wsSlug }),
-              });
-              if (createWsRes.ok) {
-                workspace = await createWsRes.json() as WorkspaceInfo;
-                console.log("[AuthCallback] Main workspace created successfully.");
-              } else {
-                console.warn("[AuthCallback] Failed to create Main Workspace.");
-              }
+          if (userRes.ok) {
+            const userData = await userRes.json();
+            const updatedUserInfo = {
+              id: userData.id,
+              email: userData.email,
+              full_name: userData.full_name || userInfo.full_name,
+            };
+            
+            // Refine the session with real backend data
+            const wsRes = await apiFetch("/workspaces");
+            let workspace = null;
+            if (wsRes.ok) {
+              const workspaces = await wsRes.json();
+              if (workspaces.length > 0) workspace = workspaces[0];
             }
+            commitSession(session.access_token, updatedUserInfo, workspace);
+            console.log("[AuthCallback] Backend sync successful.");
+          } else {
+            console.warn("[AuthCallback] Backend sync returned non-200. Proceeding with provider-only identity.");
           }
         } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : "Failed to synchronize session.";
-          console.error("[AuthCallback] OAuth Finalization Error:", errorMessage);
-          await supabase.auth.signOut().catch(() => {});
-          localStorage.removeItem("assest_identity_v1");
-          localStorage.removeItem("assest_auth_user");
-          localStorage.removeItem("assest_auth_workspace");
-          router.push("/?error=" + encodeURIComponent(errorMessage));
-          return;
+          console.warn("[AuthCallback] Background sync failed (backend might be offline). User is still authenticated via Supabase.");
         }
 
-        // Atomically write token + user + workspace to localStorage in one shot.
-        commitSession(session.access_token, userInfo, workspace);
-        
-        // Update the "Last Account" memory to the new OAuth user
+        // Update last account memory
         if (typeof window !== "undefined") {
           localStorage.setItem("assest_last_email", userInfo.email);
-          if (userInfo.full_name) {
-            localStorage.setItem("assest_last_name", userInfo.full_name);
-          }
         }
-        
-        console.log("[AuthCallback] Session committed. Redirecting home...");
 
-        // Replace history so the user cannot "back" into /auth/callback
+        console.log("[AuthCallback] Redirecting to dashboard...");
         window.location.replace("/");
       } else {
         // No session after exchange — send back to sign-in
