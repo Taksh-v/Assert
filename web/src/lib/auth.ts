@@ -277,8 +277,10 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
 
   if (response.status === 401) {
     // Only trigger sign out if we're not already trying to check authentication
-    // to prevent infinite reloading loops when the backend rejects a token.
-    if (!path.includes("/users/me")) {
+    // and if the user actually has an active session token in localStorage (to prevent
+    // redirect loops during the initial login or OAuth callback setups).
+    const hasSession = typeof window !== "undefined" && !!localStorage.getItem(TOKEN_KEY);
+    if (!path.includes("/users/me") && hasSession) {
       signOut();
     }
   }
