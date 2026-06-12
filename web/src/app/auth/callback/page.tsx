@@ -66,6 +66,11 @@ export default function AuthCallback() {
           if (!userRes.ok) {
             const errData = await userRes.json().catch(() => ({}));
             const errMsg = errData.detail || "Identity sync failed.";
+            console.error("[AuthCallback] Profile verification failed:", errMsg);
+            await supabase.auth.signOut().catch(() => {});
+            localStorage.removeItem("assest_identity_v1");
+            localStorage.removeItem("assest_auth_user");
+            localStorage.removeItem("assest_auth_workspace");
             router.push("/?error=" + encodeURIComponent(errMsg));
             return;
           }
@@ -76,17 +81,46 @@ export default function AuthCallback() {
             email: userData.email,
             full_name: userData.full_name || userInfo.full_name,
           };
-
-          // 2. Fetch workspace
+ 
+          // 2. Fetch or create workspace
           const wsRes = await apiFetch("/workspaces", {
             headers: { Authorization: `Bearer ${session.access_token}` }
           });
           if (wsRes.ok) {
             const workspaces = await wsRes.json() as WorkspaceInfo[];
-            workspace = workspaces?.[0] ?? null;
+            if (workspaces && workspaces.length > 0) {
+              workspace = workspaces[0];
+            } else {
+              // No workspace exists yet — create one now before committing session.
+              // This can happen if auto-provisioning failed silently or the user
+              // is an identity-linked account whose old workspace is under a different user id.
+              console.log("[AuthCallback] No workspaces found, creating default workspace...");
+              const wsName = userInfo.full_name
+                ? `${userInfo.full_name.split(" ")[0]}'s Workspace`
+                : "My Workspace";
+              const wsSlug = `ws-${userInfo.id.slice(0, 8)}-${Math.random().toString(36).slice(2, 6)}`;
+              const createWsRes = await apiFetch("/workspaces", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({ name: wsName, slug: wsSlug }),
+              });
+              if (createWsRes.ok) {
+                workspace = await createWsRes.json() as WorkspaceInfo;
+                console.log("[AuthCallback] Default workspace created:", workspace?.name);
+              } else {
+                console.warn("[AuthCallback] Failed to create default workspace — proceeding without one.");
+              }
+            }
           }
         } catch (err) {
           console.warn("[AuthCallback] Profile validation failed, returning to sign in.", err);
+          await supabase.auth.signOut().catch(() => {});
+          localStorage.removeItem("assest_identity_v1");
+          localStorage.removeItem("assest_auth_user");
+          localStorage.removeItem("assest_auth_workspace");
           router.push("/?error=" + encodeURIComponent("Failed to synchronize session. Please try again."));
           return;
         }

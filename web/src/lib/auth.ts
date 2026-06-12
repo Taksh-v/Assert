@@ -185,8 +185,9 @@ export async function isAuthenticated(): Promise<boolean> {
       // Write user profile to storage WITHOUT triggering auth change (we're already inside the check)
       localStorage.setItem(USER_KEY, JSON.stringify(userInfo));
       console.log("[Auth] Hydrated from Supabase metadata:", userInfo.email);
-      // Kick off workspace load in background; don't block auth check
-      ensureDefaultWorkspace().catch(() => {});
+      // Await workspace load so it is in localStorage before AppShell renders.
+      // This prevents the "No active workspace" flash on first OAuth sign-in.
+      await ensureDefaultWorkspace().catch(() => {});
       return true;
     }
   } catch (err) {
@@ -205,7 +206,7 @@ export async function isAuthenticated(): Promise<boolean> {
       const userData = await res.json() as UserInfo;
       console.log("[Auth] Backend hydration success:", userData.email);
       localStorage.setItem(USER_KEY, JSON.stringify(userData));
-      ensureDefaultWorkspace().catch(() => {});
+      await ensureDefaultWorkspace().catch(() => {});
       return true;
     }
 

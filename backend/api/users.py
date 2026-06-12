@@ -82,51 +82,57 @@ async def get_current_user(
                         res_email = await db.execute(stmt_email)
                         existing_user = res_email.scalars().first()
                         if existing_user:
-                            logger.warning(f"OAuth email collision: user {email} already exists in database.")
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="An account with this email already exists. Please sign in using email and password."
-                            )
-                        
-                        logger.info(f"Auto-provisioning new Supabase user: {email}")
-                        try:
-                            # Use a nested transaction (savepoint) to gracefully handle concurrent insertions
-                            async with db.begin_nested():
-                                user = User(
-                                    id=user_id,
-                                    email=email,
-                                    hashed_password="SUPABASE_AUTH",
-                                    full_name=full_name,
-                                    is_active=True
-                                )
-                                db.add(user)
-                                
-                                workspace = Workspace(
-                                    name=f"{user.full_name}'s Workspace",
-                                    slug=f"ws-{user_id[:8]}"
-                                )
-                                db.add(workspace)
-                                await db.flush()
-                                
-                                membership = WorkspaceMember(
-                                    workspace_id=workspace.id,
-                                    user_id=user.id,
-                                    role=WorkspaceRole.OWNER
-                                )
-                                db.add(membership)
-                            await db.commit()
-                            await db.refresh(user)
-                            logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
-                        except Exception as e:
-                            # If duplicate key or unique violation, rollback savepoint and query again
-                            await db.rollback()
-                            logger.info(f"Collision or parallel auto-provisioning for {email}. Re-fetching user...")
-                            stmt = select(User).where(User.id == user_id)
-                            result = await db.execute(stmt)
-                            user = result.scalars().first()
-                            if not user:
-                                logger.error(f"Failed to auto-provision user: {e}")
-                                raise HTTPException(status_code=500, detail="User provisioning failed")
+                            # Identity linking: OAuth user matches an existing email+password account.
+                            # This happens when the same person previously registered with email/password
+                            # and now signs in with Google/GitHub using the same email.
+                            # We link the accounts by using the existing user record.
+                            logger.info(f"OAuth identity link: mapping Supabase ID {user_id} to existing user {email}")
+                            user = existing_user
+                        else:
+                            logger.info(f"Auto-provisioning new Supabase user: {email}")
+                            try:
+                                # Use a nested transaction (savepoint) to gracefully handle concurrent insertions
+                                async with db.begin_nested():
+                                    user = User(
+                                        id=user_id,
+                                        email=email,
+                                        hashed_password="SUPABASE_AUTH",
+                                        full_name=full_name,
+                                        is_active=True
+                                    )
+                                    db.add(user)
+                                    
+                                    workspace = Workspace(
+                                        name=f"{user.full_name}'s Workspace",
+                                        slug=f"ws-{user_id[:8]}"
+                                    )
+                                    db.add(workspace)
+                                    await db.flush()
+                                    
+                                    membership = WorkspaceMember(
+                                        workspace_id=workspace.id,
+                                        user_id=user.id,
+                                        role=WorkspaceRole.OWNER
+                                    )
+                                    db.add(membership)
+                                await db.commit()
+                                await db.refresh(user)
+                                logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
+                            except Exception as e:
+                                # If duplicate key or unique violation, rollback savepoint and query again
+                                await db.rollback()
+                                logger.info(f"Collision or parallel auto-provisioning for {email}. Re-fetching user...")
+                                stmt = select(User).where(User.id == user_id)
+                                result = await db.execute(stmt)
+                                user = result.scalars().first()
+                                if not user:
+                                    # Also try by email in case id differs
+                                    stmt_email2 = select(User).where(User.email == email)
+                                    res_email2 = await db.execute(stmt_email2)
+                                    user = res_email2.scalars().first()
+                                if not user:
+                                    logger.error(f"Failed to auto-provision user: {e}")
+                                    raise HTTPException(status_code=500, detail="User provisioning failed")
 
                     if user:
                         # Verify user has at least one workspace. 
