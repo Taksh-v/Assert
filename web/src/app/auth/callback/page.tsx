@@ -59,20 +59,16 @@ export default function AuthCallback() {
         let workspace: WorkspaceInfo | null = null;
         try {
           // 1. Verify user profile on backend
+          console.log("[AuthCallback] Verifying profile on backend...");
           const userRes = await apiFetch("/users/me", {
             headers: { Authorization: `Bearer ${session.access_token}` }
           });
           
           if (!userRes.ok) {
             const errData = await userRes.json().catch(() => ({}));
-            const errMsg = errData.detail || "Identity sync failed.";
+            const errMsg = errData.detail || "Identity synchronization failed. Check backend logs.";
             console.error("[AuthCallback] Profile verification failed:", errMsg);
-            await supabase.auth.signOut().catch(() => {});
-            localStorage.removeItem("assest_identity_v1");
-            localStorage.removeItem("assest_auth_user");
-            localStorage.removeItem("assest_auth_workspace");
-            router.push("/?error=" + encodeURIComponent(errMsg));
-            return;
+            throw new Error(errMsg);
           }
           
           const userData = await userRes.json();
@@ -83,22 +79,20 @@ export default function AuthCallback() {
           };
  
           // 2. Fetch or create workspace
+          console.log("[AuthCallback] Fetching workspaces...");
           const wsRes = await apiFetch("/workspaces", {
             headers: { Authorization: `Bearer ${session.access_token}` }
           });
+          
           if (wsRes.ok) {
             const workspaces = await wsRes.json() as WorkspaceInfo[];
             if (workspaces && workspaces.length > 0) {
               workspace = workspaces[0];
+              console.log("[AuthCallback] Found existing workspace:", workspace.name);
             } else {
-              // No workspace exists yet — create one now before committing session.
-              // This can happen if auto-provisioning failed silently or the user
-              // is an identity-linked account whose old workspace is under a different user id.
-              console.log("[AuthCallback] No workspaces found, creating default workspace...");
-              const wsName = userInfo.full_name
-                ? `${userInfo.full_name.split(" ")[0]}'s Workspace`
-                : "My Workspace";
-              const wsSlug = `ws-${userInfo.id.slice(0, 8)}-${Math.random().toString(36).slice(2, 6)}`;
+              console.log("[AuthCallback] No workspaces found, creating 'Main Workspace'...");
+              const wsName = "Main Workspace";
+              const wsSlug = `main-${userInfo.id.slice(0, 5)}-${Math.random().toString(36).slice(2, 5)}`;
               const createWsRes = await apiFetch("/workspaces", {
                 method: "POST",
                 headers: {
@@ -109,19 +103,20 @@ export default function AuthCallback() {
               });
               if (createWsRes.ok) {
                 workspace = await createWsRes.json() as WorkspaceInfo;
-                console.log("[AuthCallback] Default workspace created:", workspace?.name);
+                console.log("[AuthCallback] Main workspace created successfully.");
               } else {
-                console.warn("[AuthCallback] Failed to create default workspace — proceeding without one.");
+                console.warn("[AuthCallback] Failed to create Main Workspace.");
               }
             }
           }
         } catch (err) {
-          console.warn("[AuthCallback] Profile validation failed, returning to sign in.", err);
+          const errorMessage = err instanceof Error ? err.message : "Failed to synchronize session.";
+          console.error("[AuthCallback] OAuth Finalization Error:", errorMessage);
           await supabase.auth.signOut().catch(() => {});
           localStorage.removeItem("assest_identity_v1");
           localStorage.removeItem("assest_auth_user");
           localStorage.removeItem("assest_auth_workspace");
-          router.push("/?error=" + encodeURIComponent("Failed to synchronize session. Please try again."));
+          router.push("/?error=" + encodeURIComponent(errorMessage));
           return;
         }
 

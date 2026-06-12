@@ -30,6 +30,21 @@ class SupabaseAuthProvider(AuthProvider):
             logger.error("[AUTH] Supabase JWT secret is missing from environment variables!")
             return None
             
+        # Supabase provides secrets as Base64 strings. python-jose expects a raw byte string or
+        # the literal base64 string if it matches the key length. To be safe, we attempt
+        # to decode it if it looks like base64, otherwise we use it raw.
+        secret = self.jwt_secret
+        import base64
+        try:
+            # Check if it's base64 encoded by trying to decode it
+            if len(secret) % 4 == 0 and not secret.startswith("sk-"):
+                decoded_secret = base64.b64decode(secret)
+                # Only use decoded if it actually changed and isn't garbage
+                if decoded_secret != secret.encode():
+                    secret = decoded_secret
+        except Exception:
+            pass
+
         secret_len = len(self.jwt_secret)
         try:
             # Inspect token header first
