@@ -154,5 +154,11 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Awaited Supabase Signout**: Modified `signOut()` in `web/src/lib/auth.ts` to `await supabase.auth.signOut()` to eliminate client-side race conditions in `getSession()`, preventing infinite redirect loops where half-invalidated states triggered recursive auth changes.
 - [x] **Verification & Re-deployment**: Verified TypeScript type check passed (0 errors) and the 132-test backend suite succeeded (100% pass rate). Pushed fixes to Hugging Face (`hf-deploy:main`), which successfully transitioned to the `RUNNING` stage (SHA `c55c8f1`), and redeployed the Next.js frontend to Vercel.
 
+### 67. Phase 66: Login/Registration Workspace Redirection — [VERIFIED]
+- [x] **AuthPortal Redirects Integrated**: Added `window.location.replace("/")` in both login and registration submission handlers in `web/src/components/AuthPortal.tsx` to immediately redirect users to the root path upon successful authentication.
+- [x] **Auth Page Redirection**: Updated `web/src/app/auth/page.tsx` with a mount-effect check that automatically redirects pre-authenticated users to `/` if they attempt to load the auth page.
+- [x] **Re-deployment & Verification**: Pushed updates to both remotes (GitHub/Hugging Face) and successfully deployed frontend changes to Vercel production.
+
+
 
 
