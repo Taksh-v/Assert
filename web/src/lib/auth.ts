@@ -129,7 +129,13 @@ export async function isAuthenticated(): Promise<boolean> {
   if (!getCurrentUser()) {
     console.log("[Auth] User profile missing, attempting to hydrate from backend...");
     try {
-      const res = await apiFetch("/users/me");
+      // Use a controller to prevent infinite hang if backend is slow
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      const res = await apiFetch("/users/me", { signal: controller.signal });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const userData = await res.json() as UserInfo;
         console.log("[Auth] Successfully hydrated user profile:", userData.email);
@@ -137,9 +143,6 @@ export async function isAuthenticated(): Promise<boolean> {
         await ensureDefaultWorkspace();
       } else {
         console.error("[Auth] Failed to hydrate user profile. Status:", res.status);
-        if (res.status === 401) {
-          console.warn("[Auth] Backend returned 401 during profile hydration. Session may be invalid.");
-        }
       }
     } catch (err) {
       console.error("Failed to auto-hydrate user session:", err);

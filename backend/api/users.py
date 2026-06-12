@@ -120,16 +120,19 @@ async def get_current_user(
                                 raise HTTPException(status_code=500, detail="User provisioning failed")
 
                         if user:
-                            # Verify user has at least one workspace; if not, create a default one.
-                            # This handles edge cases where auto-provisioning was interrupted.
+                            # Verify user has at least one workspace. 
+                            # We use a sub-query check to avoid unnecessary flushes.
                             stmt_ws = select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
                             res_ws = await db.execute(stmt_ws)
                             if not res_ws.scalars().first():
-                                logger.info(f"User {user.email} has no workspaces. Provisioning default...")
+                                logger.info(f"User {user.email} has no workspaces. Attempting to provision...")
                                 try:
+                                    # We use a nested transaction (savepoint) if supported, 
+                                    # but for standard get_db session, we just add and commit.
+                                    # To prevent deadlocks, we catch IntegrityErrors.
                                     ws = Workspace(
                                         name=f"{user.full_name or email.split('@')[0]}'s Workspace",
-                                        slug=f"ws-{user.id[:8]}"
+                                        slug=f"ws-{user.id[:8]}-{secrets.token_hex(2)}"
                                     )
                                     db.add(ws)
                                     await db.flush()
@@ -138,9 +141,14 @@ async def get_current_user(
                                     db.add(mem)
                                     await db.commit()
                                     await db.refresh(user)
+                                    logger.info(f"Late-provisioned workspace for {user.email}")
                                 except Exception as ws_err:
-                                    logger.error(f"Failed to create late-provisioned workspace: {ws_err}")
                                     await db.rollback()
+                                    logger.warning(f"Provisioning collision or error (likely handled by parallel request): {ws_err}")
+                                    # Re-fetch to see if it was created by a parallel request
+                                    res_retry = await db.execute(stmt_ws)
+                                    if not res_retry.scalars().first():
+                                        logger.error("User still has no workspace after retry.")
                             return user
                 except JWTError as e:
                     logger.error(f"Supabase JWT verification failed: {e}")

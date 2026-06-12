@@ -47,7 +47,8 @@ export default function AuthCallback() {
       // 3. Final verification: do we have a session now?
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        router.push("/");
+        // Small delay to allow listeners to catch up and avoid race conditions
+        setTimeout(() => router.push("/"), 500);
       } else {
         // No code and no session? Redirect home to re-authenticate
         console.warn("No code or session found in callback.");
