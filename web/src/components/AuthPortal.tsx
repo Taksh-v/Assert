@@ -97,14 +97,15 @@ export default function AuthPortal() {
           if (workspaces && workspaces.length > 0) {
             workspace = workspaces[0];
           } else {
-            // Auto-create a default workspace if none exists
+            const wsName = "My Workspace";
+            const wsSlug = `workspace-${Math.random().toString(36).substring(2, 10)}`;
             const createWsRes = await apiFetch("/api/workspaces", {
               method: "POST",
               headers: { 
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
               },
-              body: JSON.stringify({ name: "My Workspace" })
+              body: JSON.stringify({ name: wsName, slug: wsSlug })
             });
             if (createWsRes.ok) {
               workspace = await createWsRes.json();
@@ -183,13 +184,15 @@ export default function AuthPortal() {
           if (workspaces && workspaces.length > 0) {
             workspace = workspaces[0];
           } else {
+            const wsName = fullName ? `${fullName}'s Workspace` : "My Workspace";
+            const wsSlug = `workspace-${Math.random().toString(36).substring(2, 10)}`;
             const createWsRes = await apiFetch("/api/workspaces", {
               method: "POST",
               headers: { 
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
               },
-              body: JSON.stringify({ name: "My Workspace" })
+              body: JSON.stringify({ name: wsName, slug: wsSlug })
             });
             if (createWsRes.ok) {
               workspace = await createWsRes.json();

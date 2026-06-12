@@ -93,14 +93,15 @@ export default function AuthPortal() {
           if (workspaces && workspaces.length > 0) {
             setActiveWorkspace(workspaces[0]);
           } else {
-            // Auto-create a default workspace if none exists
+            const wsName = "My Workspace";
+            const wsSlug = `workspace-${Math.random().toString(36).substring(2, 10)}`;
             const createWsRes = await apiFetch("/api/workspaces", {
               method: "POST",
               headers: { 
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json"
               },
-              body: JSON.stringify({ name: "My Workspace" })
+              body: JSON.stringify({ name: wsName, slug: wsSlug })
             });
             if (createWsRes.ok) {
               const newWs = await createWsRes.json();
