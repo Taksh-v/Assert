@@ -149,4 +149,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Hugging Face Space Secrets Synchronized**: Programmatically added `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` secrets to the `Taxyhere/assest-brain` Space on Hugging Face using the `huggingface_hub` Python SDK.
 - [x] **Production Re-deployment & Verification**: Fast-forwarded and pushed the latest local commit `899125a` (which integrates identity linking and user provisioning logic) to Hugging Face (`hf-deploy:main`) and Github (`hf-deploy`). Re-built and deployed the frontend to Vercel (`web-kappa-eight-88.vercel.app`). Hugging Face Space transitioned to `APP_STARTING` successfully.
 
+### 66. Phase 65: PgBouncer DuplicatePreparedStatementError & Auth loop fix — [VERIFIED]
+- [x] **PgBouncer Unique Statement Naming**: Resolved `DuplicatePreparedStatementError: prepared statement already exists` during type/schema introspection under PgBouncer transaction pooling mode by adding `prepared_statement_name_func` using a UUID generator function to connection arguments in `backend/core/database.py`.
+- [x] **Awaited Supabase Signout**: Modified `signOut()` in `web/src/lib/auth.ts` to `await supabase.auth.signOut()` to eliminate client-side race conditions in `getSession()`, preventing infinite redirect loops where half-invalidated states triggered recursive auth changes.
+- [x] **Verification & Re-deployment**: Verified TypeScript type check passed (0 errors) and the 132-test backend suite succeeded (100% pass rate). Pushed fixes to Hugging Face (`hf-deploy:main`), which successfully transitioned to the `RUNNING` stage (SHA `c55c8f1`), and redeployed the Next.js frontend to Vercel.
+
+
 
