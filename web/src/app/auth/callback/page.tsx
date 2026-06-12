@@ -122,6 +122,15 @@ export default function AuthCallback() {
 
         // Atomically write token + user + workspace to localStorage in one shot.
         commitSession(session.access_token, userInfo, workspace);
+        
+        // Update the "Last Account" memory to the new OAuth user
+        if (typeof window !== "undefined") {
+          localStorage.setItem("assest_last_email", userInfo.email);
+          if (userInfo.full_name) {
+            localStorage.setItem("assest_last_name", userInfo.full_name);
+          }
+        }
+        
         console.log("[AuthCallback] Session committed. Redirecting home...");
 
         // Replace history so the user cannot "back" into /auth/callback

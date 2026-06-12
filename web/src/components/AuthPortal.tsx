@@ -525,6 +525,14 @@ export default function AuthPortal() {
   };
 
   const handleSocialLogin = async (provider: 'google' | 'github') => {
+    // CRITICAL: Clear saved account memory before starting OAuth to prevent
+    // the "Saved Account" UI from hijacking the flow on return.
+    setUseSavedAccount(false);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("assest_last_email");
+      localStorage.removeItem("assest_last_name");
+    }
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: provider,
       options: {
