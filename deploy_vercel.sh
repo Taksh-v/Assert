@@ -28,11 +28,23 @@ npx -y vercel env add ASSEST_API_URL production <<< "https://Taxyhere-assest-bra
 npx -y vercel env rm NEXT_PUBLIC_API_BASE_PATH production -y || true
 npx -y vercel env add NEXT_PUBLIC_API_BASE_PATH production <<< "/api/backend"
 
+npx -y vercel env rm NEXT_PUBLIC_SITE_URL production -y || true
+npx -y vercel env add NEXT_PUBLIC_SITE_URL production <<< "https://web-kappa-eight-88.vercel.app"
+
+npx -y vercel env rm NEXT_PUBLIC_SUPABASE_URL production -y || true
+npx -y vercel env add NEXT_PUBLIC_SUPABASE_URL production <<< "https://mayvqbzbuqhvmjxyvdib.supabase.co"
+
+npx -y vercel env rm NEXT_PUBLIC_SUPABASE_ANON_KEY production -y || true
+npx -y vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production <<< "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1heXZxYnpidXFodm1qeHl2ZGliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyODcwNDMsImV4cCI6MjA5NDg2MzA0M30.6Wu3kv4tt5x3uhHHnEtLHsB8pYSuRUjD-J6dJz7AxPk"
+
 # Deploy to production
 echo -e "${CYAN}Step 3: Deploying to Vercel...${NC}"
 npx -y vercel --prod \
   --build-env ASSEST_API_URL="https://Taxyhere-assest-brain.hf.space" \
-  --build-env NEXT_PUBLIC_API_BASE_PATH="/api/backend"
+  --build-env NEXT_PUBLIC_API_BASE_PATH="/api/backend" \
+  --build-env NEXT_PUBLIC_SITE_URL="https://web-kappa-eight-88.vercel.app" \
+  --build-env NEXT_PUBLIC_SUPABASE_URL="https://mayvqbzbuqhvmjxyvdib.supabase.co" \
+  --build-env NEXT_PUBLIC_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1heXZxYnpidXFodm1qeHl2ZGliIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyODcwNDMsImV4cCI6MjA5NDg2MzA0M30.6Wu3kv4tt5x3uhHHnEtLHsB8pYSuRUjD-J6dJz7AxPk"
 
 echo -e "${GREEN}✅ Frontend deployed to Vercel!${NC}"
 echo -e "${CYAN}Your app is live at the URL shown above.${NC}"

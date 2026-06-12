@@ -44,7 +44,7 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Process Orchestration**: Simplified startup sequence to ensure both processes share the container's standard output streams for easier remote debugging.
 
 ### 47. Phase 46: PgBouncer & Managed Database Compatibility — [VERIFIED]
-- [x] **Disabled Prepared Statements**: Set `statement_cache_size=0` and `prepared_statement_cache_size=0` for `asyncpg` connections in `backend/core/database.py`.
+- [x] **Disabled Prepared Statements**: Configured `statement_cache_size=0` and custom `prepared_statement_name_func` using `uuid4().hex` in `backend/core/database.py` to disable statement caching and enforce globally unique names for prepared statements. This resolves prepared statement conflicts/collisions (`DuplicatePreparedStatementError`) in multi-tenant PgBouncer transaction-pooling environments.
 - [x] **Connection Configuration Fix**: Resolved a critical bug in `backend/core/database.py` where SSL configuration was overwriting the `_connect_args` dictionary, causing PgBouncer settings to be lost.
 - [x] **Provisioning Isolation**: Updated `scripts/create_admin.py` to use a dedicated engine with `NullPool` to prevent connection state pollution during automated provisioning.
 
