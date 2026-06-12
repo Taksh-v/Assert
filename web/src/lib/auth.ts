@@ -176,7 +176,13 @@ export async function isAuthenticated(): Promise<boolean> {
         email: session.user.email ?? "",
         full_name: userMeta.full_name || userMeta.name || session.user.email,
       };
-      // Write to storage WITHOUT triggering auth change (we're already inside the check)
+      // Commit the token to localStorage NOW so that apiFetch calls inside
+      // ensureDefaultWorkspace() can include it in Authorization headers.
+      // Without this, getAuthToken() returns null → 401 on /workspaces.
+      localStorage.setItem(TOKEN_KEY, session.access_token);
+      cachedToken = session.access_token;
+      tokenExpiry = Date.now() + 5 * 60 * 1000;
+      // Write user profile to storage WITHOUT triggering auth change (we're already inside the check)
       localStorage.setItem(USER_KEY, JSON.stringify(userInfo));
       console.log("[Auth] Hydrated from Supabase metadata:", userInfo.email);
       // Kick off workspace load in background; don't block auth check
@@ -213,26 +219,24 @@ export async function isAuthenticated(): Promise<boolean> {
 
 /**
  * Ensures that an active workspace is set in local storage.
- * If none exists, fetches from /api/workspaces and sets the first one.
+ * If none exists, fetches from /workspaces and sets the first one.
  */
 export async function ensureDefaultWorkspace(): Promise<WorkspaceInfo | null> {
+  // Fast path: already have a valid workspace stored locally — skip the network call
+  const existing = getActiveWorkspace();
+  if (existing) return existing;
+
   try {
     const res = await apiFetch("/workspaces");
     if (!res.ok) return null;
     const workspaces = await res.json() as WorkspaceInfo[];
     
     if (workspaces && workspaces.length > 0) {
-      const current = getActiveWorkspace();
-      const stillExists = current ? workspaces.some(w => w.id === current.id) : false;
-      if (stillExists && current) {
-        return current;
-      }
-
       const defaultWs = {
         id: workspaces[0].id,
         name: workspaces[0].name,
         slug: workspaces[0].slug,
-        role: "owner"
+        role: workspaces[0].role || "owner"
       };
       setActiveWorkspace(defaultWs);
       return defaultWs;

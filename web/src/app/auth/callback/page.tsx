@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { commitSession, ensureDefaultWorkspace } from "@/lib/auth";
+import { commitSession, apiFetch, WorkspaceInfo } from "@/lib/auth";
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -57,10 +57,22 @@ export default function AuthCallback() {
           full_name: userMeta.full_name || userMeta.name || session.user.email,
         };
 
-        // Try to load a workspace; non-fatal if it fails
-        let workspace = null;
+        // Fetch workspace BEFORE commitSession using the token directly in the header.
+        // We cannot use ensureDefaultWorkspace() here because it calls apiFetch() which
+        // reads the token from localStorage — but commitSession() hasn't run yet, so
+        // localStorage is empty and every request would get a 401.
+        let workspace: WorkspaceInfo | null = null;
         try {
-          workspace = await ensureDefaultWorkspace();
+          const wsRes = await apiFetch("/workspaces", {
+            headers: { Authorization: `Bearer ${session.access_token}` }
+          });
+          if (wsRes.ok) {
+            const workspaces = await wsRes.json() as WorkspaceInfo[];
+            workspace = workspaces?.[0] ?? null;
+          }
+          // If no workspace exists yet (new OAuth user), the backend auto-provisions one
+          // inside get_current_user() via the Supabase JWT path. The next page load or
+          // apiFetch call will pick it up after commitSession() runs.
         } catch {
           console.warn("[AuthCallback] Could not load workspace, proceeding anyway.");
         }
