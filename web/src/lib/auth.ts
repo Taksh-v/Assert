@@ -226,8 +226,11 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   });
 
   if (response.status === 401) {
-    // Session expired or invalid token
-    signOut();
+    // Only trigger sign out if we're not already trying to check authentication
+    // to prevent infinite reloading loops when the backend rejects a token.
+    if (!path.includes("/users/me")) {
+      signOut();
+    }
   }
 
   return response;
