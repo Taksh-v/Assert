@@ -102,11 +102,22 @@ export function setActiveWorkspace(workspace: WorkspaceInfo) {
 }
 
 export async function signOut() {
-  await supabase.auth.signOut();
+  // 1. Immediate local memory purge
+  cachedToken = null;
+  tokenExpiry = 0;
+
+  // 2. Clear all local storage
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(WORKSPACE_KEY);
-  triggerAuthChange();
+
+  // 3. Fire Supabase signout (non-blocking for the UI redirect)
+  supabase.auth.signOut().catch(err => console.error("Supabase signout error:", err));
+
+  // 4. Hard redirect to home to flush all React state/closures
+  if (typeof window !== "undefined") {
+    window.location.href = "/";
+  }
 }
 
 export async function isAuthenticated(): Promise<boolean> {

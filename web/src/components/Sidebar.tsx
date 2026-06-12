@@ -55,8 +55,7 @@ export default function Sidebar() {
 
   const handleSignOut = () => {
     setShowProfileMenu(false);
-    signOut();
-    router.push("/");
+    void signOut();
   };
 
   const fetchConversations = useCallback(async () => {
