@@ -156,6 +156,8 @@ def serialize_connector(connector: Connector, latest_sync: Optional[SyncRun] = N
     # Decrypt config for internal use, but safe summary filters it
     try:
         config = decrypt_config(connector.config)
+        if not isinstance(config, dict):
+            config = {}
     except:
         config = {}
         

@@ -42,7 +42,6 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
     # We must disable them by setting statement_cache_size AND prepared_statement_cache_size to 0.
     _connect_args["statement_cache_size"] = 0
     _connect_args["prepared_statement_cache_size"] = 0
-    _connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid4().hex}__"
 
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
@@ -59,11 +58,21 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
     _connect_args["ssl"] = ctx
 
 
-engine = create_async_engine(
-    db_url,
-    echo=settings.sql_echo,
-    connect_args=_connect_args,
-)
+from sqlalchemy.pool import NullPool
+
+if "postgresql" in db_url:
+    engine = create_async_engine(
+        db_url,
+        echo=settings.sql_echo,
+        connect_args=_connect_args,
+        poolclass=NullPool,
+    )
+else:
+    engine = create_async_engine(
+        db_url,
+        echo=settings.sql_echo,
+        connect_args=_connect_args,
+    )
 
 # Enable WAL mode for SQLite to prevent database lock errors
 if settings.database_url.startswith("sqlite"):

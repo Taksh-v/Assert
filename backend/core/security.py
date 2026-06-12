@@ -127,9 +127,15 @@ def encrypt_config(config: dict) -> str:
         logger.error(f"Encryption failed: {e}")
         raise
 
-def decrypt_config(encrypted_config: str) -> dict:
+def decrypt_config(encrypted_config: Any) -> dict:
     """Decrypt an encrypted configuration string back to a dictionary with robust fallbacks."""
     if not encrypted_config:
+        return {}
+        
+    if isinstance(encrypted_config, dict):
+        return encrypted_config
+        
+    if not isinstance(encrypted_config, str):
         return {}
     
     # Try the primary secret key first
@@ -153,11 +159,21 @@ def decrypt_config(encrypted_config: str) -> dict:
         try:
             f = _get_fernet_for_secret(secret)
             decrypted_data = f.decrypt(encrypted_config.encode())
-            return json.loads(decrypted_data.decode())
+            parsed = json.loads(decrypted_data.decode())
+            if isinstance(parsed, dict):
+                return parsed
         except Exception as e:
             last_err = e
             continue
             
+    # Fallback: check if it's already a plain JSON string representing a dictionary
+    try:
+        parsed = json.loads(encrypted_config)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
     logger.error(f"Decryption failed: {last_err}")
     # SECURITY: Do NOT fall back to parsing as plain JSON.
     # If decryption fails, the config is corrupted or tampered with.
