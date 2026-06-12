@@ -13,6 +13,22 @@ from sqlalchemy.orm import DeclarativeBase
 from backend.core.config import get_settings
 from uuid import uuid4
 
+
+def _unique_prepared_statement_name(_: str) -> str:
+    """Generate a globally unique prepared statement name for each asyncpg call.
+
+    PgBouncer in transaction/statement pooling mode reuses backend server
+    connections across multiple client sessions. When asyncpg internally
+    prepares statements (e.g. type introspection), it uses predictable names
+    like '__asyncpg_stmt_1d__'. If two sessions happen to use the same
+    PgBouncer backend connection sequentially, the second session will try to
+    prepare a statement that already exists → DuplicatePreparedStatementError.
+
+    Returning a fresh UUID for every statement ensures all names are globally
+    unique, completely eliminating this class of collision.
+    """
+    return f"_s_{uuid4().hex}"
+
 settings = get_settings()
 
 # ── Engine ──────────────────────────────────────────────
@@ -39,9 +55,13 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
 
     # PgBouncer (used by Supabase/managed DBs) does not support prepared statements
     # in 'transaction' or 'statement' pooling modes.
-    # We must disable them by setting statement_cache_size AND prepared_statement_cache_size to 0.
+    # Triple-layer defense:
+    #   1. statement_cache_size=0          → disable asyncpg's own prepared stmt cache
+    #   2. prepared_statement_cache_size=0 → disable SQLAlchemy's dialect-level cache
+    #   3. prepared_statement_name_func    → UUID names so no two stmts ever collide
     _connect_args["statement_cache_size"] = 0
     _connect_args["prepared_statement_cache_size"] = 0
+    _connect_args["prepared_statement_name_func"] = _unique_prepared_statement_name
 
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
