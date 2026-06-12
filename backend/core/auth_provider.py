@@ -27,23 +27,21 @@ class SupabaseAuthProvider(AuthProvider):
 
     async def verify_token(self, token: str) -> Optional[UserAuthPayload]:
         if not self.jwt_secret:
-            logger.error("Supabase JWT secret is not configured.")
+            logger.error("[AUTH] Supabase JWT secret is missing from environment variables!")
             return None
+            
+        secret_len = len(self.jwt_secret)
         try:
-            # Inspect token header first to avoid noisy warning logs for non-HS256 tokens (e.g. platform health checks)
+            # Inspect token header first
             try:
                 unverified_header = jwt.get_unverified_header(token)
                 alg = unverified_header.get("alg")
                 if alg != "HS256":
-                    logger.debug(f"Skipping Supabase verification for token with non-HS256 alg: {alg}")
                     return None
             except Exception:
-                # If we cannot parse the header, it is not a valid JWT
                 return None
 
             # Supabase uses HS256 algorithm.
-            # We skip verify_aud by default because Supabase tokens can have varying audiences,
-            # but we explicitly verify the user's role is authenticated.
             payload = jwt.decode(
                 token,
                 self.jwt_secret,
@@ -56,11 +54,11 @@ class SupabaseAuthProvider(AuthProvider):
             role = payload.get("role")
             
             if not user_id or not email:
-                logger.warning("Supabase token payload is missing 'sub' or 'email'.")
+                logger.warning(f"[AUTH] Supabase token payload missing sub/email. sub={user_id}")
                 return None
                 
             if role != "authenticated":
-                logger.warning(f"Supabase token role is '{role}', expected 'authenticated'.")
+                logger.warning(f"[AUTH] Supabase token role is '{role}', expected 'authenticated'.")
                 return None
                 
             user_metadata = payload.get("user_metadata", {})
@@ -73,5 +71,5 @@ class SupabaseAuthProvider(AuthProvider):
                 metadata=payload
             )
         except JWTError as e:
-            logger.warning(f"Failed to decode Supabase token: {e}")
+            logger.error(f"[AUTH] Supabase JWT verification FAILED (Secret Length: {secret_len}). Error: {e}")
             return None
