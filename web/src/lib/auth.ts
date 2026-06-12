@@ -142,8 +142,12 @@ export async function signOut() {
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(WORKSPACE_KEY);
 
-  // 3. Fire Supabase signout (non-blocking for the UI redirect)
-  supabase.auth.signOut().catch(err => console.error("Supabase signout error:", err));
+  // 3. Fire Supabase signout (await it to avoid race conditions in getSession)
+  try {
+    await supabase.auth.signOut();
+  } catch (err) {
+    console.error("Supabase signout error:", err);
+  }
 
   // 4. Hard redirect to home to flush all React state/closures
   // Avoid infinite reload loop if already on the home page
