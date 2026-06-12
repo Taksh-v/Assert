@@ -342,6 +342,9 @@ export default function AuthPortal() {
 
         commitSession(token, userInfo, workspace);
         setSuccess("Success! Logging in...");
+        if (typeof window !== "undefined") {
+          window.location.replace("/");
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
         setGeneralError(errMsg);
@@ -482,6 +485,9 @@ export default function AuthPortal() {
 
         commitSession(token, userInfo, workspace);
         setSuccess("Success! Entering Brain...");
+        if (typeof window !== "undefined") {
+          window.location.replace("/");
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
         setGeneralError(errMsg);
