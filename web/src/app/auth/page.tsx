@@ -35,6 +35,20 @@ export default function AuthPortal() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Listen for query parameter errors (e.g. from redirect callback)
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlError = params.get("error");
+      if (urlError) {
+        setError(decodeURIComponent(urlError));
+        // Clean up url so it isn't sticky on page refresh
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password.trim() || (!isLogin && !fullName.trim())) {
@@ -138,7 +152,12 @@ export default function AuthPortal() {
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
-        setError(err.message);
+        let msg = err.message;
+        if (msg === "Email already registered") {
+          msg = "An account with this email already exists. Switching you to Sign In.";
+          setIsLogin(true);
+        }
+        setError(msg);
       } else {
         setError("An unexpected error occurred.");
       }

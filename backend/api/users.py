@@ -77,6 +77,17 @@ async def get_current_user(
                     user = result.scalars().first()
 
                     if not user:
+                        # Check if a user with this email already exists under a different login method
+                        stmt_email = select(User).where(User.email == email)
+                        res_email = await db.execute(stmt_email)
+                        existing_user = res_email.scalars().first()
+                        if existing_user:
+                            logger.warning(f"OAuth email collision: user {email} already exists in database.")
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="An account with this email already exists. Please sign in using email and password."
+                            )
+                        
                         logger.info(f"Auto-provisioning new Supabase user: {email}")
                         try:
                             # Use a nested transaction (savepoint) to gracefully handle concurrent insertions

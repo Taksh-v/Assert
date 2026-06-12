@@ -49,20 +49,35 @@ export default function AuthCallback() {
       if (session) {
         console.log("[AuthCallback] Session verified! Pre-loading profile before redirect...");
 
-        // Build user info from Supabase session metadata (available immediately, no backend call)
         const userMeta = session.user.user_metadata ?? {};
-        const userInfo = {
+        let userInfo = {
           id: session.user.id,
           email: session.user.email ?? "",
           full_name: userMeta.full_name || userMeta.name || session.user.email,
         };
 
-        // Fetch workspace BEFORE commitSession using the token directly in the header.
-        // We cannot use ensureDefaultWorkspace() here because it calls apiFetch() which
-        // reads the token from localStorage — but commitSession() hasn't run yet, so
-        // localStorage is empty and every request would get a 401.
         let workspace: WorkspaceInfo | null = null;
         try {
+          // 1. Verify user profile on backend
+          const userRes = await apiFetch("/users/me", {
+            headers: { Authorization: `Bearer ${session.access_token}` }
+          });
+          
+          if (!userRes.ok) {
+            const errData = await userRes.json().catch(() => ({}));
+            const errMsg = errData.detail || "Identity sync failed.";
+            router.push("/?error=" + encodeURIComponent(errMsg));
+            return;
+          }
+          
+          const userData = await userRes.json();
+          userInfo = {
+            id: userData.id,
+            email: userData.email,
+            full_name: userData.full_name || userInfo.full_name,
+          };
+
+          // 2. Fetch workspace
           const wsRes = await apiFetch("/workspaces", {
             headers: { Authorization: `Bearer ${session.access_token}` }
           });
@@ -70,16 +85,13 @@ export default function AuthCallback() {
             const workspaces = await wsRes.json() as WorkspaceInfo[];
             workspace = workspaces?.[0] ?? null;
           }
-          // If no workspace exists yet (new OAuth user), the backend auto-provisions one
-          // inside get_current_user() via the Supabase JWT path. The next page load or
-          // apiFetch call will pick it up after commitSession() runs.
-        } catch {
-          console.warn("[AuthCallback] Could not load workspace, proceeding anyway.");
+        } catch (err) {
+          console.warn("[AuthCallback] Profile validation failed, returning to sign in.", err);
+          router.push("/?error=" + encodeURIComponent("Failed to synchronize session. Please try again."));
+          return;
         }
 
         // Atomically write token + user + workspace to localStorage in one shot.
-        // This means AppShell will find a fully-committed session on first render
-        // and will NOT trigger the expensive /users/me hydration path.
         commitSession(session.access_token, userInfo, workspace);
         console.log("[AuthCallback] Session committed. Redirecting home...");
 
