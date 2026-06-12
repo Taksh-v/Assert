@@ -38,8 +38,9 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
 
     # PgBouncer (used by Supabase/managed DBs) does not support prepared statements
     # in 'transaction' or 'statement' pooling modes.
-    # We must disable them by setting statement_cache_size to 0 in connect_args (for asyncpg).
+    # We must disable them by setting statement_cache_size and prepared_statement_cache_size to 0.
     _connect_args["statement_cache_size"] = 0
+    _connect_args["prepared_statement_cache_size"] = 0
 
 
 
