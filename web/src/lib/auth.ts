@@ -115,8 +115,14 @@ export async function signOut() {
   supabase.auth.signOut().catch(err => console.error("Supabase signout error:", err));
 
   // 4. Hard redirect to home to flush all React state/closures
+  // Avoid infinite reload loop if already on the home page
   if (typeof window !== "undefined") {
-    window.location.href = "/";
+    if (window.location.pathname !== "/") {
+      window.location.href = "/";
+    } else {
+      // If already on /, just trigger the change event to update AppShell
+      triggerAuthChange();
+    }
   }
 }
 
@@ -143,9 +149,12 @@ export async function isAuthenticated(): Promise<boolean> {
         await ensureDefaultWorkspace();
       } else {
         console.error("[Auth] Failed to hydrate user profile. Status:", res.status);
+        // If profile hydration fails, we are essentially not authenticated for the app's purposes
+        return false;
       }
     } catch (err) {
       console.error("Failed to auto-hydrate user session:", err);
+      return false;
     }
   }
 
