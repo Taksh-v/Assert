@@ -127,12 +127,19 @@ export async function isAuthenticated(): Promise<boolean> {
 
   // Hydrate local user profile if it's missing (e.g. after Google OAuth redirect)
   if (!getCurrentUser()) {
+    console.log("[Auth] User profile missing, attempting to hydrate from backend...");
     try {
       const res = await apiFetch("/users/me");
       if (res.ok) {
         const userData = await res.json() as UserInfo;
+        console.log("[Auth] Successfully hydrated user profile:", userData.email);
         setCurrentUser(userData);
         await ensureDefaultWorkspace();
+      } else {
+        console.error("[Auth] Failed to hydrate user profile. Status:", res.status);
+        if (res.status === 401) {
+          console.warn("[Auth] Backend returned 401 during profile hydration. Session may be invalid.");
+        }
       }
     } catch (err) {
       console.error("Failed to auto-hydrate user session:", err);

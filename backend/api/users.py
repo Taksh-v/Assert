@@ -67,12 +67,14 @@ async def get_current_user(
                 try:
                     # Supabase uses HS256. We trust the Supabase sub (user_id) and email.
                     # We skip 'aud' verification because it can be 'authenticated' or the client_id.
+                    logger.info(f"Attempting to verify Supabase JWT with secret length: {len(settings.supabase_jwt_secret) if settings.supabase_jwt_secret else 0}")
                     payload = jwt.decode(
                         token,
                         settings.supabase_jwt_secret,
                         algorithms=["HS256"],
                         options={"verify_aud": False}
                     )
+                    logger.info(f"Supabase JWT decoded successfully for sub: {payload.get('sub')}")
                     user_id: str = payload.get("sub")
                     email: str = payload.get("email")
 
@@ -82,38 +84,66 @@ async def get_current_user(
                         user = result.scalars().first()
 
                         if not user and email:
-                            # Auto-provision user from Supabase identity
-                            user = User(
-                                id=user_id,
-                                email=email,
-                                hashed_password="SUPABASE_AUTH",
-                                full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0],
-                                is_active=True
-                            )
-                            db.add(user)
-                            await db.flush()
+                            logger.info(f"Auto-provisioning new Supabase user: {email}")
+                            try:
+                                # Auto-provision user from Supabase identity
+                                user = User(
+                                    id=user_id,
+                                    email=email,
+                                    hashed_password="SUPABASE_AUTH",
+                                    full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0],
+                                    is_active=True
+                                )
+                                db.add(user)
+                                await db.flush()
 
-                            # Create a default personal workspace for the new Supabase user
-                            workspace = Workspace(
-                                name=f"{user.full_name}'s Workspace",
-                                slug=f"ws-{user_id[:8]}"
-                            )
-                            db.add(workspace)
-                            await db.flush()
+                                # Create a default personal workspace for the new Supabase user
+                                workspace = Workspace(
+                                    name=f"{user.full_name}'s Workspace",
+                                    slug=f"ws-{user_id[:8]}"
+                                )
+                                db.add(workspace)
+                                await db.flush()
 
-                            membership = WorkspaceMember(
-                                workspace_id=workspace.id,
-                                user_id=user.id,
-                                role=WorkspaceRole.OWNER
-                            )
-                            db.add(membership)
-                            await db.commit()
-                            await db.refresh(user)
+                                membership = WorkspaceMember(
+                                    workspace_id=workspace.id,
+                                    user_id=user.id,
+                                    role=WorkspaceRole.OWNER
+                                )
+                                db.add(membership)
+                                await db.commit()
+                                await db.refresh(user)
+                                logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-provision user: {e}")
+                                await db.rollback()
+                                raise HTTPException(status_code=500, detail="User provisioning failed")
 
                         if user:
+                            # Verify user has at least one workspace; if not, create a default one.
+                            # This handles edge cases where auto-provisioning was interrupted.
+                            stmt_ws = select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
+                            res_ws = await db.execute(stmt_ws)
+                            if not res_ws.scalars().first():
+                                logger.info(f"User {user.email} has no workspaces. Provisioning default...")
+                                try:
+                                    ws = Workspace(
+                                        name=f"{user.full_name or email.split('@')[0]}'s Workspace",
+                                        slug=f"ws-{user.id[:8]}"
+                                    )
+                                    db.add(ws)
+                                    await db.flush()
+                                    
+                                    mem = WorkspaceMember(workspace_id=ws.id, user_id=user.id, role=WorkspaceRole.OWNER)
+                                    db.add(mem)
+                                    await db.commit()
+                                    await db.refresh(user)
+                                except Exception as ws_err:
+                                    logger.error(f"Failed to create late-provisioned workspace: {ws_err}")
+                                    await db.rollback()
                             return user
                 except JWTError as e:
-                    logger.debug(f"Supabase JWT verification failed: {e}")
+                    logger.error(f"Supabase JWT verification failed: {e}")
 
     # In production, do not fall back. Force authenticated access.
     if not settings.is_development:
