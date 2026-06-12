@@ -20,6 +20,7 @@ router = APIRouter(prefix="/auth/identity", tags=["Identity OAuth"])
 
 async def _get_or_create_oauth_user(db: AsyncSession, email: str, full_name: str) -> User:
     """Helper to upsert a user and ensure they have a workspace."""
+    # Check by email (this implementation doesn't use supabase_id yet since it's custom OAuth)
     stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)
     user = result.scalars().first()

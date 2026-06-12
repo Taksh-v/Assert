@@ -72,39 +72,52 @@ async def get_current_user(
                     email = auth_payload.email
                     full_name = auth_payload.full_name
 
-                    stmt = select(User).where(User.id == user_id)
+                    # 1. Try lookup by supabase_id (Strongest link)
+                    stmt = select(User).where(User.supabase_id == user_id)
                     result = await db.execute(stmt)
                     user = result.scalars().first()
 
                     if not user:
-                        # Check if a user with this email already exists under a different login method
+                        # 2. Check if a user with this email already exists (Identity Linking)
                         stmt_email = select(User).where(User.email == email)
                         res_email = await db.execute(stmt_email)
                         existing_user = res_email.scalars().first()
                         if existing_user:
-                            # Identity linking: OAuth user matches an existing email+password account.
-                            # This happens when the same person previously registered with email/password
-                            # and now signs in with Google/GitHub using the same email.
-                            # We link the accounts by using the existing user record.
-                            logger.info(f"OAuth identity link: mapping Supabase ID {user_id} to existing user {email}")
-                            user = existing_user
+                            # Link the Supabase identity to the existing local account
+                            try:
+                                logger.info(f"OAuth identity link: mapping Supabase ID {user_id} to existing user {email}")
+                                existing_user.supabase_id = user_id
+                                await db.commit()
+                                await db.refresh(existing_user)
+                                user = existing_user
+                            except Exception as link_err:
+                                await db.rollback()
+                                logger.error(f"Failed to link Supabase ID: {link_err}")
+                                # Try one last fetch to see if another process linked it
+                                stmt = select(User).where(User.supabase_id == user_id)
+                                result = await db.execute(stmt)
+                                user = result.scalars().first()
+                                if not user:
+                                    raise HTTPException(status_code=500, detail="Identity linking failed")
                         else:
+                            # 3. Auto-provision new user
                             logger.info(f"Auto-provisioning new Supabase user: {email}")
                             try:
-                                # Use a nested transaction (savepoint) to gracefully handle concurrent insertions
                                 async with db.begin_nested():
                                     user = User(
-                                        id=user_id,
+                                        supabase_id=user_id,
                                         email=email,
                                         hashed_password="SUPABASE_AUTH",
                                         full_name=full_name,
                                         is_active=True
                                     )
                                     db.add(user)
+                                    # ... (rest of workspace creation handled later)
+                                    await db.flush()
                                     
                                     workspace = Workspace(
                                         name=f"{user.full_name}'s Workspace",
-                                        slug=f"ws-{user_id[:8]}"
+                                        slug=f"ws-{user.id[:8]}"
                                     )
                                     db.add(workspace)
                                     await db.flush()
@@ -117,30 +130,28 @@ async def get_current_user(
                                     db.add(membership)
                                 await db.commit()
                                 await db.refresh(user)
-                                logger.info(f"Successfully auto-provisioned user {user_id} and workspace")
+                                logger.info(f"Successfully auto-provisioned user {email} (UID: {user_id})")
                             except Exception as e:
-                                # If duplicate key or unique violation, rollback savepoint and query again
                                 await db.rollback()
-                                logger.info(f"Collision or parallel auto-provisioning for {email}. Re-fetching user...")
-                                stmt = select(User).where(User.id == user_id)
+                                logger.warning(f"Collision in auto-provisioning for {email}. Re-fetching...")
+                                # Re-fetch by supabase_id or email
+                                stmt = select(User).where((User.supabase_id == user_id) | (User.email == email))
                                 result = await db.execute(stmt)
                                 user = result.scalars().first()
                                 if not user:
-                                    # Also try by email in case id differs
-                                    stmt_email2 = select(User).where(User.email == email)
-                                    res_email2 = await db.execute(stmt_email2)
-                                    user = res_email2.scalars().first()
-                                if not user:
-                                    logger.error(f"Failed to auto-provision user: {e}")
                                     raise HTTPException(status_code=500, detail="User provisioning failed")
 
                     if user:
+                        # Ensure user is active
+                        if not user.is_active:
+                            raise HTTPException(status_code=403, detail="User account is deactivated")
+
                         # Verify user has at least one workspace. 
                         # We use a sub-query check to avoid unnecessary flushes.
                         stmt_ws = select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
                         res_ws = await db.execute(stmt_ws)
                         if not res_ws.scalars().first():
-                            logger.info(f"User {user.email} has no workspaces. Attempting to provision...")
+                            logger.info(f"User {user.email} has no workspaces. Attempting late-provisioning...")
                             try:
                                 async with db.begin_nested():
                                     ws = Workspace(
@@ -152,18 +163,13 @@ async def get_current_user(
                                     mem = WorkspaceMember(workspace_id=ws.id, user_id=user.id, role=WorkspaceRole.OWNER)
                                     db.add(mem)
                                 await db.commit()
-                                await db.refresh(user)
                                 logger.info(f"Late-provisioned workspace for {user.email}")
                             except Exception as ws_err:
                                 await db.rollback()
-                                logger.warning(f"Provisioning collision or error (likely handled by parallel request): {ws_err}")
-                                # Re-fetch to see if it was created by a parallel request
-                                res_retry = await db.execute(stmt_ws)
-                                if not res_retry.scalars().first():
-                                    logger.error("User still has no workspace after retry.")
+                                logger.warning(f"Workspace provisioning collision: {ws_err}")
                         return user
 
-    # In production, do not fall back. Force authenticated access.
+    # Production logic: strict 401
     if not settings.is_development:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -171,12 +177,15 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Fallback to the first user in the database
-    stmt = select(User).order_by(User.created_at.asc())
-    result = await db.execute(stmt)
-    user = result.scalars().first()
-    if user:
-        return user
+    # Development-only fallback (e.g. for local testing without tokens)
+    # This is only enabled if explicitly requested via environment variable.
+    import os
+    if os.environ.get("ASSEST_INSECURE_DEV_LOGIN") == "true":
+        stmt = select(User).order_by(User.created_at.asc())
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        if user:
+            return user
 
     # Create a default user if database is clean
     new_user = User(
@@ -189,7 +198,6 @@ async def get_current_user(
     await db.flush()
     
     # Also create the default workspace and add user as owner
-    from backend.models.workspace import Workspace
     workspace = Workspace(name="Default Workspace", slug="default-workspace")
     db.add(workspace)
     await db.flush()
@@ -298,6 +306,15 @@ async def check_email(request: EmailCheckRequest, db: AsyncSession = Depends(get
     if not user:
         return {"exists": False, "auth_type": "none"}
     
-    auth_type = "oauth" if user.hashed_password == "SUPABASE_AUTH" else "password"
+    # Determine auth type based on supabase_id and hashed_password
+    if user.supabase_id:
+        auth_type = "oauth"  # Specifically linked to Supabase
+    elif user.hashed_password == "SUPABASE_AUTH":
+        auth_type = "oauth"
+    elif user.hashed_password.startswith("oauth-protected-"):
+        auth_type = "oauth"
+    else:
+        auth_type = "password"
+        
     return {"exists": True, "auth_type": auth_type}
 

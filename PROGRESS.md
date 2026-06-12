@@ -137,4 +137,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Obsolete Route Consolidation**: Replaced duplicate code in `web/src/app/auth/page.tsx` with a clean wrapper around the centralized `AuthPortal.tsx` component.
 - [x] **Verification**: Created `backend/tests/test_email_check.py` and successfully ran python tests (100% pass rate). Verified TypeScript typechecking and production Next.js builds compiled without errors.
 
+### 64. Phase 63: OAuth Workspace Provisioning — 3 Critical Bug Fixes — [VERIFIED]
+- [x] **Bug 1 — Identity Linking (Backend)**: Replaced the hard `400 Bad Request` rejection on OAuth email collisions in `backend/api/users.py` with identity-linking logic. When a Google/GitHub OAuth user's email matches an existing email+password account, the system now reuses the existing user record instead of blocking — allowing the same person to use both auth methods seamlessly.
+- [x] **Bug 2 — Workspace Creation Fallback (Frontend Callback)**: Fixed `web/src/app/auth/callback/page.tsx` to explicitly create a default workspace when `/workspaces` returns empty. Previously `workspace = null` was passed to `commitSession()`, silently skipping `WORKSPACE_KEY`, causing "No active workspace" on all subsequent pages.
+- [x] **Bug 3 — Auth Race Condition (auth.ts)**: Changed `ensureDefaultWorkspace()` from fire-and-forget to `await ensureDefaultWorkspace()` in both Supabase-metadata hydration and backend-fallback paths inside `isAuthenticated()`. Workspace is now guaranteed in `localStorage` before AppShell renders the full app.
+- [x] **Verification**: TypeScript typecheck passed (0 errors), `test_email_check.py` passed (1/1).
+- [x] **Deployment**: Pushed commit `361c6b8` to Hugging Face and deployed to Vercel (`web-kappa-eight-88.vercel.app`).
 
