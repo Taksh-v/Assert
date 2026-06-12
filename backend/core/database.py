@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy import text, event
 from sqlalchemy.orm import DeclarativeBase
 from backend.core.config import get_settings
+from uuid import uuid4
 
 settings = get_settings()
 
@@ -38,11 +39,14 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
 
     # PgBouncer (used by Supabase/managed DBs) does not support prepared statements
     # in 'transaction' or 'statement' pooling modes.
-    # We must disable them by setting statement_cache_size and prepared_statement_cache_size to 0.
+    # Triple-layer defense against DuplicatePreparedStatementError:
+    #   1. statement_cache_size=0 — disables asyncpg's internal statement cache
+    #   2. prepared_statement_cache_size=0 — disables SQLAlchemy's cache layer
+    #   3. prepared_statement_name_func — every stmt gets a UUID name, preventing
+    #      any name collisions even when PgBouncer reuses backend connections
     _connect_args["statement_cache_size"] = 0
     _connect_args["prepared_statement_cache_size"] = 0
-
-
+    _connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid4().hex}__"
 
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
