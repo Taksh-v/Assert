@@ -159,6 +159,14 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Auth Page Redirection**: Updated `web/src/app/auth/page.tsx` with a mount-effect check that automatically redirects pre-authenticated users to `/` if they attempt to load the auth page.
 - [x] **Re-deployment & Verification**: Pushed updates to both remotes (GitHub/Hugging Face) and successfully deployed frontend changes to Vercel production.
 
-
-
+### 68. Phase 67: PostgreSQL Health Check Timeout Fix — [VERIFIED]
+- [x] **Root Cause Identified**: The PostgreSQL health check used `asyncio.wait_for(..., timeout=2.0)` which was consistently timing out for PgBouncer-managed connections (Supabase Pooler). PgBouncer needs 3-5 seconds to establish cold-pool connections, causing `asyncio.TimeoutError` (empty string repr) → `memory: offline` in health responses.
+- [x] **Fix**: Increased the health check timeout to 8 seconds in `backend/api/health.py`. This prevents false-positive offline status while still catching genuine DB failures.
+- [x] **Full Auth System Verified**: Conducted end-to-end production auth flow verification:
+  - Registration (`POST /api/backend/register`) — creates user + workspace ✅
+  - Login (`POST /api/backend/login`) — returns JWT ✅
+  - Profile (`GET /api/backend/users/me`) — returns user info with Bearer token ✅
+  - Workspaces (`GET /api/backend/workspaces`) — returns workspace list ✅
+  - Google OAuth URL generation — correctly chains to Google with right client_id and redirect URIs ✅
+- [x] **Deployment**: Pushed commit `cc7db68` to Hugging Face `main` and GitHub `hf-deploy`. Redeployed frontend to Vercel production (`dpl_9ggWn3W3yizz61C4S8BUKroDgD6R`).
 
