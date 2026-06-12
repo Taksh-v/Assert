@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
-import { apiFetch, setAuthToken, setCurrentUser, setActiveWorkspace, WorkspaceInfo } from "@/lib/auth";
+import { apiFetch, commitSession, WorkspaceInfo } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getSiteUrl } from "@/lib/config";
 
@@ -69,12 +69,15 @@ export default function AuthPortal() {
 
         const data = await response.json();
         const token = data.access_token;
-        setAuthToken(token);
 
         // Fetch profile and workspaces in parallel for speed
         const [userRes, workspaceRes] = await Promise.all([
-          apiFetch("/api/users/me"),
-          apiFetch("/api/workspaces")
+          apiFetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${token}` }
+          }),
+          apiFetch("/api/workspaces", {
+            headers: { Authorization: `Bearer ${token}` }
+          })
         ]);
 
         if (!userRes.ok) {
@@ -82,32 +85,36 @@ export default function AuthPortal() {
         }
 
         const userData = await userRes.json();
-        setCurrentUser({
+        const userInfo = {
           id: userData.id,
           email: userData.email,
           full_name: userData.full_name,
-        });
+        };
 
+        let workspace: WorkspaceInfo | null = null;
         if (workspaceRes.ok) {
           const workspaces = await workspaceRes.json() as WorkspaceInfo[];
           if (workspaces && workspaces.length > 0) {
-            setActiveWorkspace(workspaces[0]);
+            workspace = workspaces[0];
           } else {
             // Auto-create a default workspace if none exists
             const createWsRes = await apiFetch("/api/workspaces", {
               method: "POST",
               headers: { 
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
               },
               body: JSON.stringify({ name: "My Workspace" })
             });
             if (createWsRes.ok) {
-              const newWs = await createWsRes.json();
-              setActiveWorkspace(newWs);
+              workspace = await createWsRes.json();
             }
           }
         }
 
+        // Atomically commit token + user + workspace — fires a SINGLE auth-change
+        // event so AppShell re-checks auth only once, when everything is ready.
+        commitSession(token, userInfo, workspace);
         setSuccess("Success! Logging in...");
       } else {
         const response = await apiFetch("/api/register", {
@@ -148,42 +155,50 @@ export default function AuthPortal() {
 
         const loginData = await loginRes.json();
         const token = loginData.access_token;
-        setAuthToken(token);
         
-        // Parallel fetch for speed
+        // Parallel fetch for speed — pass the token directly since it's not yet in storage
         const [userRes, workspaceRes] = await Promise.all([
-          apiFetch("/api/users/me"),
-          apiFetch("/api/workspaces")
+          apiFetch("/api/users/me", {
+            headers: { Authorization: `Bearer ${token}` }
+          }),
+          apiFetch("/api/workspaces", {
+            headers: { Authorization: `Bearer ${token}` }
+          })
         ]);
 
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          setCurrentUser({
-            id: userData.id,
-            email: userData.email,
-            full_name: userData.full_name || fullName,
-          });
+        if (!userRes.ok) {
+          throw new Error("Auto-login succeeded but failed to load user profile.");
+        }
 
-          if (workspaceRes.ok) {
-            const workspaces = await workspaceRes.json() as WorkspaceInfo[];
-            if (workspaces && workspaces.length > 0) {
-              setActiveWorkspace(workspaces[0]);
-            } else {
-              const createWsRes = await apiFetch("/api/workspaces", {
-                method: "POST",
-                headers: { 
-                  "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ name: "My Workspace" })
-              });
-              if (createWsRes.ok) {
-                const newWs = await createWsRes.json();
-                setActiveWorkspace(newWs);
-              }
+        const userData = await userRes.json();
+        const userInfo = {
+          id: userData.id,
+          email: userData.email,
+          full_name: userData.full_name || fullName,
+        };
+
+        let workspace: WorkspaceInfo | null = null;
+        if (workspaceRes.ok) {
+          const workspaces = await workspaceRes.json() as WorkspaceInfo[];
+          if (workspaces && workspaces.length > 0) {
+            workspace = workspaces[0];
+          } else {
+            const createWsRes = await apiFetch("/api/workspaces", {
+              method: "POST",
+              headers: { 
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ name: "My Workspace" })
+            });
+            if (createWsRes.ok) {
+              workspace = await createWsRes.json();
             }
           }
         }
 
+        // Atomically commit — fires a single auth-change event
+        commitSession(token, userInfo, workspace);
         setSuccess("Success! Entering Brain...");
       }
     } catch (err: unknown) {

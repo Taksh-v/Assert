@@ -66,7 +66,9 @@ export function setAuthToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
   cachedToken = token;
   tokenExpiry = Date.now() + 5 * 60 * 1000;
-  triggerAuthChange();
+  // NOTE: Do NOT call triggerAuthChange() here.
+  // Use commitSession() to atomically set token + user + workspace
+  // and fire a single event when everything is ready.
 }
 
 export function getCurrentUser(): UserInfo | null {
@@ -82,6 +84,33 @@ export function getCurrentUser(): UserInfo | null {
 
 export function setCurrentUser(user: UserInfo) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  // NOTE: Don't fire triggerAuthChange here directly.
+  // Call triggerAuthChange() manually after all session state is committed,
+  // or use commitSession() for the full atomic flow.
+}
+
+/**
+ * Atomically commits the full authenticated session (token + user + workspace)
+ * and fires a single auth-change event. This is the ONLY place that should
+ * trigger AppShell to re-check authentication after a login flow completes.
+ */
+export function commitSession(
+  token: string,
+  user: UserInfo,
+  workspace?: WorkspaceInfo | null
+) {
+  // 1. Write everything to storage synchronously before any event fires
+  localStorage.setItem(TOKEN_KEY, token);
+  cachedToken = token;
+  tokenExpiry = Date.now() + 5 * 60 * 1000;
+
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+
+  if (workspace) {
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace));
+  }
+
+  // 2. Fire a single event now that everything is in place
   triggerAuthChange();
 }
 
@@ -98,6 +127,8 @@ export function getActiveWorkspace(): WorkspaceInfo | null {
 
 export function setActiveWorkspace(workspace: WorkspaceInfo) {
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace));
+  // Fire auth change so components can react to workspace switches
+  // (e.g. switching workspaces from the sidebar — not the initial login).
   triggerAuthChange();
 }
 
@@ -131,34 +162,53 @@ export async function isAuthenticated(): Promise<boolean> {
   const token = await getAuthToken();
   if (!token) return false;
 
-  // Hydrate local user profile if it's missing (e.g. after Google OAuth redirect)
-  if (!getCurrentUser()) {
-    console.log("[Auth] User profile missing, attempting to hydrate from backend...");
-    try {
-      // Use a controller to prevent infinite hang if backend is slow
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+  // Fast path: user profile already in localStorage — no network needed
+  if (getCurrentUser()) return true;
 
-      const res = await apiFetch("/users/me", { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const userData = await res.json() as UserInfo;
-        console.log("[Auth] Successfully hydrated user profile:", userData.email);
-        setCurrentUser(userData);
-        await ensureDefaultWorkspace();
-      } else {
-        console.error("[Auth] Failed to hydrate user profile. Status:", res.status);
-        // If profile hydration fails, we are essentially not authenticated for the app's purposes
-        return false;
-      }
-    } catch (err) {
-      console.error("Failed to auto-hydrate user session:", err);
-      return false;
+  // Try to reconstruct from Supabase session metadata (zero-latency, no backend call)
+  console.log("[Auth] User profile missing — trying Supabase metadata first...");
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      const userMeta = session.user.user_metadata ?? {};
+      const userInfo: UserInfo = {
+        id: session.user.id,
+        email: session.user.email ?? "",
+        full_name: userMeta.full_name || userMeta.name || session.user.email,
+      };
+      // Write to storage WITHOUT triggering auth change (we're already inside the check)
+      localStorage.setItem(USER_KEY, JSON.stringify(userInfo));
+      console.log("[Auth] Hydrated from Supabase metadata:", userInfo.email);
+      // Kick off workspace load in background; don't block auth check
+      ensureDefaultWorkspace().catch(() => {});
+      return true;
     }
+  } catch (err) {
+    console.warn("[Auth] Could not get Supabase session:", err);
   }
 
-  return true;
+  // Last resort: hit the backend /users/me (handles email/password JWTs)
+  console.log("[Auth] Falling back to backend hydration...");
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await apiFetch("/users/me", { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const userData = await res.json() as UserInfo;
+      console.log("[Auth] Backend hydration success:", userData.email);
+      localStorage.setItem(USER_KEY, JSON.stringify(userData));
+      ensureDefaultWorkspace().catch(() => {});
+      return true;
+    }
+
+    console.error("[Auth] Backend hydration failed. Status:", res.status);
+    return false;
+  } catch (err) {
+    console.error("[Auth] Backend hydration error:", err);
+    return false;
+  }
 }
 
 /**

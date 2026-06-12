@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { commitSession, ensureDefaultWorkspace } from "@/lib/auth";
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -30,13 +31,13 @@ export default function AuthCallback() {
         processed.current = true;
         console.log("[AuthCallback] Code detected, exchanging...");
         const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        
+
         if (exchangeError) {
           console.error("Auth callback exchange error:", exchangeError.message);
           router.push("/?error=" + encodeURIComponent(exchangeError.message));
           return;
         }
-      } 
+      }
       // 3. Handle Hash Fragment (implicit flow fallback)
       else if (hash && hash.includes("access_token")) {
         console.log("[AuthCallback] Access token found in hash fragment.");
@@ -46,12 +47,35 @@ export default function AuthCallback() {
       // 4. Final verification: do we have a session now?
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        console.log("[AuthCallback] Session verified! Redirecting to home...");
-        // Use window.location.replace to ensure the auth state is clean and avoid browser back-button loops
+        console.log("[AuthCallback] Session verified! Pre-loading profile before redirect...");
+
+        // Build user info from Supabase session metadata (available immediately, no backend call)
+        const userMeta = session.user.user_metadata ?? {};
+        const userInfo = {
+          id: session.user.id,
+          email: session.user.email ?? "",
+          full_name: userMeta.full_name || userMeta.name || session.user.email,
+        };
+
+        // Try to load a workspace; non-fatal if it fails
+        let workspace = null;
+        try {
+          workspace = await ensureDefaultWorkspace();
+        } catch {
+          console.warn("[AuthCallback] Could not load workspace, proceeding anyway.");
+        }
+
+        // Atomically write token + user + workspace to localStorage in one shot.
+        // This means AppShell will find a fully-committed session on first render
+        // and will NOT trigger the expensive /users/me hydration path.
+        commitSession(session.access_token, userInfo, workspace);
+        console.log("[AuthCallback] Session committed. Redirecting home...");
+
+        // Replace history so the user cannot "back" into /auth/callback
         window.location.replace("/");
       } else {
-        // No code and no session? Redirect home to re-authenticate
-        console.warn("No code or session found in callback.");
+        // No session after exchange — send back to sign-in
+        console.warn("[AuthCallback] No session found after exchange.");
         router.push("/");
       }
     };

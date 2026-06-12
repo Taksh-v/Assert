@@ -30,6 +30,17 @@ class SupabaseAuthProvider(AuthProvider):
             logger.error("Supabase JWT secret is not configured.")
             return None
         try:
+            # Inspect token header first to avoid noisy warning logs for non-HS256 tokens (e.g. platform health checks)
+            try:
+                unverified_header = jwt.get_unverified_header(token)
+                alg = unverified_header.get("alg")
+                if alg != "HS256":
+                    logger.debug(f"Skipping Supabase verification for token with non-HS256 alg: {alg}")
+                    return None
+            except Exception:
+                # If we cannot parse the header, it is not a valid JWT
+                return None
+
             # Supabase uses HS256 algorithm.
             # We skip verify_aud by default because Supabase tokens can have varying audiences,
             # but we explicitly verify the user's role is authenticated.

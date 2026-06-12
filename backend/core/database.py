@@ -41,9 +41,7 @@ elif "postgresql" in db_url or db_url.startswith("postgres://"):
     # We must disable them by setting statement_cache_size to 0 in connect_args (for asyncpg).
     _connect_args["statement_cache_size"] = 0
 
-    # Generate unique prepared statement names to prevent collisions with PgBouncer
-    from uuid import uuid4
-    _connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid4().hex}__"
+
 
     # asyncpg does not support 'sslmode' in the URL or as a connect_arg.
     # We must strip it and pass 'ssl' context/bool in connect_args instead.
