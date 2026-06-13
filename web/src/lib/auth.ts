@@ -184,9 +184,12 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   const url = toBackendProxyPath(path);
 
   const headers = new Headers(options.headers || {});
-  if (token) {
+  
+  // Only add the cached token if no Authorization header was explicitly provided
+  if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }

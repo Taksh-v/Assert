@@ -53,7 +53,12 @@ async def get_current_user(
     # 1. Extract token from multiple possible sources (robust extraction)
     # Order: x-user-authorization -> Authorization Header -> Query Param (fallback)
     
-    auth_header = request.headers.get("x-user-authorization") or request.headers.get("authorization")
+    x_auth = request.headers.get("x-user-authorization")
+    std_auth = request.headers.get("authorization")
+    
+    # Use the first one that is actually present and not empty
+    auth_header = x_auth if x_auth and len(x_auth) > 5 else std_auth
+    
     if auth_header:
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:]
