@@ -76,11 +76,15 @@ async def get_current_user(
         # 2. Try Supabase JWT verification
         if settings.supabase_jwt_secret:
             try:
-                # Loosen verification: strip secret and ignore audience for debug
+                # DEBUG: Check what algorithm is actually being used
+                header = jwt.get_unverified_header(token)
+                print(f"DEBUG: Token header: {header}")
+                
+                # Loosen verification: strip secret and allow common algorithms
                 payload = jwt.decode(
                     token, 
                     settings.supabase_jwt_secret.strip(), 
-                    algorithms=["HS256"], 
+                    algorithms=["HS256", "RS256", "ES256"], 
                     options={"verify_aud": False}
                 )
                 supabase_id: str = payload.get("sub")
