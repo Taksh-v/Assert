@@ -221,4 +221,9 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
   - `web/src/app/chat/[id]/page.tsx` — mounts the debugger's Observability HUD controls automatically when the admin workspace details are resolved.
 - [x] **Verification**: Ran `npx tsc --noEmit` on the frontend, completing successfully with 0 errors.
 
+### 75. Phase 74: Asymmetric JWT JWKS Decoding & Unit Test Consolidation — [VERIFIED]
+- [x] **JWKS Asymmetric Verification**: Integrated an in-memory cached JSON Web Key Set (JWKS) resolver in `backend/api/users.py` to fetch and verify elliptic-curve signed `ES256`/`RS256` tokens from Supabase, resolving the authentication loop.
+- [x] **Unit Test Consolidation**: Fixed a signature parameter `TypeError` in `backend/tests/test_cognitive_response.py` and refactored `backend/tests/test_auth_provider.py` to fully test `get_current_user` logic under HS256/ES256 and auto-provisioning scenarios.
+- [x] **Verification**: Confirmed all auth-related unit tests in both files pass successfully, and deployed the changes to GitHub and Hugging Face.
+
 
