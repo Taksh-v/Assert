@@ -89,3 +89,13 @@ async def root():
         "docs": "/docs",
         "health": "/health",
     }
+
+@app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def catch_all(request: Request, path_name: str):
+    print(f"DEBUG: CATCH-ALL hit: {request.method} /{path_name}")
+    return {
+        "error": "Not Found",
+        "path": path_name,
+        "method": request.method,
+        "detail": f"Assest Catch-all: Route /{path_name} does not exist on this server."
+    }

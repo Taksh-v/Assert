@@ -24,9 +24,6 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 function buildBackendUrl(pathSegments: string[] = [], search: string, request: NextRequest) {
   const backendBase = getServerBackendUrl();
-  
-  // The pathSegments already include "api" if the frontend calls "/api/users/me"
-  // because the Next.js route is at "/api/backend/[...path]"
   const backendPath = pathSegments.map(encodeURIComponent).join("/");
   
   // Extract user token to send as query param (robust to header stripping)
@@ -38,8 +35,9 @@ function buildBackendUrl(pathSegments: string[] = [], search: string, request: N
     tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}`;
   }
 
-  // Path already starts with "api/" from the path segments
-  return `${backendBase}/${backendPath}${search}${tokenParam}`;
+  // Next.js [path] segments DO NOT include "api" if the request was to /api/backend/users/me
+  // So we must add the /api/ prefix required by FastAPI.
+  return `${backendBase}/api/${backendPath}${search}${tokenParam}`;
 }
 
 function buildForwardHeaders(request: NextRequest) {
