@@ -142,13 +142,21 @@ async def get_current_user(
                         await db.refresh(user)
                         print(f"DEBUG: Sync complete for {email}")
             except JWTError as e:
-                last_error = str(e)
+                try:
+                    h = jwt.get_unverified_header(token)
+                    last_error = f"JWT Error: {str(e)} (Header: {h})"
+                except:
+                    last_error = f"JWT Error: {str(e)}"
                 print(f"DEBUG: Supabase JWT Verification Failed: {last_error}")
                 logger.error(f"AUTH_DIAGNOSTIC: Supabase JWT Verification Failed: {last_error}")
             except Exception as e:
-                last_error = f"Database Error: {str(e)}"
-                print(f"DEBUG: Database Error during Sync: {str(e)}")
-                logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {str(e)}")
+                try:
+                    h = jwt.get_unverified_header(token)
+                    last_error = f"Sync Error: {str(e)} (Header: {h})"
+                except:
+                    last_error = f"Sync Error: {str(e)}"
+                print(f"DEBUG: Database Error during Sync: {last_error}")
+                logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {last_error}")
         else:
             last_error = "Secret not configured"
             print("ERROR: SUPABASE_JWT_SECRET NOT CONFIGURED")
