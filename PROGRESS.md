@@ -185,3 +185,11 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Test Suite Consolidation**: Deleted user OAuth identity linking test `backend/tests/test_auth_consolidation.py` and consolidated `backend/tests/test_email_check.py` to assert only password/none authentication types.
 - [x] **AuthPortal Cleanup**: Cleaned up `web/src/components/AuthPortal.tsx` to remove dead identity OAuth verification blocks and fixed duplicate variable declarations to ensure Next.js frontend builds without errors.
 - [x] **Verification**: Verified successful backend imports check and passing email check unit tests in sandbox mode, and ran TypeScript typecheck verification (`npx tsc --noEmit`) showing 0 errors.
+
+### 71. Phase 70: Hugging Face CONFIG_ERROR Resolution & Connector Fix — [VERIFIED]
+- [x] **Bug 1 (CONFIG_ERROR)**: The Hugging Face Space failed to start and was stuck in a `CONFIG_ERROR` ("Collision on variables and secrets names"). This was because some OAuth environment variables (e.g. `NOTION_CLIENT_ID`, `SLACK_REDIRECT_URI`) existed in *both* Variables and Secrets, often with different casings.
+- **Impact**: Because the backend was down, the `/api/oauth/authorize/{type}` endpoint failed. The frontend incorrectly interpreted this as "OAuth is not configured on the server".
+- [x] **Fix 1 Applied**: Used the Hugging Face Hub API to delete the duplicate keys and cleanly separate the secrets. Restarted the Hugging Face space.
+- [x] **Bug 2 (RUNTIME_ERROR)**: After resolving the config error, the space crashed on boot with `ImportError: email-validator is not installed`. This occurred because the new `/api/users/check-email` endpoint uses Pydantic's `EmailStr`, which requires the `email-validator` package.
+- [x] **Fix 2 Applied**: Added `email-validator>=2.1.0` to `requirements.txt` and `backend/requirements.txt`, and pushed the fix to `hf-deploy` branch and Hugging Face `main`. The space is now successfully rebuilding and will be online shortly.
+

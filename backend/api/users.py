@@ -48,9 +48,9 @@ async def get_current_user(
 ) -> User:
     """
     Validate the authentication token and return the current user.
-    Supports only internal JWTs signed with app_secret_key.
+    Supports both Supabase JWTs and internal JWTs.
     """
-    # 1. Resolve token from header if oauth2_scheme didn't find it (common with custom proxies)
+    # 1. Resolve token from header if oauth2_scheme didn't find it
     if not token:
         x_user_auth = request.headers.get("x-user-authorization") or request.headers.get("authorization")
         if x_user_auth:
@@ -60,20 +60,96 @@ async def get_current_user(
                 token = x_user_auth
 
     if token:
-        # Try internal JWT (signed with app_secret_key)
-        try:
-            payload = jwt.decode(token, settings.app_secret_key, algorithms=[ALGORITHM])
-            user_id: str = payload.get("sub")
-            if user_id:
-                stmt = select(User).where(User.id == user_id)
-                result = await db.execute(stmt)
-                user = result.scalars().first()
-                if user:
-                    if not user.is_active:
-                        raise HTTPException(status_code=403, detail="User account is deactivated")
-                    return user
-        except JWTError:
-            pass
+        user = None
+        logger.info(f"Token found: {token[:10]}...")
+        print(f"DEBUG: Token found: {token[:10]}...")
+
+        # 2. Try Supabase JWT verification first if configured
+        if settings.supabase_jwt_secret:
+            print(f"DEBUG: Supabase JWT secret configured")
+            try:
+                # Supabase uses HS256 and 'authenticated' audience by default
+                payload = jwt.decode(
+                    token, 
+                    settings.supabase_jwt_secret, 
+                    algorithms=["HS256"], 
+                    audience="authenticated"
+                )
+                print(f"DEBUG: Supabase payload decoded: {payload}")
+                supabase_id: str = payload.get("sub")
+                email: str = payload.get("email")
+
+                if supabase_id and email:
+                    # Check if user exists by supabase_id
+                    stmt = select(User).where(User.supabase_id == supabase_id)
+                    result = await db.execute(stmt)
+                    user = result.scalars().first()
+
+                    if not user:
+                        # Fallback: check if user exists by email (may have registered normally before)
+                        stmt = select(User).where(User.email == email)
+                        result = await db.execute(stmt)
+                        user = result.scalars().first()
+
+                        if user:
+                            # Link existing user to Supabase
+                            user.supabase_id = supabase_id
+                            await db.commit()
+                            await db.refresh(user)
+                        else:
+                            # Create new shadow user and default workspace in a transaction
+                            user = User(
+                                email=email,
+                                supabase_id=supabase_id,
+                                hashed_password=f"supabase_{secrets.token_urlsafe(32)}",
+                                full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0]
+                            )
+                            db.add(user)
+                            await db.flush()
+
+                            # Create personal workspace
+                            workspace_name = f"{user.full_name or user.email.split('@')[0]}'s Workspace"
+                            slug = f"workspace-{user.id[:8]}"
+                            new_workspace = Workspace(name=workspace_name, slug=slug)
+                            db.add(new_workspace)
+                            await db.flush()
+
+                            # Add user as OWNER
+                            membership = WorkspaceMember(
+                                workspace_id=new_workspace.id,
+                                user_id=user.id,
+                                role=WorkspaceRole.OWNER
+                            )
+                            db.add(membership)
+                            
+                            await db.commit()
+                            await db.refresh(user)
+            except JWTError as e:
+                print(f"DEBUG: Supabase JWT Error: {e}")
+                # Not a valid Supabase token, continue to internal check
+                pass
+            except Exception as e:
+                logger.error(f"Error during Supabase user sync: {e}")
+                # We don't want to crash the whole request if sync fails, 
+                # but we shouldn't return a partial user either.
+                user = None
+
+        # 3. Fallback: Try internal JWT (signed with app_secret_key)
+        if not user:
+            try:
+                payload = jwt.decode(token, settings.app_secret_key, algorithms=[ALGORITHM])
+                user_id: str = payload.get("sub")
+                if user_id:
+                    stmt = select(User).where(User.id == user_id)
+                    result = await db.execute(stmt)
+                    user = result.scalars().first()
+            except JWTError:
+                pass
+
+        if user:
+            if not user.is_active:
+                raise HTTPException(status_code=403, detail="User account is deactivated")
+            return user
 
     # Production logic: strict 401
     if not settings.is_development:
