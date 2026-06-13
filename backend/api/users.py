@@ -39,6 +39,7 @@ async def get_current_user(
     Creates a shadow user in the local database if one doesn't exist.
     """
     token = None
+    last_error = "None"
     
     # DEBUG: Print all headers to stdout (visible in HF logs)
     print("--- AUTH DEBUG START ---")
@@ -70,6 +71,7 @@ async def get_current_user(
     if token:
         user = None
         print(f"DEBUG: Token processing (len={len(token)})")
+        print(f"DEBUG: Token start: {token[:10]}...")
 
         # 2. Try Supabase JWT verification
         if settings.supabase_jwt_secret:
@@ -136,12 +138,15 @@ async def get_current_user(
                         await db.refresh(user)
                         print(f"DEBUG: Sync complete for {email}")
             except JWTError as e:
-                print(f"DEBUG: Supabase JWT Verification Failed: {str(e)}")
-                logger.error(f"AUTH_DIAGNOSTIC: Supabase JWT Verification Failed: {str(e)}")
+                last_error = str(e)
+                print(f"DEBUG: Supabase JWT Verification Failed: {last_error}")
+                logger.error(f"AUTH_DIAGNOSTIC: Supabase JWT Verification Failed: {last_error}")
             except Exception as e:
+                last_error = f"Database Error: {str(e)}"
                 print(f"DEBUG: Database Error during Sync: {str(e)}")
                 logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {str(e)}")
         else:
+            last_error = "Secret not configured"
             print("ERROR: SUPABASE_JWT_SECRET NOT CONFIGURED")
 
         if user:
@@ -158,11 +163,9 @@ async def get_current_user(
     if not settings.is_development:
         detail = "Valid authentication token required"
         if not token:
-            detail += " (Token not found in headers)"
-        elif not settings.supabase_jwt_secret:
-            detail += " (Supabase secret not configured on backend)"
-        elif not user:
-            detail += " (Token verification failed or User not found locally)"
+            detail += " (Token not found)"
+        else:
+            detail += f" ({last_error})"
         
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
