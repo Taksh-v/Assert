@@ -49,16 +49,19 @@ async def get_current_user(
     Validate the Supabase JWT token and return the current user.
     Creates a shadow user in the local database if one doesn't exist.
     """
-    token = auth.credentials if auth else None
+    token = None
     
-    # 1. Resolve token from header if security didn't find it
-    if not token:
-        x_user_auth = request.headers.get("x-user-authorization") or request.headers.get("authorization")
-        if x_user_auth:
-            if x_user_auth.lower().startswith("bearer "):
-                token = x_user_auth[7:]
-            else:
-                token = x_user_auth
+    # 1. Check if Vercel proxy passed the real token in x-user-authorization
+    x_user_auth = request.headers.get("x-user-authorization")
+    if x_user_auth:
+        if x_user_auth.lower().startswith("bearer "):
+            token = x_user_auth[7:]
+        else:
+            token = x_user_auth
+            
+    # 2. Fallback to standard Authorization header
+    if not token and auth:
+        token = auth.credentials
 
     if token:
         user = None
