@@ -164,9 +164,17 @@ async def get_current_user(
     print("--- AUTH DEBUG END ---")
     # 3. Production logic: strict 401
     if not settings.is_development:
+        detail = "Valid authentication token required"
+        if not token:
+            detail += " (Token not found in headers)"
+        elif not settings.supabase_jwt_secret:
+            detail += " (Supabase secret not configured on backend)"
+        elif not user:
+            detail += " (Token verification failed or User not found locally)"
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Valid authentication token required",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
