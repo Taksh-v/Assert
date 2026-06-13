@@ -26,34 +26,38 @@ function buildBackendUrl(pathSegments: string[] = [], search: string, request: N
   const backendBase = getServerBackendUrl();
   const backendPath = pathSegments.map(encodeURIComponent).join("/");
   
-  // Extract user token to send as query param (robust to header stripping)
-  const auth = request.headers.get("authorization");
+  // EXTRACTION: Get user token from ANY incoming header
+  const auth = request.headers.get("authorization") || 
+               request.headers.get("x-supabase-token") || 
+               request.headers.get("x-access-token") ||
+               request.headers.get("token");
+
   let tokenParam = "";
   if (auth) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
     const separator = search ? "&" : (search.includes("?") ? "&" : "?");
-    tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}`;
+    // Send as BOTH supabase_token and access_token query params
+    tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`;
   }
 
-  // Next.js [path] segments DO NOT include "api" if the request was to /api/backend/users/me
-  // So we must add the /api/ prefix required by FastAPI.
   return `${backendBase}/api/${backendPath}${search}${tokenParam}`;
 }
 
 function buildForwardHeaders(request: NextRequest) {
   const headers = new Headers(request.headers);
 
-  // Still try headers as backup
-  const incomingAuth = request.headers.get("authorization");
-  const customAuth = request.headers.get("x-supabase-auth");
+  // Redundantly forward all auth headers
+  const auth = request.headers.get("authorization");
+  if (auth) headers.set("x-user-authorization", auth);
   
-  if (incomingAuth) {
-    headers.set("x-user-authorization", incomingAuth);
-  }
-  
-  if (customAuth) {
-    headers.set("x-supabase-auth", customAuth);
-  }
+  const supToken = request.headers.get("x-supabase-token");
+  if (supToken) headers.set("x-supabase-token", supToken);
+
+  const accToken = request.headers.get("x-access-token");
+  if (accToken) headers.set("x-access-token", accToken);
+
+  const rawToken = request.headers.get("token");
+  if (rawToken) headers.set("token", rawToken);
 
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
@@ -67,6 +71,7 @@ function buildForwardHeaders(request: NextRequest) {
     headers.set("x-api-key", internalApiKey);
   }
 
+  // HF_TOKEN is only for the gateway to let us through
   const hfToken = process.env.HF_TOKEN;
   if (hfToken) {
     headers.set("authorization", `Bearer ${hfToken}`);
@@ -77,11 +82,9 @@ function buildForwardHeaders(request: NextRequest) {
 
 function buildResponseHeaders(upstreamHeaders: Headers) {
   const headers = new Headers(upstreamHeaders);
-
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
   }
-
   headers.set("cache-control", "no-store");
   return headers;
 }
@@ -93,7 +96,7 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
     const method = request.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    console.log(`[Proxy] Request ${method} ${targetUrl} (hasBody: ${hasBody})`);
+    console.log(`[Proxy] Routing ${method} to ${targetUrl}`);
 
     let bodyBuffer: ArrayBuffer | undefined = undefined;
     if (hasBody) {
@@ -108,33 +111,18 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
         cache: "no-store",
       });
 
-      console.log(`[Proxy] Response status from backend: ${upstream.status} ${upstream.statusText}`);
-
       return new Response(upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
         headers: buildResponseHeaders(upstream.headers),
       });
     } catch (innerError) {
-      console.error(`[Proxy] Inner fetch error for ${targetUrl}:`, innerError);
-      const message = innerError instanceof Error ? innerError.message : "Unknown backend proxy error";
-      return Response.json(
-        {
-          detail: "Unable to reach Assest backend.",
-          message,
-        },
-        { status: 502, headers: { "cache-control": "no-store" } },
-      );
+      console.error(`[Proxy] Fetch error:`, innerError);
+      return Response.json({ detail: "Backend unreachable via proxy." }, { status: 502 });
     }
   } catch (outerError) {
-    console.error("[Proxy] Outer parameter/setup error:", outerError);
-    return Response.json(
-      {
-        detail: "Proxy setup error.",
-        message: outerError instanceof Error ? outerError.message : String(outerError),
-      },
-      { status: 500, headers: { "cache-control": "no-store" } },
-    );
+    console.error("[Proxy] Setup error:", outerError);
+    return Response.json({ detail: "Proxy configuration error." }, { status: 500 });
   }
 }
 
