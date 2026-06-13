@@ -152,8 +152,11 @@ export default function AuthPortal() {
         return;
       }
 
+      // CRITICAL: Save token to memory/localstorage immediately so apiFetch can use all brute-force headers
+      commitSession(token, { id: data.user.id, email: data.user.email }, null);
+
       // Sync with backend - Run sequentially to prevent shadow user creation race conditions
-      const userRes = await apiFetch("/api/users/me", { headers: { Authorization: `Bearer ${token}` } });
+      const userRes = await apiFetch("/api/users/me");
       if (!userRes.ok) {
         const errorData = await userRes.json().catch(() => ({}));
         throw new Error(`Failed to load user profile from backend. Detail: ${errorData.detail || userRes.statusText}`);

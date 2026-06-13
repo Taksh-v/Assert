@@ -35,8 +35,8 @@ function buildBackendUrl(pathSegments: string[] = [], search: string, request: N
   let tokenParam = "";
   if (auth) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
+    console.log(`[Proxy] Forwarding token (start: ${token.slice(0, 10)}...) as query params`);
     const separator = search ? "&" : (search.includes("?") ? "&" : "?");
-    // Send as BOTH supabase_token and access_token query params
     tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`;
   }
 
@@ -48,16 +48,17 @@ function buildForwardHeaders(request: NextRequest) {
 
   // Redundantly forward all auth headers
   const auth = request.headers.get("authorization");
-  if (auth) headers.set("x-user-authorization", auth);
+  if (auth) {
+    headers.set("x-user-authorization", auth);
+    const clean = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
+    console.log(`[Proxy] Incoming User Token (start: ${clean.slice(0, 10)}...)`);
+  }
   
   const supToken = request.headers.get("x-supabase-token");
-  if (supToken) headers.set("x-supabase-token", supToken);
-
-  const accToken = request.headers.get("x-access-token");
-  if (accToken) headers.set("x-access-token", accToken);
-
-  const rawToken = request.headers.get("token");
-  if (rawToken) headers.set("token", rawToken);
+  if (supToken) {
+      headers.set("x-supabase-token", supToken);
+      console.log(`[Proxy] Incoming Custom Header Token (start: ${supToken.slice(0, 10)}...)`);
+  }
 
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
@@ -71,9 +72,9 @@ function buildForwardHeaders(request: NextRequest) {
     headers.set("x-api-key", internalApiKey);
   }
 
-  // HF_TOKEN is only for the gateway to let us through
   const hfToken = process.env.HF_TOKEN;
   if (hfToken) {
+    console.log(`[Proxy] Injecting HF_TOKEN (start: ${hfToken.slice(0, 10)}...)`);
     headers.set("authorization", `Bearer ${hfToken}`);
   }
 
@@ -96,7 +97,7 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
     const method = request.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    console.log(`[Proxy] Routing ${method} to ${targetUrl}`);
+    console.log(`[Proxy] ${method} -> ${targetUrl}`);
 
     let bodyBuffer: ArrayBuffer | undefined = undefined;
     if (hasBody) {
@@ -111,6 +112,8 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
         cache: "no-store",
       });
 
+      console.log(`[Proxy] Backend Response: ${upstream.status}`);
+
       return new Response(upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
@@ -118,11 +121,11 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
       });
     } catch (innerError) {
       console.error(`[Proxy] Fetch error:`, innerError);
-      return Response.json({ detail: "Backend unreachable via proxy." }, { status: 502 });
+      return Response.json({ detail: "Backend unreachable." }, { status: 502 });
     }
   } catch (outerError) {
     console.error("[Proxy] Setup error:", outerError);
-    return Response.json({ detail: "Proxy configuration error." }, { status: 500 });
+    return Response.json({ detail: "Proxy error." }, { status: 500 });
   }
 }
 

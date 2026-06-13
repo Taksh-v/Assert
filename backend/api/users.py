@@ -34,49 +34,47 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
-    ULTRA-ROBUST TOKEN EXTRACTION (BRUTE FORCE)
-    We check every single possible source for a Supabase token.
-    We ignore any system-level tokens (Hugging Face ES256).
+    ULTRA-ROBUST TOKEN FINDER
+    Iterates through all candidates and logs precisely what is happening.
     """
     
-    # 1. Collect all candidates from all possible sources
     candidates = []
-    
-    # Source: Custom Redundant Headers
+    # 1. Custom Headers
     for h in ["x-supabase-token", "x-access-token", "token", "x-user-authorization"]:
         val = request.headers.get(h)
-        if val: candidates.append(val)
+        if val: candidates.append(("Header " + h, val))
         
-    # Source: Query Params
+    # 2. Query Params
     for p in ["supabase_token", "access_token"]:
         val = request.query_params.get(p)
-        if val: candidates.append(val)
+        if val: candidates.append(("Query " + p, val))
         
-    # Source: Standard Authorization Header
+    # 3. Standard Auth
     std_auth = request.headers.get("authorization")
     if std_auth:
-        candidates.append(std_auth[7:] if std_auth.lower().startswith("bearer ") else std_auth)
+        candidates.append(("Standard Auth", std_auth))
 
-    # 2. Iterate through candidates and find the first one that works
-    best_error = "Token not found"
+    best_error = "No tokens provided"
     
-    for raw_token in candidates:
-        if not raw_token or len(raw_token) < 10:
-            continue
-            
-        # Clean token (remove Bearer if nested)
-        token = raw_token[7:] if raw_token.lower().startswith("bearer ") else raw_token
+    for label, raw_val in candidates:
+        if not raw_val or len(raw_val) < 10: continue
+        
+        # Strip bearer
+        token = raw_val[7:] if raw_val.lower().startswith("bearer ") else raw_val
         
         try:
-            # PRE-CHECK: Ignore ES256 system tokens
+            # PRE-CHECK: Algorithm
             header = jwt.get_unverified_header(token)
-            if header.get("alg") == "ES256":
-                print("DEBUG: Skipping ES256 system token")
+            alg = header.get("alg")
+            print(f"DEBUG: Checking {label} (start: {token[:10]}..., alg: {alg})")
+            
+            if alg == "ES256":
+                best_error = f"Ignored system token from {label}"
                 continue
                 
-            # DECODE: Check with Supabase Secret
+            # DECODE: Supabase
             if not settings.supabase_jwt_secret:
-                best_error = "Supabase secret not configured"
+                best_error = "Secret missing on backend"
                 break
                 
             payload = jwt.decode(
@@ -86,23 +84,20 @@ async def get_current_user(
                 audience="authenticated"
             )
             
-            supabase_id: str = payload.get("sub")
-            email: str = payload.get("email")
+            supabase_id = payload.get("sub")
+            email = payload.get("email")
             
             if supabase_id and email:
-                # SUCCESS! Sync user and return
+                # FOUND IT! Sync user
                 stmt = select(User).where(User.supabase_id == supabase_id)
                 result = await db.execute(stmt)
                 user = result.scalars().first()
 
                 if not user:
-                    # User exists in Supabase, create local record
                     stmt = select(User).where(User.email == email)
                     result = await db.execute(stmt)
                     user = result.scalars().first()
-
-                    if user:
-                        user.supabase_id = supabase_id
+                    if user: user.supabase_id = supabase_id
                     else:
                         user = User(
                             email=email,
@@ -114,7 +109,7 @@ async def get_current_user(
                     
                     await db.flush()
                     
-                    # Workspace provision
+                    # Workspace Check
                     stmt = select(Workspace).join(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
                     ws_result = await db.execute(stmt)
                     if not ws_result.scalars().first():
@@ -123,35 +118,30 @@ async def get_current_user(
                         new_workspace = Workspace(name=workspace_name, slug=slug)
                         db.add(new_workspace)
                         await db.flush()
-                        membership = WorkspaceMember(workspace_id=new_workspace.id, user_id=user.id, role=WorkspaceRole.OWNER)
-                        db.add(membership)
+                        db.add(WorkspaceMember(workspace_id=new_workspace.id, user_id=user.id, role=WorkspaceRole.OWNER))
                         
                     await db.commit()
                     await db.refresh(user)
                 
-                if user.is_active:
-                    return user
-                else:
-                    raise HTTPException(status_code=403, detail="Account disabled")
+                if user.is_active: return user
+                else: raise HTTPException(status_code=403, detail="Account disabled")
                     
         except JWTError as e:
-            best_error = f"JWT Error: {str(e)}"
+            best_error = f"JWT Invalid on {label}: {str(e)}"
         except Exception as e:
-            best_error = f"System Error: {str(e)}"
-            logger.error(f"Sync error: {e}")
+            best_error = f"Sync Error on {label}: {str(e)}"
 
-    # 3. If we are here, no token worked
+    # 4. Fail
     if not settings.is_development:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Valid authentication token required ({best_error})",
+            detail=f"Authentication required ({best_error})",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Dev fallback (Emergency Only)
+    # Insecure Dev Fallback
     if os.environ.get("ASSEST_INSECURE_DEV_LOGIN") == "true":
-        stmt = select(User).order_by(User.created_at.asc())
-        result = await db.execute(stmt)
+        stmt = select(User).order_by(User.created_at.asc()); result = await db.execute(stmt)
         user = result.scalars().first()
         if user: return user
 
@@ -169,9 +159,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 async def check_email(request: Request, db: AsyncSession = Depends(get_db)):
     data = await request.json()
     email = data.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-    stmt = select(User).where(User.email == email)
-    result = await db.execute(stmt)
+    if not email: raise HTTPException(status_code=400, detail="Email is required")
+    stmt = select(User).where(User.email == email); result = await db.execute(stmt)
     user = result.scalars().first()
     return {"exists": bool(user), "auth_type": "password" if user else "none"}
