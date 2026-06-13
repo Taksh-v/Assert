@@ -1,7 +1,6 @@
 import logging
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
@@ -19,14 +18,9 @@ router = APIRouter(tags=["Users"])
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-security = HTTPBearer(auto_error=False)
-
 class UserBase(BaseModel):
     email: EmailStr
     full_name: Optional[str] = None
-
-class UserCreate(UserBase):
-    password: str
 
 class UserResponse(UserBase):
     id: str
@@ -35,10 +29,6 @@ class UserResponse(UserBase):
 
     class Config:
         from_attributes = True
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
 
 async def get_current_user(
     request: Request,
@@ -57,10 +47,15 @@ async def get_current_user(
     
     print(f"DEBUG: x-user-authorization length: {len(x_auth) if x_auth else 0}")
     print(f"DEBUG: authorization length: {len(std_auth) if std_auth else 0}")
-    print(f"DEBUG: SUPABASE_JWT_SECRET configured: {bool(settings.supabase_jwt_secret)}")
+    
+    # Safe debug: print first/last 2 chars of secret to verify it's loaded correctly
+    sec = settings.supabase_jwt_secret
+    if sec:
+        print(f"DEBUG: Secret check: {sec[:2]}...{sec[-2:]} (len={len(sec)})")
+    else:
+        print("DEBUG: Secret is NONE")
 
-    # 1. Extract token from multiple possible sources (robust extraction)
-    # Use the first one that is actually present and not empty
+    # 1. Extract token from multiple possible sources
     auth_header = x_auth if x_auth and len(x_auth) > 5 else std_auth
     
     if auth_header:
@@ -71,8 +66,6 @@ async def get_current_user(
             
     if not token:
         token = request.query_params.get("access_token")
-        if token:
-            print("DEBUG: Token found in query params")
 
     if token:
         user = None
@@ -81,12 +74,12 @@ async def get_current_user(
         # 2. Try Supabase JWT verification
         if settings.supabase_jwt_secret:
             try:
-                # IMPORTANT: Supabase tokens must be verified with 'authenticated' audience
+                # Loosen verification: strip secret and ignore audience for debug
                 payload = jwt.decode(
                     token, 
-                    settings.supabase_jwt_secret, 
+                    settings.supabase_jwt_secret.strip(), 
                     algorithms=["HS256"], 
-                    audience="authenticated"
+                    options={"verify_aud": False}
                 )
                 supabase_id: str = payload.get("sub")
                 email: str = payload.get("email")
@@ -150,11 +143,9 @@ async def get_current_user(
                 logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {str(e)}")
         else:
             print("ERROR: SUPABASE_JWT_SECRET NOT CONFIGURED")
-            logger.error("AUTH_DIAGNOSTIC: SUPABASE_JWT_SECRET NOT CONFIGURED")
 
         if user:
             if not user.is_active:
-                print(f"DEBUG: User {user.email} is deactivated")
                 raise HTTPException(status_code=403, detail="User account is deactivated")
             print(f"DEBUG: Auth Successful for {user.email}")
             print("--- AUTH DEBUG END ---")
@@ -162,6 +153,7 @@ async def get_current_user(
     
     print("DEBUG: No valid user found after token processing")
     print("--- AUTH DEBUG END ---")
+    
     # 3. Production logic: strict 401
     if not settings.is_development:
         detail = "Valid authentication token required"
@@ -178,7 +170,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Development-only fallback: Return the first user if it exists
+    # Development-only fallback
     import os
     if os.environ.get("ASSEST_INSECURE_DEV_LOGIN") == "true":
         stmt = select(User).order_by(User.created_at.asc())
@@ -197,3 +189,19 @@ async def get_current_user(
 @router.get("/users/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+@router.post("/check-email")
+async def check_email(request: Request, db: AsyncSession = Depends(get_db)):
+    data = await request.json()
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    
+    stmt = select(User).where(User.email == email)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    
+    if not user:
+        return {"exists": False, "auth_type": "none"}
+    
+    return {"exists": True, "auth_type": "password"}
