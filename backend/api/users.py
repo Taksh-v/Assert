@@ -50,12 +50,16 @@ async def get_current_user(
     """
     token = None
     
-    # 1. Extract token from multiple possible sources (robust extraction)
-    # Order: x-user-authorization -> Authorization Header -> Query Param (fallback)
-    
+    # DEBUG: Print all headers to stdout (visible in HF logs)
+    print("--- AUTH DEBUG START ---")
     x_auth = request.headers.get("x-user-authorization")
     std_auth = request.headers.get("authorization")
     
+    print(f"DEBUG: x-user-authorization length: {len(x_auth) if x_auth else 0}")
+    print(f"DEBUG: authorization length: {len(std_auth) if std_auth else 0}")
+    print(f"DEBUG: SUPABASE_JWT_SECRET configured: {bool(settings.supabase_jwt_secret)}")
+
+    # 1. Extract token from multiple possible sources (robust extraction)
     # Use the first one that is actually present and not empty
     auth_header = x_auth if x_auth and len(x_auth) > 5 else std_auth
     
@@ -67,10 +71,12 @@ async def get_current_user(
             
     if not token:
         token = request.query_params.get("access_token")
+        if token:
+            print("DEBUG: Token found in query params")
 
     if token:
         user = None
-        logger.info(f"AUTH_DIAGNOSTIC: Processing token (len={len(token)})")
+        print(f"DEBUG: Token processing (len={len(token)})")
 
         # 2. Try Supabase JWT verification
         if settings.supabase_jwt_secret:
@@ -84,6 +90,7 @@ async def get_current_user(
                 )
                 supabase_id: str = payload.get("sub")
                 email: str = payload.get("email")
+                print(f"DEBUG: Supabase JWT verified for {email}")
 
                 if supabase_id and email:
                     # Check if user exists by supabase_id
@@ -92,16 +99,18 @@ async def get_current_user(
                     user = result.scalars().first()
 
                     if not user:
-                        logger.info(f"AUTH_DIAGNOSTIC: Syncing new Supabase user: {email}")
+                        print(f"DEBUG: User {email} not found locally, syncing...")
                         # Check for email collision
                         stmt = select(User).where(User.email == email)
                         result = await db.execute(stmt)
                         existing_email_user = result.scalars().first()
 
                         if existing_email_user:
+                            print(f"DEBUG: Linking existing user {email} to Supabase ID")
                             existing_email_user.supabase_id = supabase_id
                             user = existing_email_user
                         else:
+                            print(f"DEBUG: Creating brand new user: {email}")
                             user = User(
                                 email=email,
                                 supabase_id=supabase_id,
@@ -116,6 +125,7 @@ async def get_current_user(
                         stmt = select(Workspace).join(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
                         ws_result = await db.execute(stmt)
                         if not ws_result.scalars().first():
+                            print(f"DEBUG: Creating default workspace for {email}")
                             workspace_name = f"{user.full_name or email.split('@')[0]}'s Workspace"
                             slug = f"workspace-{user.id[:8]}"
                             new_workspace = Workspace(name=workspace_name, slug=slug)
@@ -131,19 +141,27 @@ async def get_current_user(
                             
                         await db.commit()
                         await db.refresh(user)
+                        print(f"DEBUG: Sync complete for {email}")
             except JWTError as e:
+                print(f"DEBUG: Supabase JWT Verification Failed: {str(e)}")
                 logger.error(f"AUTH_DIAGNOSTIC: Supabase JWT Verification Failed: {str(e)}")
             except Exception as e:
+                print(f"DEBUG: Database Error during Sync: {str(e)}")
                 logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {str(e)}")
-                # Don't fail the whole app if sync has issues, try to continue
         else:
+            print("ERROR: SUPABASE_JWT_SECRET NOT CONFIGURED")
             logger.error("AUTH_DIAGNOSTIC: SUPABASE_JWT_SECRET NOT CONFIGURED")
 
         if user:
             if not user.is_active:
+                print(f"DEBUG: User {user.email} is deactivated")
                 raise HTTPException(status_code=403, detail="User account is deactivated")
+            print(f"DEBUG: Auth Successful for {user.email}")
+            print("--- AUTH DEBUG END ---")
             return user
-
+    
+    print("DEBUG: No valid user found after token processing")
+    print("--- AUTH DEBUG END ---")
     # 3. Production logic: strict 401
     if not settings.is_development:
         raise HTTPException(
