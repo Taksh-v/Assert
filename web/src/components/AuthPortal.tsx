@@ -143,11 +143,11 @@ export default function AuthPortal() {
       if (error) throw error;
 
       const token = data.session?.access_token;
-      if (!token) {
-        if (!isLogin) {
+      if (!token || !data.user) {
+        if (!isLogin && !data.session) {
           setSuccess("Confirmation email sent! Please check your inbox.");
         } else {
-          throw new Error("Failed to retrieve session token.");
+          throw new Error("Failed to retrieve session. Please try again.");
         }
         return;
       }
