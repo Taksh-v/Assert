@@ -152,11 +152,11 @@ async def get_current_user(
             except Exception as e:
                 try:
                     h = jwt.get_unverified_header(token)
-                    last_error = f"Sync Error: {str(e)} (Header: {h})"
+                    last_error = f"CORE_ERROR: {str(e)} (Header: {h})"
                 except:
-                    last_error = f"Sync Error: {str(e)}"
-                print(f"DEBUG: Database Error during Sync: {last_error}")
-                logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {last_error}")
+                    last_error = f"CORE_ERROR: {str(e)}"
+                print(f"DEBUG: Fatal error during sync: {last_error}")
+                logger.error(f"AUTH_DIAGNOSTIC: Fatal error during sync: {last_error}")
         else:
             last_error = "Secret not configured"
             print("ERROR: SUPABASE_JWT_SECRET NOT CONFIGURED")
@@ -173,7 +173,8 @@ async def get_current_user(
     
     # 3. Production logic: strict 401
     if not settings.is_development:
-        detail = "Valid authentication token required"
+        # Versioning the message to confirm deployment
+        detail = "Valid authentication token required [v5]"
         if not token:
             detail += " (Token not found)"
         else:
