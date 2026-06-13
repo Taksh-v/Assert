@@ -154,7 +154,10 @@ export default function AuthPortal() {
 
       // Sync with backend - Run sequentially to prevent shadow user creation race conditions
       const userRes = await apiFetch("/api/users/me", { headers: { Authorization: `Bearer ${token}` } });
-      if (!userRes.ok) throw new Error("Failed to load user profile from backend.");
+      if (!userRes.ok) {
+        const errorData = await userRes.json().catch(() => ({}));
+        throw new Error(`Failed to load user profile from backend. Detail: ${errorData.detail || userRes.statusText}`);
+      }
       const userData = await userRes.json();
       const userInfo = { id: userData.id, email: userData.email, full_name: userData.full_name || fullName };
 
