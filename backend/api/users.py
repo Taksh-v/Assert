@@ -64,6 +64,11 @@ async def get_current_user(
         # Strip bearer
         token = raw_val[7:] if raw_val.lower().startswith("bearer ") else raw_val
         
+        # Skip Hugging Face system platform tokens (they are not user JWTs)
+        if token.startswith("hf_"):
+            logger.debug("Skipping Hugging Face system token in %s", label)
+            continue
+            
         try:
             # PRE-CHECK: Algorithm
             header = jwt.get_unverified_header(token)
