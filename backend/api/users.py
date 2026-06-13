@@ -76,7 +76,8 @@ async def get_current_user(
             print(f"DEBUG: Checking {label} (start: {token[:10]}..., alg: {alg})")
             
             if alg == "ES256":
-                best_error = f"Ignored system token from {label}"
+                if best_error == "No tokens provided":
+                    best_error = f"Ignored system token from {label}"
                 continue
                 
             # DECODE: Supabase
