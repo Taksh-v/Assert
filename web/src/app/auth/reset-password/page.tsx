@@ -33,8 +33,9 @@ export default function ResetPasswordPage() {
       setTimeout(() => {
         window.location.replace("/auth");
       }, 3000);
-    } catch (err: any) {
-      setError(err.message || "Failed to update password.");
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to update password.";
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }

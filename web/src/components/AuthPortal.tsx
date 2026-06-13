@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Brain, Mail, Lock, User, Loader2, ArrowRight, AlertCircle, CheckCircle2, ChevronLeft } from "lucide-react";
+import { Brain, Lock, Loader2, ArrowRight, AlertCircle, CheckCircle2, ChevronLeft } from "lucide-react";
 import { apiFetch, commitSession, WorkspaceInfo } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getSiteUrl } from "@/lib/config";
@@ -15,14 +15,10 @@ export default function AuthPortal() {
   const [success, setSuccess] = useState<string | null>(null);
 
   // Field-specific validation errors
-  const [emailError, setEmailError] = useState<React.ReactNode | null>(null);
-  const [passwordError, setPasswordError] = useState<React.ReactNode | null>(null);
-  const [fullNameError, setFullNameError] = useState<React.ReactNode | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
 
   // Focus management input refs
   const emailInputRef = useRef<HTMLInputElement>(null);
-  const passwordInputRef = useRef<HTMLInputElement>(null);
 
   // Last-account memory state
   const [savedEmail, setSavedEmail] = useState("");
@@ -33,9 +29,6 @@ export default function AuthPortal() {
   const [step, setStep] = useState<"email" | "password" | "name_email" | "create_password" | "forgot_password">("email");
 
   const resetErrors = (loginMode = isLogin) => {
-    setEmailError(null);
-    setPasswordError(null);
-    setFullNameError(null);
     setGeneralError(null);
     setStep(loginMode ? "email" : "name_email");
   };
@@ -69,7 +62,7 @@ export default function AuthPortal() {
 
   const handleForgotPassword = async () => {
     if (!email.trim()) {
-      setEmailError("Enter your email address to receive a reset link");
+      setGeneralError("Enter your email address to receive a reset link");
       return;
     }
     setLoading(true);
@@ -81,24 +74,23 @@ export default function AuthPortal() {
       });
       if (error) throw error;
       setSuccess("Reset link sent! Please check your inbox.");
-    } catch (err: any) {
-      setGeneralError(err.message || "Failed to send reset link.");
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to send reset link.";
+      setGeneralError(errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
   const handleNextStep = async () => {
-    setEmailError(null);
-    setFullNameError(null);
     setGeneralError(null);
     
     if (!email.trim()) {
-      setEmailError("Enter an email address");
+      setGeneralError("Enter an email address");
       return;
     }
     if (!/\S+@\S+\.\S+/.test(email)) {
-      setEmailError("Enter a valid email address");
+      setGeneralError("Enter a valid email address");
       return;
     }
 
@@ -106,7 +98,7 @@ export default function AuthPortal() {
       setStep("password");
     } else {
       if (!fullName.trim()) {
-        setFullNameError("Enter first and last name");
+        setGeneralError("Enter first and last name");
         return;
       }
       setStep("create_password");
@@ -115,11 +107,10 @@ export default function AuthPortal() {
 
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPasswordError(null);
     setGeneralError(null);
 
     if (!password.trim()) {
-      setPasswordError("Enter a password");
+      setGeneralError("Enter a password");
       return;
     }
 
@@ -189,8 +180,9 @@ export default function AuthPortal() {
       commitSession(token, userInfo, workspace);
       setSuccess("Success! Entering Brain...");
       window.location.replace("/");
-    } catch (err: any) {
-      setGeneralError(err.message || "Authentication failed.");
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Authentication failed.";
+      setGeneralError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -210,7 +202,6 @@ export default function AuthPortal() {
   const handleBackToEmail = () => {
     setStep(isLogin ? "email" : "name_email");
     setPassword("");
-    setPasswordError(null);
     setGeneralError(null);
     setTimeout(() => emailInputRef.current?.focus(), 50);
   };
