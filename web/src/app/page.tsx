@@ -94,6 +94,24 @@ export default function ChatPage() {
   const [user, setUser] = useState(getCurrentUser());
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
+
+  // Authentication Guard
+  useEffect(() => {
+    const checkAuth = async () => {
+      const u = getCurrentUser();
+      if (!u) {
+        // Wait a tiny bit for storage to settle in case of rapid redirect
+        await new Promise(r => setTimeout(r, 500));
+        if (!getCurrentUser()) {
+          router.replace("/auth");
+          return;
+        }
+      }
+      setAuthInitialized(true);
+    };
+    checkAuth();
+  }, [router]);
 
   const activeWorkspace = getActiveWorkspace();
 
@@ -262,6 +280,15 @@ export default function ChatPage() {
   };
 
   const healthState = health?.status || (dashboardLoading ? "connecting" : "offline");
+
+  if (!authInitialized) {
+    return (
+      <div className="fixed inset-0 flex flex-col items-center justify-center bg-[#020617]">
+        <Loader2 className="h-10 w-10 animate-spin text-indigo-500 mb-4" />
+        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">Securing Session...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full overflow-y-auto bg-[var(--bg-root)] text-[var(--text-primary)]">
