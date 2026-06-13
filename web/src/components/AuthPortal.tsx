@@ -50,6 +50,13 @@ export default function AuthPortal() {
 
       const params = new URLSearchParams(window.location.search);
       const urlError = params.get("error");
+      const view = params.get("view");
+
+      if (view === "forgot") {
+        setStep("forgot_password");
+        setIsLogin(true);
+      }
+
       if (urlError) {
         setGeneralError(decodeURIComponent(urlError));
         const cleanUrl = window.location.pathname;
