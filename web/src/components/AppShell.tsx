@@ -1,11 +1,13 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import AuthPortal from "./AuthPortal";
 import { isAuthenticated, ensureDefaultWorkspace, AUTH_CHANGE_EVENT } from "@/lib/auth";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [auth, setAuth] = useState<boolean | null>(null);
   const [workspaceReady, setWorkspaceReady] = useState<boolean>(false);
   const [mounted, setMounted] = useState<boolean>(false);
@@ -63,8 +65,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // If not logged in, show ONLY the login portal
+  // If not logged in, show the login portal UNLESS we are on a public unauthenticated route
   if (!auth) {
+    if (pathname && pathname.startsWith("/auth/reset-password")) {
+      return <>{children}</>;
+    }
     return <AuthPortal />;
   }
 
