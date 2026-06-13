@@ -153,7 +153,7 @@ export default function AuthPortal() {
       }
 
       // CRITICAL: Save token to memory/localstorage immediately so apiFetch can use all brute-force headers
-      commitSession(token, { id: data.user.id, email: data.user.email }, null);
+      commitSession(token, { id: data.user.id, email: data.user.email || email }, null);
 
       // Sync with backend - Run sequentially to prevent shadow user creation race conditions
       const userRes = await apiFetch("/api/users/me");
