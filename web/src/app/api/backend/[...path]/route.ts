@@ -22,21 +22,29 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-function buildBackendUrl(pathSegments: string[] = [], search: string) {
+function buildBackendUrl(pathSegments: string[] = [], search: string, request: NextRequest) {
   const backendBase = getServerBackendUrl();
   const backendPath = pathSegments.map(encodeURIComponent).join("/");
-  return `${backendBase}/api/${backendPath}${search}`;
+  
+  // Extract user token to send as query param (robust to header stripping)
+  const auth = request.headers.get("authorization");
+  let tokenParam = "";
+  if (auth) {
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
+    const separator = search ? "&" : "?";
+    tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}`;
+  }
+
+  return `${backendBase}/api/${backendPath}${search}${tokenParam}`;
 }
 
 function buildForwardHeaders(request: NextRequest) {
   const headers = new Headers(request.headers);
 
+  // Still try headers as backup
   const incomingAuth = request.headers.get("authorization");
-  console.log(`[Proxy] Authorization header present: ${!!incomingAuth} (len: ${incomingAuth?.length || 0})`);
-  
   if (incomingAuth) {
     headers.set("x-user-authorization", incomingAuth);
-    console.log("[Proxy] Set x-user-authorization from incoming authorization");
   }
 
   for (const header of HOP_BY_HOP_HEADERS) {
@@ -73,7 +81,7 @@ function buildResponseHeaders(upstreamHeaders: Headers) {
 async function proxyBackend(request: NextRequest, context: BackendRouteContext) {
   try {
     const { path = [] } = await context.params;
-    const targetUrl = buildBackendUrl(path, request.nextUrl.search);
+    const targetUrl = buildBackendUrl(path, request.nextUrl.search, request);
     const method = request.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";
 
@@ -137,4 +145,3 @@ export const POST = proxyBackend;
 export const PUT = proxyBackend;
 export const PATCH = proxyBackend;
 export const DELETE = proxyBackend;
-
