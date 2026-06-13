@@ -42,8 +42,7 @@ class Token(BaseModel):
 
 async def get_current_user(
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    auth: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    db: AsyncSession = Depends(get_db)
 ) -> User:
     """
     Validate the Supabase JWT token and return the current user.
@@ -51,35 +50,33 @@ async def get_current_user(
     """
     token = None
     
-    # 1. Check if Vercel proxy passed the real token in x-user-authorization
-    x_user_auth = request.headers.get("x-user-authorization")
-    if x_user_auth:
-        if x_user_auth.lower().startswith("bearer "):
-            token = x_user_auth[7:]
+    # 1. Extract token from multiple possible sources (robust extraction)
+    # Order: x-user-authorization -> Authorization Header -> Query Param (fallback)
+    
+    auth_header = request.headers.get("x-user-authorization") or request.headers.get("authorization")
+    if auth_header:
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:]
         else:
-            token = x_user_auth
+            token = auth_header
             
-    # 2. Fallback to standard Authorization header
-    if not token and auth:
-        token = auth.credentials
+    if not token:
+        token = request.query_params.get("access_token")
 
     if token:
         user = None
-        logger.info(f"Token found: {token[:10]}...")
-        print(f"DEBUG: Token found: {token[:10]}...")
+        logger.info(f"AUTH_DIAGNOSTIC: Processing token (len={len(token)})")
 
-        # 2. Try Supabase JWT verification first if configured
+        # 2. Try Supabase JWT verification
         if settings.supabase_jwt_secret:
-            print(f"DEBUG: Supabase JWT secret configured")
             try:
-                # Supabase uses HS256 and 'authenticated' audience by default
+                # IMPORTANT: Supabase tokens must be verified with 'authenticated' audience
                 payload = jwt.decode(
                     token, 
                     settings.supabase_jwt_secret, 
                     algorithms=["HS256"], 
                     audience="authenticated"
                 )
-                print(f"DEBUG: Supabase payload decoded: {payload}")
                 supabase_id: str = payload.get("sub")
                 email: str = payload.get("email")
 
@@ -90,18 +87,16 @@ async def get_current_user(
                     user = result.scalars().first()
 
                     if not user:
-                        # Fallback: check if user exists by email (may have registered normally before)
+                        logger.info(f"AUTH_DIAGNOSTIC: Syncing new Supabase user: {email}")
+                        # Check for email collision
                         stmt = select(User).where(User.email == email)
                         result = await db.execute(stmt)
-                        user = result.scalars().first()
+                        existing_email_user = result.scalars().first()
 
-                        if user:
-                            # Link existing user to Supabase
-                            user.supabase_id = supabase_id
-                            await db.commit()
-                            await db.refresh(user)
+                        if existing_email_user:
+                            existing_email_user.supabase_id = supabase_id
+                            user = existing_email_user
                         else:
-                            # Create new shadow user and default workspace in a transaction
                             user = User(
                                 email=email,
                                 supabase_id=supabase_id,
@@ -109,16 +104,19 @@ async def get_current_user(
                                 full_name=payload.get("user_metadata", {}).get("full_name") or email.split("@")[0]
                             )
                             db.add(user)
-                            await db.flush()
-
-                            # Create personal workspace
-                            workspace_name = f"{user.full_name or user.email.split('@')[0]}'s Workspace"
+                        
+                        await db.flush()
+                        
+                        # Ensure default workspace exists
+                        stmt = select(Workspace).join(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
+                        ws_result = await db.execute(stmt)
+                        if not ws_result.scalars().first():
+                            workspace_name = f"{user.full_name or email.split('@')[0]}'s Workspace"
                             slug = f"workspace-{user.id[:8]}"
                             new_workspace = Workspace(name=workspace_name, slug=slug)
                             db.add(new_workspace)
                             await db.flush()
 
-                            # Add user as OWNER
                             membership = WorkspaceMember(
                                 workspace_id=new_workspace.id,
                                 user_id=user.id,
@@ -126,30 +124,26 @@ async def get_current_user(
                             )
                             db.add(membership)
                             
-                            await db.commit()
-                            await db.refresh(user)
+                        await db.commit()
+                        await db.refresh(user)
             except JWTError as e:
-                print(f"DEBUG: Supabase JWT Error: {e}")
-                # Not a valid Supabase token, continue to internal check
-                pass
+                logger.error(f"AUTH_DIAGNOSTIC: Supabase JWT Verification Failed: {str(e)}")
             except Exception as e:
-                logger.error(f"Error during Supabase user sync: {e}")
-                # We don't want to crash the whole request if sync fails, 
-                # but we shouldn't return a partial user either.
-                user = None
-
-        # 3. Fallback logic removed (we strictly rely on Supabase now)
+                logger.error(f"AUTH_DIAGNOSTIC: Database Error during Sync: {str(e)}")
+                # Don't fail the whole app if sync has issues, try to continue
+        else:
+            logger.error("AUTH_DIAGNOSTIC: SUPABASE_JWT_SECRET NOT CONFIGURED")
 
         if user:
             if not user.is_active:
                 raise HTTPException(status_code=403, detail="User account is deactivated")
             return user
 
-    # Production logic: strict 401
+    # 3. Production logic: strict 401
     if not settings.is_development:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing authentication token",
+            detail="Valid authentication token required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
