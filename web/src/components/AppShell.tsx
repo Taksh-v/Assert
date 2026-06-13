@@ -32,6 +32,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const handleAuthChange = async () => {
       const authStatus = await isAuthenticated();
       console.log("[AppShell] Auth change detected, new state:", authStatus);
+      
+      // If we were already authenticated, don't suddenly logout unless token is truly gone
+      if (auth && !authStatus) {
+         // Wait a split second to see if it's just a transition
+         await new Promise(r => setTimeout(r, 800));
+         const finalStatus = await isAuthenticated();
+         if (!finalStatus) {
+            setAuth(false);
+            setWorkspaceReady(false);
+         }
+         return;
+      }
+
       setAuth(authStatus);
       if (authStatus) {
         const ws = await ensureDefaultWorkspace();

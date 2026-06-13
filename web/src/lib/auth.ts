@@ -124,17 +124,20 @@ export async function signOut() {
 
 export async function isAuthenticated(): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  const token = await getAuthToken();
+  
+  // Directly check localStorage to avoid race conditions with cached state
+  const token = localStorage.getItem(TOKEN_KEY);
   if (!token) return false;
 
+  // If we have a user object, we are definitely authenticated
   if (getCurrentUser()) return true;
 
   try {
+    // Attempt verification as a last resort
     const res = await apiFetch("/users/me");
     if (res.ok) {
       const userData = await res.json() as UserInfo;
       localStorage.setItem(USER_KEY, JSON.stringify(userData));
-      await ensureDefaultWorkspace().catch(() => {});
       return true;
     }
     return false;
