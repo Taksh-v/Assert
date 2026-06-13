@@ -200,3 +200,25 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **User Migration**: Wrote and executed `scripts/migrate_to_supabase.py` using the Supabase Admin API to migrate all 9 legacy local users up to the Supabase `auth.users` table, ensuring no users are locked out.
 - [x] **Legacy Code Cleanup**: Stripped out unused `bcrypt` utility functions and dependencies from `backend/core/security.py`.
 
+### 73. Phase 72: Auth Loop & 401 Redirect Fix on Create Brain — [VERIFIED]
+- [x] **Root Cause Identified**: Three layered bugs caused the redirect-to-login loop when clicking "Create Brain":
+  1. `AuthPortal.tsx` called `commitSession(token, user, null)` early — this fired `triggerAuthChange()` before the workspace was fetched. AppShell woke up, found `token+user` but `no workspace`, and showed the loading spinner. Simultaneously the workspace fetch returned 401.
+  2. The 401 from `/api/backend/workspaces` triggered the `apiFetch` interceptor which called `signOut()` (clearing the session) → fired another `assest_auth_change` → AppShell re-evaluated auth as `false` → showed `AuthPortal` again.
+  3. `AppShell.tsx` had a stale closure bug — the `handleAuthChange` closure captured `auth = null` at mount time, so the debounce guard `if (auth && !authStatus)` never fired, accelerating the logout.
+- [x] **Fix 1 — Auth Submission Guard** (`web/src/lib/auth.ts`): Added `beginAuthSubmission()` / `endAuthSubmission()` counter. The `apiFetch` 401 interceptor now only calls `signOut()` when `_authSubmissionDepth === 0` AND the path is not a known auth endpoint (`/users/me`, `/workspaces`, `/auth`).
+- [x] **Fix 2 — Atomic Session Commit** (`web/src/components/AuthPortal.tsx`): Removed the premature `commitSession(token, user, null)` call. Now fetches user profile and workspaces first using `tempHeaders: { Authorization: Bearer <token> }`, then calls `commitSession()` exactly once at the end with all three values (token + user + workspace). AppShell only wakes when a fully-complete session exists.
+- [x] **Fix 3 — AppShell Stale Closure** (`web/src/components/AppShell.tsx`): Replaced the captured `auth` state variable in `handleAuthChange` with a closure-local `currentAuth` variable that is always updated before the event handler reads it. Added a 5s timeout race on `ensureDefaultWorkspace()` so the app never gets permanently stuck on "Provisioning Workspace..." if the backend is slow.
+- [x] **Fix 4 — Supabase 422 on Re-registration**: Added graceful error handling in `AuthPortal.tsx` for Supabase `already registered` / 422 errors — automatically switches the form to Sign In mode with a clear user message.
+- [x] **Fix 5 — Python Import Order** (`backend/api/users.py`): Moved `import os` and `import secrets` to the top-level imports block where they belong.
+- [x] **Verification**: `npx tsc --noEmit` — 0 errors. Python syntax check on `users.py` — OK.
+
+### 74. Phase 73: Workspace Reactivity & Late Resolution Gracefulness — [VERIFIED]
+- [x] **Identified Slow Connection Vulnerability**: Under slow connections, when `ensureDefaultWorkspace()` in `AppShell.tsx` takes >5s, the race timeout resolves, rendering the dashboard with `activeWorkspace = null`. Because workspace lookup wasn't using React state, pages never updated when the workspace eventually loaded, leaving dashboard inputs, query buttons, and observability tools permanently disabled or hidden.
+- [x] **Implemented Reactivity Hooks**: Added reactive workspace state and custom event listeners (`AUTH_CHANGE_EVENT`) to:
+  - `web/src/app/page.tsx` — enables the composer textarea, Paperclip, and Query buttons instantly once the workspace loads.
+  - `web/src/app/connectors/page.tsx` — triggers `fetchConnectors()` dynamically once the workspace resolves in the background.
+  - `web/src/app/admin/page.tsx` — unlocks the Observability trace details panel dynamically once verified.
+  - `web/src/app/chat/[id]/page.tsx` — mounts the debugger's Observability HUD controls automatically when the admin workspace details are resolved.
+- [x] **Verification**: Ran `npx tsc --noEmit` on the frontend, completing successfully with 0 errors.
+
+

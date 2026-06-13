@@ -19,7 +19,7 @@ import {
 
 import SourceSetupModal from "@/components/SourceSetupModal";
 import ConnectorIcon from "@/components/ConnectorIcon";
-import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace } from "@/lib/auth";
+import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { useSyncRunPolling } from "@/lib/syncRuns";
 import { parseUTCDate } from "@/lib/date";
 
@@ -147,7 +147,15 @@ function ConnectorsContent() {
   const [discoveredItems, setDiscoveredItems] = useState<DiscoveredItem[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const { startPolling } = useSyncRunPolling();
-  const activeWorkspace = getActiveWorkspace();
+  const [activeWorkspace, setActiveWorkspace] = useState(getActiveWorkspace());
+
+  useEffect(() => {
+    const handleAuthChange = () => {
+      setActiveWorkspace(getActiveWorkspace());
+    };
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+    return () => window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+  }, []);
 
   const fetchConnectors = useCallback(async () => {
     try {
@@ -189,11 +197,16 @@ function ConnectorsContent() {
   useEffect(() => {
     async function init() {
       await ensureDefaultWorkspace();
-      void fetchConnectors();
     }
 
     queueMicrotask(() => void init());
-  }, [fetchConnectors]);
+  }, []);
+
+  useEffect(() => {
+    if (activeWorkspace?.id) {
+      void fetchConnectors();
+    }
+  }, [activeWorkspace?.id, fetchConnectors]);
 
   useEffect(() => {
     if (!notification) return undefined;

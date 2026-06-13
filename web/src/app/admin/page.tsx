@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, Clock3, Database, ShieldCheck, Sparkles, Brain } from "lucide-react";
 import SystemSignalsPanel from "@/components/SystemSignalsPanel";
-import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, isAdminWorkspaceRole } from "@/lib/auth";
+import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, isAdminWorkspaceRole, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { parseUTCDate } from "@/lib/date";
 
 interface TraceItem {
@@ -75,8 +75,16 @@ export default function AdminPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const workspace = getActiveWorkspace();
+  const [workspace, setWorkspace] = useState(getActiveWorkspace());
   const isAdmin = isAdminWorkspaceRole(workspace?.role);
+
+  useEffect(() => {
+    const handleAuthChange = () => {
+      setWorkspace(getActiveWorkspace());
+    };
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+    return () => window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

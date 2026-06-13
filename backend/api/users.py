@@ -1,4 +1,6 @@
 import logging
+import os
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -146,9 +148,6 @@ async def get_current_user(
         if user: return user
 
     raise HTTPException(status_code=401, detail="Authentication required")
-
-import os
-import secrets
 
 @router.get("/me", response_model=UserResponse)
 @router.get("/users/me", response_model=UserResponse)

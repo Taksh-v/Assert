@@ -16,7 +16,7 @@ import {
   AlertCircle,
   Paperclip
 } from "lucide-react";
-import { apiFetch, getActiveWorkspace, isAdminWorkspaceRole } from "@/lib/auth";
+import { apiFetch, getActiveWorkspace, isAdminWorkspaceRole, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import GroundingIndicator from "@/components/GroundingIndicator";
@@ -201,7 +201,16 @@ export default function ChatIdPage() {
   const [isConvLoading, setIsConvLoading] = useState(true);
   const [convTitle, setConvTitle] = useState("Conversation");
   const [thinkingLogs, setThinkingLogs] = useState<string[]>([]);
-  const isAdmin = isAdminWorkspaceRole(getActiveWorkspace()?.role);
+  const [activeWorkspace, setActiveWorkspace] = useState(getActiveWorkspace());
+  const isAdmin = isAdminWorkspaceRole(activeWorkspace?.role);
+
+  useEffect(() => {
+    const handleAuthChange = () => {
+      setActiveWorkspace(getActiveWorkspace());
+    };
+    window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+    return () => window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
+  }, []);
   const [activeLensTab, setActiveLensTab] = useState<"bi" | "trace" | "signals">("bi");
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [liveTrace, setLiveTrace] = useState<Record<string, { start: number; end?: number; status: "pending" | "running" | "completed" | "failed" | "skipped"; detail?: string }>>({});

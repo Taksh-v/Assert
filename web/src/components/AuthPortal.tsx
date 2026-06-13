@@ -3,7 +3,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { Brain, Lock, Loader2, ArrowRight, AlertCircle, CheckCircle2, ChevronLeft } from "lucide-react";
-import { apiFetch, commitSession, WorkspaceInfo } from "@/lib/auth";
+import { apiFetch, commitSession, WorkspaceInfo, beginAuthSubmission, endAuthSubmission } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getSiteUrl } from "@/lib/config";
 
@@ -123,6 +123,7 @@ export default function AuthPortal() {
 
     setSuccess(null);
     setLoading(true);
+    beginAuthSubmission(); // Prevent 401 interceptors from signing us out mid-flow
 
     try {
       let authResponse;
@@ -140,7 +141,18 @@ export default function AuthPortal() {
       }
 
       const { data, error } = authResponse;
-      if (error) throw error;
+
+      // Handle Supabase-specific errors gracefully
+      if (error) {
+        if (error.message?.toLowerCase().includes("already registered") ||
+            error.message?.toLowerCase().includes("user already exists") ||
+            (error as { status?: number }).status === 422) {
+          setIsLogin(true);
+          setStep("password");
+          throw new Error("An account with this email already exists. Please sign in instead.");
+        }
+        throw error;
+      }
 
       const token = data.session?.access_token;
       if (!token || !data.user) {
@@ -152,19 +164,22 @@ export default function AuthPortal() {
         return;
       }
 
-      // CRITICAL: Save token to memory/localstorage immediately so apiFetch can use all brute-force headers
-      commitSession(token, { id: data.user.id, email: data.user.email || email }, null);
+      // Write token to memory ONLY (not localStorage yet) so apiFetch can use it,
+      // but DON'T fire triggerAuthChange yet — we haven't got a workspace.
+      // Use a temporary in-memory token that apiFetch can pick up via the headers.
+      const tempHeaders = { Authorization: `Bearer ${token}` };
 
-      // Sync with backend - Run sequentially to prevent shadow user creation race conditions
-      const userRes = await apiFetch("/api/users/me");
+      // Sync with backend - ensure user record and workspace exist
+      const userRes = await apiFetch("/users/me", { headers: tempHeaders });
       if (!userRes.ok) {
-        const errorData = await userRes.json().catch(() => ({}));
+        const errorData = await userRes.json().catch(() => ({})) as { detail?: string };
         throw new Error(`Failed to load user profile from backend. Detail: ${errorData.detail || userRes.statusText}`);
       }
-      const userData = await userRes.json();
+      const userData = await userRes.json() as { id: string; email: string; full_name?: string };
       const userInfo = { id: userData.id, email: userData.email, full_name: userData.full_name || fullName };
 
-      const workspaceRes = await apiFetch("/api/workspaces", { headers: { Authorization: `Bearer ${token}` } });
+      // Fetch workspaces
+      const workspaceRes = await apiFetch("/workspaces", { headers: tempHeaders });
 
       if (typeof window !== "undefined") {
         localStorage.setItem("assest_last_email", userInfo.email);
@@ -177,17 +192,20 @@ export default function AuthPortal() {
         if (workspaces && workspaces.length > 0) {
           workspace = workspaces[0];
         } else {
+          // Create a default workspace if none exists
           const wsName = fullName ? `${fullName}'s Workspace` : "My Workspace";
           const wsSlug = `workspace-${Math.random().toString(36).substring(2, 10)}`;
-          const createWsRes = await apiFetch("/api/workspaces", {
+          const createWsRes = await apiFetch("/workspaces", {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            headers: { "Content-Type": "application/json", ...tempHeaders },
             body: JSON.stringify({ name: wsName, slug: wsSlug })
           });
-          if (createWsRes.ok) workspace = await createWsRes.json();
+          if (createWsRes.ok) workspace = await createWsRes.json() as WorkspaceInfo;
         }
       }
 
+      // NOW atomically commit the FULL session (token + user + workspace) and fire exactly ONE auth event.
+      // AppShell will wake up here and find everything it needs immediately.
       commitSession(token, userInfo, workspace);
       setSuccess("Success! Entering Brain...");
       window.location.replace("/");
@@ -196,8 +214,10 @@ export default function AuthPortal() {
       setGeneralError(errorMsg);
     } finally {
       setLoading(false);
+      endAuthSubmission(); // Always release the guard
     }
   };
+
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();

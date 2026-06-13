@@ -15,15 +15,25 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
-    
+
+    // Track the latest auth state in a local variable so event handlers avoid stale closures.
+    // A ref would survive re-renders but since this effect only runs once ([]) we use a closure var.
+    let currentAuth: boolean | null = null;
+
+    const resolveWorkspace = async () => {
+      // Race workspace fetch against a 5s timeout so a slow backend never
+      // permanently blocks the loading screen.
+      const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 5000));
+      await Promise.race([ensureDefaultWorkspace(), timeoutPromise]);
+      setWorkspaceReady(true); // Always unblock — workspace may just be slow
+    };
+
     const checkAuth = async () => {
       const authStatus = await isAuthenticated();
+      currentAuth = authStatus;
       setAuth(authStatus);
       if (authStatus) {
-        const ws = await ensureDefaultWorkspace();
-        if (ws) {
-          setWorkspaceReady(true);
-        }
+        await resolveWorkspace();
       }
     };
 
@@ -32,39 +42,41 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const handleAuthChange = async () => {
       const authStatus = await isAuthenticated();
       console.log("[AppShell] Auth change detected, new state:", authStatus);
-      
-      // If we were already authenticated, don't suddenly logout unless token is truly gone
-      if (auth && !authStatus) {
-         // Wait a split second to see if it's just a transition
-         await new Promise(r => setTimeout(r, 800));
-         const finalStatus = await isAuthenticated();
-         if (!finalStatus) {
-            setAuth(false);
-            setWorkspaceReady(false);
-         }
-         return;
+
+      // Debounce: if we were authenticated and now appear not to be,
+      // wait briefly in case it is a mid-flight transition (e.g. token being committed).
+      if (currentAuth && !authStatus) {
+        await new Promise(r => setTimeout(r, 800));
+        const finalStatus = await isAuthenticated();
+        if (!finalStatus) {
+          currentAuth = false;
+          setAuth(false);
+          setWorkspaceReady(false);
+        }
+        return;
       }
 
+      currentAuth = authStatus;
       setAuth(authStatus);
       if (authStatus) {
-        const ws = await ensureDefaultWorkspace();
-        setWorkspaceReady(!!ws);
+        await resolveWorkspace();
       } else {
         setWorkspaceReady(false);
       }
     };
 
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
-    // Also listen for cross-tab or storage changes
-    window.addEventListener('storage', handleAuthChange);
+    // Also listen for cross-tab / storage changes
+    window.addEventListener("storage", handleAuthChange);
 
     return () => {
       window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
-      window.removeEventListener('storage', handleAuthChange);
+      window.removeEventListener("storage", handleAuthChange);
     };
   }, []);
 
-  // Prevent flickering during hydration, and WAIT for workspace if authenticated
+  // Prevent flickering during hydration, and WAIT for workspace if authenticated.
+  // The workspace wait is bounded by the 5s timeout above, so we never get stuck here permanently.
   if (!mounted || auth === null || (auth && !workspaceReady)) {
     return (
       <div className="h-screen w-screen bg-[#020617] flex items-center justify-center">
@@ -78,7 +90,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // If not logged in, show the login portal UNLESS we are on a public unauthenticated route
+  // If not logged in, show the login portal UNLESS on a public unauthenticated route
   if (!auth) {
     if (pathname && pathname.startsWith("/auth/reset-password")) {
       return <>{children}</>;
@@ -86,7 +98,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return <AuthPortal />;
   }
 
-  // If logged in and workspace is ready, show the full app shell
+  // Logged in and workspace ready — show full app shell
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-root)] text-[var(--text-primary)] animate-fade-in">
       <Sidebar />

@@ -33,6 +33,13 @@ function triggerAuthChange() {
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 
+// When this is > 0, suppress auto-signout on 401s to prevent redirect loops
+// during the critical auth submission window.
+let _authSubmissionDepth = 0;
+
+export function beginAuthSubmission() { _authSubmissionDepth++; }
+export function endAuthSubmission() { if (_authSubmissionDepth > 0) _authSubmissionDepth--; }
+
 /**
  * Retrieves the currently active authentication token from memory or local storage.
  */
@@ -209,8 +216,13 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   });
 
   if (response.status === 401) {
+    // Only auto-signout if:
+    // 1. We're not in an active auth submission (login/register flow)
+    // 2. We're not on a known auth endpoint that is expected to 401 occasionally
+    // 3. There actually is a committed session to revoke
     const hasSession = typeof window !== "undefined" && !!localStorage.getItem(TOKEN_KEY);
-    if (!path.includes("/users/me") && hasSession) {
+    const isAuthEndpoint = path.includes("/users/me") || path.includes("/workspaces") || path.includes("/auth");
+    if (!isAuthEndpoint && hasSession && _authSubmissionDepth === 0) {
       signOut();
     }
   }

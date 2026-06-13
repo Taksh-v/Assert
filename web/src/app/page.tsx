@@ -92,28 +92,13 @@ export default function ChatPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [user, setUser] = useState(getCurrentUser());
+  const [activeWorkspace, setActiveWorkspace] = useState(getActiveWorkspace());
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [authInitialized, setAuthInitialized] = useState(false);
 
-  // Authentication Guard
-  useEffect(() => {
-    const checkAuth = async () => {
-      const u = getCurrentUser();
-      if (!u) {
-        // Wait a tiny bit for storage to settle in case of rapid redirect
-        await new Promise(r => setTimeout(r, 500));
-        if (!getCurrentUser()) {
-          router.replace("/auth");
-          return;
-        }
-      }
-      setAuthInitialized(true);
-    };
-    checkAuth();
-  }, [router]);
-
-  const activeWorkspace = getActiveWorkspace();
+  // AppShell is the single source of truth for auth. This page only renders
+  // when AppShell has already confirmed the user is authenticated and workspace
+  // is ready. No secondary auth check needed here.
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -162,7 +147,10 @@ export default function ChatPage() {
   const workspaceName = activeWorkspace?.name || "your workspace";
 
   useEffect(() => {
-    const handleAuthChange = () => setUser(getCurrentUser());
+    const handleAuthChange = () => {
+      setUser(getCurrentUser());
+      setActiveWorkspace(getActiveWorkspace());
+    };
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
 
     let cancelled = false;
@@ -281,14 +269,6 @@ export default function ChatPage() {
 
   const healthState = health?.status || (dashboardLoading ? "connecting" : "offline");
 
-  if (!authInitialized) {
-    return (
-      <div className="fixed inset-0 flex flex-col items-center justify-center bg-[#020617]">
-        <Loader2 className="h-10 w-10 animate-spin text-indigo-500 mb-4" />
-        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">Securing Session...</p>
-      </div>
-    );
-  }
 
   return (
     <div className="relative h-full overflow-y-auto bg-[var(--bg-root)] text-[var(--text-primary)]">
