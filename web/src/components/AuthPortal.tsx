@@ -152,15 +152,13 @@ export default function AuthPortal() {
         return;
       }
 
-      // Sync with backend
-      const [userRes, workspaceRes] = await Promise.all([
-        apiFetch("/api/users/me", { headers: { Authorization: `Bearer ${token}` } }),
-        apiFetch("/api/workspaces", { headers: { Authorization: `Bearer ${token}` } })
-      ]);
-
+      // Sync with backend - Run sequentially to prevent shadow user creation race conditions
+      const userRes = await apiFetch("/api/users/me", { headers: { Authorization: `Bearer ${token}` } });
       if (!userRes.ok) throw new Error("Failed to load user profile from backend.");
       const userData = await userRes.json();
       const userInfo = { id: userData.id, email: userData.email, full_name: userData.full_name || fullName };
+
+      const workspaceRes = await apiFetch("/api/workspaces", { headers: { Authorization: `Bearer ${token}` } });
 
       if (typeof window !== "undefined") {
         localStorage.setItem("assest_last_email", userInfo.email);
