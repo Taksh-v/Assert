@@ -26,20 +26,11 @@ async def test_email_check_endpoints():
             full_name="Password User",
             is_active=True
         )
-        # 2. Create an OAuth user
-        oauth_user = User(
-            id="test-oauth-user-id",
-            email="oauth@example.com",
-            hashed_password="SUPABASE_AUTH",
-            full_name="OAuth User",
-            is_active=True
-        )
         session.add(pwd_user)
-        session.add(oauth_user)
         await session.commit()
 
     try:
-        # 3. Test check-email for nonexistent user
+        # 2. Test check-email for nonexistent user
         response = client.post(
             "/api/users/check-email",
             json={"email": "nonexistent@example.com"}
@@ -49,7 +40,7 @@ async def test_email_check_endpoints():
         assert data["exists"] is False
         assert data["auth_type"] == "none"
 
-        # 4. Test check-email for password user
+        # 3. Test check-email for password user
         response = client.post(
             "/api/users/check-email",
             json={"email": "pwd@example.com"}
@@ -58,16 +49,6 @@ async def test_email_check_endpoints():
         data = response.json()
         assert data["exists"] is True
         assert data["auth_type"] == "password"
-
-        # 5. Test check-email for OAuth user
-        response = client.post(
-            "/api/users/check-email",
-            json={"email": "oauth@example.com"}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["exists"] is True
-        assert data["auth_type"] == "oauth"
 
     finally:
         # Cleanup

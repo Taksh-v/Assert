@@ -16,7 +16,6 @@ export function isAdminWorkspaceRole(role?: string | null): boolean {
 }
 
 import { getBrowserApiBasePath } from "./config";
-import { supabase } from "./supabase";
 
 const TOKEN_KEY = "assest_identity_v1";
 const USER_KEY = "assest_auth_user";
@@ -34,24 +33,15 @@ function triggerAuthChange() {
 let cachedToken: string | null = null;
 let tokenExpiry = 0;
 
+/**
+ * Retrieves the currently active authentication token from memory or local storage.
+ */
 export async function getAuthToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
 
   // Use memory cache if token is less than 5 minutes old
   if (cachedToken && Date.now() < tokenExpiry) {
     return cachedToken;
-  }
-
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) {
-      cachedToken = session.access_token;
-      // Cache for 5 minutes
-      tokenExpiry = Date.now() + 5 * 60 * 1000;
-      return cachedToken;
-    }
-  } catch (err) {
-    console.warn("Failed to get Supabase session:", err);
   }
 
   const localToken = localStorage.getItem(TOKEN_KEY);
@@ -66,9 +56,6 @@ export function setAuthToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
   cachedToken = token;
   tokenExpiry = Date.now() + 5 * 60 * 1000;
-  // NOTE: Do NOT call triggerAuthChange() here.
-  // Use commitSession() to atomically set token + user + workspace
-  // and fire a single event when everything is ready.
 }
 
 export function getCurrentUser(): UserInfo | null {
@@ -84,22 +71,17 @@ export function getCurrentUser(): UserInfo | null {
 
 export function setCurrentUser(user: UserInfo) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
-  // NOTE: Don't fire triggerAuthChange here directly.
-  // Call triggerAuthChange() manually after all session state is committed,
-  // or use commitSession() for the full atomic flow.
 }
 
 /**
  * Atomically commits the full authenticated session (token + user + workspace)
- * and fires a single auth-change event. This is the ONLY place that should
- * trigger AppShell to re-check authentication after a login flow completes.
+ * and fires a single auth-change event.
  */
 export function commitSession(
   token: string,
   user: UserInfo,
   workspace?: WorkspaceInfo | null
 ) {
-  // 1. Write everything to storage synchronously before any event fires
   localStorage.setItem(TOKEN_KEY, token);
   cachedToken = token;
   tokenExpiry = Date.now() + 5 * 60 * 1000;
@@ -110,7 +92,6 @@ export function commitSession(
     localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace));
   }
 
-  // 2. Fire a single event now that everything is in place
   triggerAuthChange();
 }
 
@@ -127,38 +108,18 @@ export function getActiveWorkspace(): WorkspaceInfo | null {
 
 export function setActiveWorkspace(workspace: WorkspaceInfo) {
   localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspace));
-  // Fire auth change so components can react to workspace switches
-  // (e.g. switching workspaces from the sidebar — not the initial login).
   triggerAuthChange();
 }
 
 export async function signOut() {
-  // 1. Immediate local memory purge
   cachedToken = null;
   tokenExpiry = 0;
 
-  // 2. Clear all local storage
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(WORKSPACE_KEY);
 
-  // 3. Fire Supabase signout (await it to avoid race conditions in getSession)
-  try {
-    await supabase.auth.signOut();
-  } catch (err) {
-    console.error("Supabase signout error:", err);
-  }
-
-  // 4. Hard redirect to home to flush all React state/closures
-  // Avoid infinite reload loop if already on the home page
-  if (typeof window !== "undefined") {
-    if (window.location.pathname !== "/") {
-      window.location.href = "/";
-    } else {
-      // If already on /, just trigger the change event to update AppShell
-      triggerAuthChange();
-    }
-  }
+  triggerAuthChange();
 }
 
 export async function isAuthenticated(): Promise<boolean> {
@@ -166,68 +127,23 @@ export async function isAuthenticated(): Promise<boolean> {
   const token = await getAuthToken();
   if (!token) return false;
 
-  // Fast path: user profile already in localStorage — no network needed
   if (getCurrentUser()) return true;
 
-  // Try to reconstruct from Supabase session metadata (zero-latency, no backend call)
-  console.log("[Auth] User profile missing — trying Supabase metadata first...");
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      const userMeta = session.user.user_metadata ?? {};
-      const userInfo: UserInfo = {
-        id: session.user.id,
-        email: session.user.email ?? "",
-        full_name: userMeta.full_name || userMeta.name || session.user.email,
-      };
-      // Commit the token to localStorage NOW so that apiFetch calls inside
-      // ensureDefaultWorkspace() can include it in Authorization headers.
-      // Without this, getAuthToken() returns null → 401 on /workspaces.
-      localStorage.setItem(TOKEN_KEY, session.access_token);
-      cachedToken = session.access_token;
-      tokenExpiry = Date.now() + 5 * 60 * 1000;
-      // Write user profile to storage WITHOUT triggering auth change (we're already inside the check)
-      localStorage.setItem(USER_KEY, JSON.stringify(userInfo));
-      console.log("[Auth] Hydrated from Supabase metadata:", userInfo.email);
-      // Await workspace load so it is in localStorage before AppShell renders.
-      // This prevents the "No active workspace" flash on first OAuth sign-in.
-      await ensureDefaultWorkspace().catch(() => {});
-      return true;
-    }
-  } catch (err) {
-    console.warn("[Auth] Could not get Supabase session:", err);
-  }
-
-  // Last resort: hit the backend /users/me (handles email/password JWTs)
-  console.log("[Auth] Falling back to backend hydration...");
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await apiFetch("/users/me", { signal: controller.signal });
-    clearTimeout(timeoutId);
-
+    const res = await apiFetch("/users/me");
     if (res.ok) {
       const userData = await res.json() as UserInfo;
-      console.log("[Auth] Backend hydration success:", userData.email);
       localStorage.setItem(USER_KEY, JSON.stringify(userData));
       await ensureDefaultWorkspace().catch(() => {});
       return true;
     }
-
-    console.error("[Auth] Backend hydration failed. Status:", res.status);
     return false;
   } catch (err) {
-    console.error("[Auth] Backend hydration error:", err);
     return false;
   }
 }
 
-/**
- * Ensures that an active workspace is set in local storage.
- * If none exists, fetches from /workspaces and sets the first one.
- */
 export async function ensureDefaultWorkspace(): Promise<WorkspaceInfo | null> {
-  // Fast path: already have a valid workspace stored locally — skip the network call
   const existing = getActiveWorkspace();
   if (existing) return existing;
 
@@ -263,10 +179,6 @@ function toBackendProxyPath(path: string) {
   return `${apiBasePath}${normalizedPath}`;
 }
 
-/**
- * Perform an authenticated API call with automated Bearer headers.
- * Triggers sign out on 401 Unauthorized errors.
- */
 export async function apiFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const token = await getAuthToken();
   const url = toBackendProxyPath(path);
@@ -285,9 +197,6 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   });
 
   if (response.status === 401) {
-    // Only trigger sign out if we're not already trying to check authentication
-    // and if the user actually has an active session token in localStorage (to prevent
-    // redirect loops during the initial login or OAuth callback setups).
     const hasSession = typeof window !== "undefined" && !!localStorage.getItem(TOKEN_KEY);
     if (!path.includes("/users/me") && hasSession) {
       signOut();

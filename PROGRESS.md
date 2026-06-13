@@ -178,3 +178,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **PgBouncer UUID Statement Naming Restored**: Re-added `prepared_statement_name_func` to `backend/core/database.py`. The HF Space crashed with `DuplicatePreparedStatementError: prepared statement "__asyncpg_stmt_1d__" already exists` because the third layer of the triple-defense was absent. Added `_unique_prepared_statement_name()` function returning `_s_<uuid4().hex>`.
 - [x] **Full Production Auth Verified**: Email/password and Google OAuth confirmed working end-to-end.
 - [x] **Deployment**: Pushed commit `9fa1233` to Hugging Face `main` and GitHub `hf-deploy`.
+
+### 70. Phase 69: User OAuth Authentication Removal — [VERIFIED]
+- [x] **Identity OAuth Endpoint Removal**: Removed user OAuth login and callback router imports and endpoints from `backend/main.py`, preserving `auth_router` to keep connector integrations (Notion, Google Drive, Slack) fully intact.
+- [x] **Cleanup of Obsolete Code**: Deleted `backend/api/identity_oauth.py` and diagnostic script `scripts/diagnose_oauth.py`.
+- [x] **Test Suite Consolidation**: Deleted user OAuth identity linking test `backend/tests/test_auth_consolidation.py` and consolidated `backend/tests/test_email_check.py` to assert only password/none authentication types.
+- [x] **AuthPortal Cleanup**: Cleaned up `web/src/components/AuthPortal.tsx` to remove dead identity OAuth verification blocks and fixed duplicate variable declarations to ensure Next.js frontend builds without errors.
+- [x] **Verification**: Verified successful backend imports check and passing email check unit tests in sandbox mode, and ran TypeScript typecheck verification (`npx tsc --noEmit`) showing 0 errors.

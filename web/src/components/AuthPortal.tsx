@@ -159,12 +159,6 @@ export default function AuthPortal() {
               </button>
             </>
           );
-        } else if (data.auth_type === "oauth") {
-          setEmailError(
-            <>
-              This account uses Google/GitHub to sign in. Please use the Google/GitHub buttons above.
-            </>
-          );
         } else {
           setStep("password");
         }
@@ -524,27 +518,6 @@ export default function AuthPortal() {
     }, 50);
   };
 
-  const handleSocialLogin = async (provider: 'google' | 'github') => {
-    // CRITICAL: Clear saved account memory before starting OAuth to prevent
-    // the "Saved Account" UI from hijacking the flow on return.
-    setUseSavedAccount(false);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("assest_last_email");
-      localStorage.removeItem("assest_last_name");
-    }
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: provider,
-      options: {
-        redirectTo: `${getSiteUrl()}/auth/callback`,
-      },
-    });
-    if (error) {
-      console.error(`${provider} login error:`, error.message);
-      setGeneralError(`${provider} login failed. Please try again.`);
-    }
-  };
-
   const isFirstStep = step === "email" || step === "name_email";
 
   return (
@@ -733,36 +706,6 @@ export default function AuthPortal() {
                     <div className="text-sm font-medium text-white truncate">
                       {email}
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Social Logins - only show on first step */}
-              {isFirstStep && (
-                <div className="space-y-3 mb-8 animate-fade-in">
-                  <div className="grid grid-cols-2 gap-3">
-                    <button 
-                      type="button"
-                      onClick={() => handleSocialLogin('google')}
-                      className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn cursor-pointer"
-                    >
-                      <GoogleIcon />
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => handleSocialLogin('github')}
-                      className="flex items-center justify-center py-3 px-4 rounded-xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 transition-all duration-300 group/btn cursor-pointer"
-                    >
-                      <GitHubIcon />
-                    </button>
-                  </div>
-                  <div className="relative flex items-center justify-center py-2">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-white/5"></div>
-                    </div>
-                    <span className="relative px-4 text-[10px] font-bold uppercase tracking-[0.2em] text-white/20 bg-[#020617]">
-                      or use email
-                    </span>
                   </div>
                 </div>
               )}
