@@ -193,3 +193,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Bug 2 (RUNTIME_ERROR)**: After resolving the config error, the space crashed on boot with `ImportError: email-validator is not installed`. This occurred because the new `/api/users/check-email` endpoint uses Pydantic's `EmailStr`, which requires the `email-validator` package.
 - [x] **Fix 2 Applied**: Added `email-validator>=2.1.0` to `requirements.txt` and `backend/requirements.txt`, and pushed the fix to `hf-deploy` branch and Hugging Face `main`. The space is now successfully rebuilding and will be online shortly.
 
+### 72. Phase 71: Complete Supabase Auth Migration — [VERIFIED]
+- [x] **Architecture Override**: Overrode the global rule of using internal JWT authentication in order to "take full usage of Supabase functionality" and handle password resets natively.
+- [x] **Backend Endpoint Cleanup**: Removed the legacy `/signup`, `/login`, and `/users/check-email` local JWT endpoints from `backend/api/users.py`, replacing internal JWT token extraction with pure `fastapi.security.HTTPBearer` for verifying Supabase JWTs.
+- [x] **Local Password Deprecation**: Modified the `User` SQLAlchemy model to make `hashed_password` nullable, and executed a live `ALTER TABLE` query on the production Supabase PostgreSQL instance to drop the `NOT NULL` constraint.
+- [x] **User Migration**: Wrote and executed `scripts/migrate_to_supabase.py` using the Supabase Admin API to migrate all 9 legacy local users up to the Supabase `auth.users` table, ensuring no users are locked out.
+- [x] **Legacy Code Cleanup**: Stripped out unused `bcrypt` utility functions and dependencies from `backend/core/security.py`.
+

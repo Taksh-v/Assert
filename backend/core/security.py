@@ -2,23 +2,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Union, Optional
 from jose import jwt
-import bcrypt as _bcrypt
 from cryptography.fernet import Fernet
 from backend.core.config import get_settings
 import json
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-# Password hashing — using bcrypt directly (no passlib dependency)
-def _bcrypt_hash(password: str) -> str:
-    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
-
-def _bcrypt_verify(plain: str, hashed: str) -> bool:
-    try:
-        return _bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
-        return False
 
 # JWT configuration
 ALGORITHM = "HS256"
@@ -51,12 +40,6 @@ def _get_encryption_secret() -> str:
 def _get_fernet() -> Fernet:
     """Derive a 32-byte Fernet key from the app_secret_key."""
     return _get_fernet_for_secret(_get_encryption_secret())
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return _bcrypt_verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return _bcrypt_hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
