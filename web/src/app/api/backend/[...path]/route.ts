@@ -45,8 +45,14 @@ function buildForwardHeaders(request: NextRequest) {
 
   // Still try headers as backup
   const incomingAuth = request.headers.get("authorization");
+  const customAuth = request.headers.get("x-supabase-auth");
+  
   if (incomingAuth) {
     headers.set("x-user-authorization", incomingAuth);
+  }
+  
+  if (customAuth) {
+    headers.set("x-supabase-auth", customAuth);
   }
 
   for (const header of HOP_BY_HOP_HEADERS) {

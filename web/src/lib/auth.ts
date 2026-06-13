@@ -186,8 +186,12 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
   const headers = new Headers(options.headers || {});
   
   // Only add the cached token if no Authorization header was explicitly provided
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (token) {
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    // Also set a custom header that proxies won't strip or overwrite
+    headers.set("x-supabase-auth", token);
   }
   
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
