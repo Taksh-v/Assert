@@ -1,6 +1,8 @@
 import logging
 import os
 import secrets
+import asyncio
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,6 +10,24 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from jose import jwt, JWTError
 from datetime import datetime
+
+_jwks_cache = None
+_jwks_lock = asyncio.Lock()
+
+async def get_jwks(supabase_url: str, supabase_anon_key: str) -> dict:
+    global _jwks_cache
+    if _jwks_cache is not None:
+        return _jwks_cache
+    async with _jwks_lock:
+        if _jwks_cache is not None:
+            return _jwks_cache
+        jwks_url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        headers = {"apikey": supabase_anon_key}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            res = await client.get(jwks_url, headers=headers)
+            res.raise_for_status()
+            _jwks_cache = res.json()
+            return _jwks_cache
 
 from backend.core.database import get_db
 from backend.core.config import get_settings
@@ -75,20 +95,37 @@ async def get_current_user(
             alg = header.get("alg")
             print(f"DEBUG: Checking {label} (start: {token[:10]}..., alg: {alg})")
             
-            if alg == "ES256":
-                if best_error == "No tokens provided":
-                    best_error = f"Ignored system token from {label}"
+            # Skip check if algorithm is not supported
+            if alg not in ("HS256", "RS256", "ES256"):
+                best_error = f"Unsupported token algorithm {alg} on {label}"
                 continue
-                
+
+            # Check unverified claims for issuer to filter system platform pings
+            claims = jwt.get_unverified_claims(token)
+            iss = claims.get("iss", "")
+            if alg in ("RS256", "ES256"):
+                if "supabase" not in iss:
+                    best_error = f"Ignored non-Supabase asymmetric token from {label}"
+                    continue
+
             # DECODE: Supabase
-            if not settings.supabase_jwt_secret:
-                best_error = "Secret missing on backend"
-                break
-                
+            if alg == "HS256":
+                if not settings.supabase_jwt_secret:
+                    best_error = "Secret missing on backend"
+                    break
+                key = settings.supabase_jwt_secret.strip()
+                algorithms = ["HS256"]
+            else: # RS256, ES256
+                if not settings.supabase_url or not settings.supabase_anon_key:
+                    best_error = "Supabase URL/Anon key missing on backend for asymmetric verification"
+                    continue
+                key = await get_jwks(settings.supabase_url, settings.supabase_anon_key)
+                algorithms = ["RS256", "ES256"]
+
             payload = jwt.decode(
                 token, 
-                settings.supabase_jwt_secret.strip(), 
-                algorithms=["HS256"], 
+                key, 
+                algorithms=algorithms, 
                 audience="authenticated"
             )
             

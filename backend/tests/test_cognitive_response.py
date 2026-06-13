@@ -181,18 +181,20 @@ async def test_get_current_user_production_unauthorized():
         
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
+        mock_request.query_params = {}
         
         # Test case 1: Token is completely missing
         with pytest.raises(HTTPException) as excinfo:
-            await get_current_user(mock_request, token=None, db=AsyncMock())
+            await get_current_user(mock_request, db=AsyncMock())
         assert excinfo.value.status_code == 401
-        assert "Invalid or missing authentication token" in excinfo.value.detail
+        assert "Authentication required" in excinfo.value.detail
         
         # Test case 2: Token is invalid
+        mock_request.headers = {"authorization": "Bearer invalid-token"}
         with pytest.raises(HTTPException) as excinfo:
-            await get_current_user(mock_request, token="invalid-token", db=AsyncMock())
+            await get_current_user(mock_request, db=AsyncMock())
         assert excinfo.value.status_code == 401
-        assert "Invalid or missing authentication token" in excinfo.value.detail
+        assert "Authentication required" in excinfo.value.detail
 
 
 def test_conversations_auth_and_bola():
