@@ -24,6 +24,9 @@ const HOP_BY_HOP_HEADERS = new Set([
 
 function buildBackendUrl(pathSegments: string[] = [], search: string, request: NextRequest) {
   const backendBase = getServerBackendUrl();
+  
+  // The pathSegments already include "api" if the frontend calls "/api/users/me"
+  // because the Next.js route is at "/api/backend/[...path]"
   const backendPath = pathSegments.map(encodeURIComponent).join("/");
   
   // Extract user token to send as query param (robust to header stripping)
@@ -31,11 +34,12 @@ function buildBackendUrl(pathSegments: string[] = [], search: string, request: N
   let tokenParam = "";
   if (auth) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
-    const separator = search ? "&" : "?";
+    const separator = search ? "&" : (search.includes("?") ? "&" : "?");
     tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}`;
   }
 
-  return `${backendBase}/api/${backendPath}${search}${tokenParam}`;
+  // Path already starts with "api/" from the path segments
+  return `${backendBase}/${backendPath}${search}${tokenParam}`;
 }
 
 function buildForwardHeaders(request: NextRequest) {

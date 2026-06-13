@@ -5,6 +5,7 @@ from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from jose import jwt, JWTError
+from datetime import datetime
 
 from backend.core.database import get_db
 from backend.core.config import get_settings
@@ -35,18 +36,19 @@ async def get_current_user(
     """
     Validate the Supabase JWT token and return the current user.
     Creates a shadow user in the local database if one doesn't exist.
-    
-    Data is persisted via the DATABASE_URL (SQLite or PostgreSQL).
     """
     token = None
+    last_error = "None"
     
     # 1. Extract token from multiple possible sources
-    # Priority: Query Param -> Proxy Header -> Standard Header
     token = request.query_params.get("supabase_token")
     
     if not token:
-        # Check both custom proxy and standard headers
-        auth_header = request.headers.get("x-user-authorization") or request.headers.get("authorization")
+        # Check proxy and standard headers
+        x_auth = request.headers.get("x-user-authorization")
+        std_auth = request.headers.get("authorization")
+        auth_header = x_auth if x_auth and len(x_auth) > 5 else std_auth
+        
         if auth_header:
             if auth_header.lower().startswith("bearer "):
                 token = auth_header[7:]
@@ -54,13 +56,22 @@ async def get_current_user(
                 token = auth_header
             
     if not token:
-        # Fallback to access_token query param
         token = request.query_params.get("access_token")
 
     if token:
         user = None
         if settings.supabase_jwt_secret:
             try:
+                # Get header to detect algorithm
+                try:
+                    header = jwt.get_unverified_header(token)
+                    alg = header.get("alg")
+                    if alg == "ES256":
+                        # This is a Hugging Face token, skip Supabase verification
+                        raise ValueError("Hugging Face token detected (ES256)")
+                except:
+                    pass
+
                 # Decrypt Supabase token
                 payload = jwt.decode(
                     token, 
@@ -78,7 +89,6 @@ async def get_current_user(
                     user = result.scalars().first()
 
                     if not user:
-                        # User exists in Supabase but not in local persistence yet
                         # Check for existing email to link accounts
                         stmt = select(User).where(User.email == email)
                         result = await db.execute(stmt)
@@ -104,7 +114,7 @@ async def get_current_user(
                         ws_result = await db.execute(stmt)
                         if not ws_result.scalars().first():
                             workspace_name = f"{user.full_name or email.split('@')[0]}'s Workspace"
-                            slug = f"workspace-{user.id[:8]}"
+                            slug = f"workspace-{user.id[:8]}-{secrets.token_hex(4)}"
                             new_workspace = Workspace(name=workspace_name, slug=slug)
                             db.add(new_workspace)
                             await db.flush()
@@ -118,10 +128,10 @@ async def get_current_user(
                             
                         await db.commit()
                         await db.refresh(user)
-            except JWTError:
-                # Token verification failed
-                pass
+            except JWTError as e:
+                last_error = f"JWT Error: {str(e)}"
             except Exception as e:
+                last_error = f"Sync Error: {str(e)}"
                 logger.error(f"Error during User persistence sync: {e}")
 
         if user:
@@ -129,15 +139,22 @@ async def get_current_user(
                 raise HTTPException(status_code=403, detail="User account is deactivated")
             return user
 
-    # Strict production auth
+    # Strict production auth with diagnostic details
     if not settings.is_development:
+        detail = "Valid authentication token required"
+        if not token:
+            detail += " (Token not found)"
+        else:
+            detail += f" ({last_error})"
+            
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Dev fallback
+    import os
     if os.environ.get("ASSEST_INSECURE_DEV_LOGIN") == "true":
         stmt = select(User).order_by(User.created_at.asc())
         result = await db.execute(stmt)
@@ -152,6 +169,7 @@ async def get_current_user(
     )
 
 import os
+import secrets
 
 @router.get("/me", response_model=UserResponse)
 @router.get("/users/me", response_model=UserResponse)
