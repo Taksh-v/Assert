@@ -31,9 +31,12 @@ function buildBackendUrl(pathSegments: string[] = [], search: string) {
 function buildForwardHeaders(request: NextRequest) {
   const headers = new Headers(request.headers);
 
-  const incomingAuth = headers.get("authorization");
+  const incomingAuth = request.headers.get("authorization");
+  console.log(`[Proxy] Authorization header present: ${!!incomingAuth} (len: ${incomingAuth?.length || 0})`);
+  
   if (incomingAuth) {
     headers.set("x-user-authorization", incomingAuth);
+    console.log("[Proxy] Set x-user-authorization from incoming authorization");
   }
 
   for (const header of HOP_BY_HOP_HEADERS) {
