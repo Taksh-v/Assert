@@ -12,7 +12,10 @@ import {
   HeartPulse,
   Cpu,
   Paperclip,
+  UploadCloud,
 } from "lucide-react";
+import { useDropzone } from "react-dropzone";
+import { toast } from "sonner";
 import { apiFetch, ensureDefaultWorkspace, getActiveWorkspace, getCurrentUser, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import { parseUTCDate } from "@/lib/date";
@@ -100,9 +103,13 @@ export default function ChatPage() {
   // when AppShell has already confirmed the user is authenticated and workspace
   // is ready. No secondary auth check needed here.
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileUpload = async (file: File) => {
     if (!file || !activeWorkspace?.id) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error(`File "${file.name}" exceeds the 5MB size limit.`);
+      return;
+    }
 
     setIsUploading(true);
     setUploadingFileName(file.name);
@@ -126,6 +133,7 @@ export default function ChatPage() {
         success: true, 
         message: `File "${file.name}" uploaded successfully and is being processed in the background!` 
       });
+      toast.success(`"${file.name}" is being processed!`);
       
       // Auto-clear success message after 5 seconds
       setTimeout(() => setUploadStatus(null), 5000);
@@ -137,12 +145,42 @@ export default function ChatPage() {
       }
     } catch (error) {
       console.error("Upload error:", error);
-      setUploadStatus({ success: false, message: error instanceof Error ? error.message : "Failed to upload document" });
+      const errorMsg = error instanceof Error ? error.message : "Failed to upload document";
+      setUploadStatus({ success: false, message: errorMsg });
+      toast.error(errorMsg);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+    onDrop: (acceptedFiles) => {
+      if (acceptedFiles.length > 0) {
+        void handleFileUpload(acceptedFiles[0]);
+      }
+    },
+    accept: {
+      'application/pdf': ['.pdf'],
+      'text/plain': ['.txt', '.md'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+    },
+    maxSize: 5 * 1024 * 1024,
+    noClick: true, // We want the textarea to still be clickable for typing
+    onDropRejected: (fileRejections) => {
+      fileRejections.forEach((rejection) => {
+        rejection.errors.forEach((error) => {
+          if (error.code === 'file-too-large') {
+            toast.error(`File "${rejection.file.name}" is larger than 5MB.`);
+          } else if (error.code === 'file-invalid-type') {
+            toast.error(`File "${rejection.file.name}" is not a supported format (PDF, TXT, DOCX).`);
+          } else {
+            toast.error(error.message);
+          }
+        });
+      });
+    }
+  });
   const userName = user?.full_name || user?.email?.split("@")[0] || "";
   const workspaceName = activeWorkspace?.name || "your workspace";
 
@@ -323,28 +361,40 @@ export default function ChatPage() {
                 <ShieldCheck className="h-4 w-4 text-[var(--success)]" />
               </div>
 
-              <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-root)] p-3.5 shadow-inner focus-within:border-[var(--border-focus)] focus-within:shadow-[var(--shadow-glow)] transition-all duration-250">
+              <div 
+                {...getRootProps()}
+                className={`rounded-xl border bg-[var(--bg-root)] p-3.5 shadow-inner transition-all duration-250 relative ${
+                  isDragActive 
+                    ? "border-[var(--accent)] shadow-[0_0_15px_rgba(99,102,241,0.2)] bg-indigo-500/5" 
+                    : "border-[var(--border-subtle)] focus-within:border-[var(--border-focus)] focus-within:shadow-[var(--shadow-glow)]"
+                }`}
+              >
+                {isDragActive && (
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl bg-[var(--bg-surface)]/80 backdrop-blur-sm border-2 border-dashed border-[var(--accent)]">
+                    <UploadCloud className="h-8 w-8 text-[var(--accent)] mb-2 animate-bounce" />
+                    <p className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-widest">Drop file to attach</p>
+                    <p className="text-[10px] text-[var(--text-muted)] mt-1">PDF, TXT, DOCX (Max 5MB)</p>
+                  </div>
+                )}
+                
                 <textarea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask a question about connected codebases, docs, files, or Slack discussions..."
+                  placeholder="Ask a question or drop a file here to attach it..."
                   rows={6}
-                  className="composer-textarea min-h-[160px] w-full resize-none border-none bg-transparent text-[13px] leading-relaxed text-slate-200 placeholder:text-[var(--text-muted)] focus:outline-none scrollbar-thin"
+                  className="composer-textarea min-h-[160px] w-full resize-none border-none bg-transparent text-[13px] leading-relaxed text-slate-200 placeholder:text-[var(--text-muted)] focus:outline-none scrollbar-thin relative z-0"
                   disabled={isLoading || !activeWorkspace?.id}
                 />
 
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)]/40 pt-3">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)]/40 pt-3 relative z-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      onChange={handleFileUpload}
-                      className="hidden"
-                      accept=".pdf,.txt,.docx,.md"
-                    />
+                    <input {...getInputProps()} ref={fileInputRef} className="hidden" />
                     <button
-                      onClick={() => fileInputRef.current?.click()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        open();
+                      }}
                       disabled={isUploading || isLoading || !activeWorkspace?.id}
                       title="Upload document"
                       className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-muted)] hover:border-[var(--border-focus)] hover:bg-[var(--bg-surface-hover)] hover:text-[var(--text-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"

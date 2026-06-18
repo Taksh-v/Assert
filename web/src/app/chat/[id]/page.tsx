@@ -14,8 +14,12 @@ import {
   Award,
   Workflow,
   AlertCircle,
-  Paperclip
+  AlertCircle,
+  Paperclip,
+  UploadCloud
 } from "lucide-react";
+import { useDropzone } from "react-dropzone";
+import { toast } from "sonner";
 import { apiFetch, getActiveWorkspace, isAdminWorkspaceRole, AUTH_CHANGE_EVENT } from "@/lib/auth";
 import { CONVERSATIONS_CHANGE_EVENT } from "@/components/Sidebar";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
@@ -226,10 +230,14 @@ export default function ChatIdPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileUpload = async (file: File) => {
     const activeWs = getActiveWorkspace();
     if (!file || !activeWs?.id) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error(`File "${file.name}" exceeds the 5MB size limit.`);
+      return;
+    }
 
     setIsUploading(true);
     setUploadingFileName(file.name);
@@ -253,15 +261,46 @@ export default function ChatIdPage() {
         success: true, 
         message: `File "${file.name}" uploaded successfully and is being processed in the background!` 
       });
+      toast.success(`"${file.name}" is being processed!`);
       setTimeout(() => setUploadStatus(null), 5000);
     } catch (error) {
       console.error("Upload error:", error);
-      setUploadStatus({ success: false, message: error instanceof Error ? error.message : "Upload failed" });
+      const errorMsg = error instanceof Error ? error.message : "Upload failed";
+      setUploadStatus({ success: false, message: errorMsg });
+      toast.error(errorMsg);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+    onDrop: (acceptedFiles) => {
+      if (acceptedFiles.length > 0) {
+        void handleFileUpload(acceptedFiles[0]);
+      }
+    },
+    accept: {
+      'application/pdf': ['.pdf'],
+      'text/plain': ['.txt', '.md'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+    },
+    maxSize: 5 * 1024 * 1024,
+    noClick: true,
+    onDropRejected: (fileRejections) => {
+      fileRejections.forEach((rejection) => {
+        rejection.errors.forEach((error) => {
+          if (error.code === 'file-too-large') {
+            toast.error(`File "${rejection.file.name}" is larger than 5MB.`);
+          } else if (error.code === 'file-invalid-type') {
+            toast.error(`File "${rejection.file.name}" is not a supported format (PDF, TXT, DOCX).`);
+          } else {
+            toast.error(error.message);
+          }
+        });
+      });
+    }
+  });
 
   const fetchConversation = useCallback(async () => {
     setIsConvLoading(true);
@@ -850,19 +889,30 @@ export default function ChatIdPage() {
                 {uploadStatus.message}
               </div>
             )}
-            <div className="relative flex items-center gap-2 p-1 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-glow)] transition-all shadow-[var(--shadow-elevated)]">
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                className="hidden"
-                accept=".pdf,.txt,.docx,.md"
-              />
+            <div 
+              {...getRootProps()}
+              className={`relative flex items-center gap-2 p-1 rounded-xl border transition-all shadow-[var(--shadow-elevated)] z-0 ${
+                isDragActive 
+                  ? "border-[var(--accent)] shadow-[0_0_15px_rgba(99,102,241,0.2)] bg-indigo-500/5" 
+                  : "border-[var(--border-subtle)] bg-[var(--bg-surface)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-glow)]"
+              }`}
+            >
+              {isDragActive && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-[var(--bg-surface)]/80 backdrop-blur-sm border-2 border-dashed border-[var(--accent)]">
+                  <UploadCloud className="h-4 w-4 text-[var(--accent)] mr-2 animate-bounce" />
+                  <p className="text-[11px] font-bold text-[var(--text-primary)] uppercase tracking-widest">Drop file here (Max 5MB)</p>
+                </div>
+              )}
+              
+              <input {...getInputProps()} ref={fileInputRef} className="hidden" />
               <button
-                onClick={() => fileInputRef.current?.click()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  open();
+                }}
                 disabled={isUploading || isLoading}
                 title="Upload document"
-                className="ml-2 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0"
+                className="ml-2 flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-root)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer shrink-0 relative z-0"
               >
                 {isUploading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

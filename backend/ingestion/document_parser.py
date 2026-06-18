@@ -34,13 +34,20 @@ class HybridParser:
 
     def _get_ocr(self):
         if not self.ocr_reader:
-            import easyocr
-            self.ocr_reader = easyocr.Reader(['en'])
+            try:
+                import easyocr
+                self.ocr_reader = easyocr.Reader(['en'])
+            except ImportError:
+                logger.warning("easyocr not installed. OCR extraction disabled.")
+                return None
         return self.ocr_reader
 
     def _parse_image(self, file_path: str) -> List[Dict[str, Any]]:
         """High-quality OCR using EasyOCR."""
-        results = self._get_ocr().readtext(file_path, detail=1)
+        ocr = self._get_ocr()
+        if not ocr:
+            return [{"type": "error", "content": "OCR reader (easyocr) not available", "metadata": {"needs_ocr": True}}]
+        results = ocr.readtext(file_path, detail=1)
         content = "\n".join([res[1] for res in results])
         return [{"type": "ocr_text", "content": content, "metadata": {"source": "easyocr"}}]
 
@@ -64,6 +71,32 @@ class HybridParser:
                 return None
         return self.whisper_model
 
+    def _parse_docx(self, file_path: str) -> List[Dict[str, Any]]:
+        """Zero-dependency DOCX reader extracting paragraphs from internal word/document.xml."""
+        import zipfile
+        import xml.etree.ElementTree as ET
+        
+        paragraphs = []
+        try:
+            with zipfile.ZipFile(file_path) as docx:
+                xml_content = docx.read('word/document.xml')
+                root = ET.fromstring(xml_content)
+                
+                # XML namespace prefix for Word document elements
+                namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                
+                # Find all paragraph elements and extract nested text tags
+                for paragraph in root.findall('.//w:p', namespaces):
+                    texts = [node.text for node in paragraph.findall('.//w:t', namespaces) if node.text]
+                    if texts:
+                        paragraphs.append("".join(texts))
+            
+            full_text = "\n\n".join(paragraphs)
+            return [{"type": "text", "content": full_text, "metadata": {}}]
+        except Exception as e:
+            logger.error(f"Failed to parse docx archive: {e}")
+            return [{"type": "error", "content": f"DOCX parse failure: {str(e)}", "metadata": {}}]
+
     async def parse(self, file_path: str) -> List[Dict[str, Any]]:
         """Parse a local file and return list of elements with metadata."""
         logger.info(f"Hybrid parsing: {file_path}")
@@ -80,6 +113,8 @@ class HybridParser:
                 elements = self._parse_html(file_path)
             elif ext in ["mp3", "mp4", "wav", "m4a"]:
                 elements = await self._parse_audio(file_path)
+            elif ext == "docx":
+                elements = self._parse_docx(file_path)
             else:
                 # Basic text fallback
                 with open(file_path, 'r', encoding='utf-8') as f:

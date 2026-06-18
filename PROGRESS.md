@@ -226,4 +226,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Unit Test Consolidation**: Fixed a signature parameter `TypeError` in `backend/tests/test_cognitive_response.py` and refactored `backend/tests/test_auth_provider.py` to fully test `get_current_user` logic under HS256/ES256 and auto-provisioning scenarios.
 - [x] **Verification**: Confirmed all auth-related unit tests in both files pass successfully, and deployed the changes to GitHub and Hugging Face.
 
+### 76. Phase 75: Production-Grade Document Uploads & Ingestion — [VERIFIED]
+- [x] **Zero-Dependency DOCX Parsing**: Added standard `zipfile` and `xml.etree.ElementTree` parsing inside `HybridParser` (`backend/ingestion/document_parser.py`) to safely extract paragraph contents from Word Document uploads without requiring third-party tools.
+- [x] **Server-side Upload Size Limits**: Implemented incremental chunked reading (1MB chunks) up to a 10MB limit in the `POST /upload` endpoint (`backend/api/documents.py`), returning a `413 Request Entity Too Large` error immediately if exceeded.
+- [x] **Import and Error Hardening**: Wrapped optional libraries (`easyocr`, `whisper`) in clean exception-trapping blocks so missing runtime dependencies don't crash background workers.
+- [x] **Testing and Verification**: Created 4 unit tests in `backend/tests/test_document_upload.py` to assert upload size enforcement, Word Document parsing logic, and graceful fallback handling, and successfully ran the tests with a 100% pass rate.
+
 
