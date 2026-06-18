@@ -14,7 +14,6 @@ import {
   Award,
   Workflow,
   AlertCircle,
-  AlertCircle,
   Paperclip,
   UploadCloud
 } from "lucide-react";
