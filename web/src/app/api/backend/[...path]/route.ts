@@ -109,9 +109,21 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
       };
       
       if (hasBody) {
-        fetchOptions.body = request.body;
-        // @ts-ignore - Required for Node.js fetch with streams
-        fetchOptions.duplex = "half";
+        const contentType = request.headers.get("content-type") || "";
+        if (contentType.includes("multipart/form-data")) {
+          // Parse and pass FormData directly to let Undici generate correct boundaries
+          fetchOptions.body = await request.formData();
+          
+          // Remove manually forwarded headers so fetch can set them automatically for FormData
+          if (fetchOptions.headers instanceof Headers) {
+            fetchOptions.headers.delete("content-type");
+            fetchOptions.headers.delete("content-length");
+          }
+        } else {
+          fetchOptions.body = request.body;
+          // @ts-ignore - Required for Node.js fetch with streams
+          fetchOptions.duplex = "half";
+        }
       }
 
       const upstream = await fetch(targetUrl, fetchOptions);
