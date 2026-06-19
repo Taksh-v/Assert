@@ -956,8 +956,9 @@ export default function ChatIdPage() {
                 </div>
               )}
               
-              <input {...getInputProps()} id="chat-id-file-upload" className="hidden" />
+              <input {...getInputProps()} id="chat-id-file-upload" />
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   open();

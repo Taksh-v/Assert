@@ -409,8 +409,9 @@ export default function ChatPage() {
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)]/40 pt-3 relative z-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <input {...getInputProps()} id="chat-file-upload" className="hidden" />
+                    <input {...getInputProps()} id="chat-file-upload" />
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         open();
