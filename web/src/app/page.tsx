@@ -108,8 +108,8 @@ export default function ChatPage() {
   const handleFileUpload = async (file: File) => {
     if (!file || !activeWorkspace?.id) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error(`File "${file.name}" exceeds the 5MB size limit.`);
+    if (file.size > 4.5 * 1024 * 1024) {
+      toast.error(`File "${file.name}" exceeds the 4.5MB size limit.`);
       return;
     }
 
@@ -172,13 +172,13 @@ export default function ChatPage() {
       'text/plain': ['.txt', '.md'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     },
-    maxSize: 5 * 1024 * 1024,
+    maxSize: 4.5 * 1024 * 1024,
     noClick: true, // We want the textarea to still be clickable for typing
     onDropRejected: (fileRejections) => {
       fileRejections.forEach((rejection) => {
         rejection.errors.forEach((error) => {
           if (error.code === 'file-too-large') {
-            toast.error(`File "${rejection.file.name}" is larger than 5MB.`);
+            toast.error(`File "${rejection.file.name}" is larger than 4.5MB.`);
           } else if (error.code === 'file-invalid-type') {
             toast.error(`File "${rejection.file.name}" is not a supported format (PDF, TXT, DOCX).`);
           } else {
@@ -376,7 +376,7 @@ export default function ChatPage() {
                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl bg-[var(--bg-surface)]/80 backdrop-blur-sm border-2 border-dashed border-[var(--accent)]">
                     <UploadCloud className="h-8 w-8 text-[var(--accent)] mb-2 animate-bounce" />
                     <p className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-widest">Drop file to attach</p>
-                    <p className="text-[10px] text-[var(--text-muted)] mt-1">PDF, TXT, DOCX (Max 5MB)</p>
+                    <p className="text-[10px] text-[var(--text-muted)] mt-1">PDF, TXT, DOCX (Max 4.5MB)</p>
                   </div>
                 )}
                 

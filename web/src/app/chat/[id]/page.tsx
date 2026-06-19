@@ -252,8 +252,8 @@ export default function ChatIdPage() {
     const activeWs = getActiveWorkspace();
     if (!file || !activeWs?.id) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error(`File "${file.name}" exceeds the 5MB size limit.`);
+    if (file.size > 4.5 * 1024 * 1024) {
+      toast.error(`File "${file.name}" exceeds the 4.5MB size limit.`);
       return;
     }
 
@@ -309,13 +309,13 @@ export default function ChatIdPage() {
       'text/plain': ['.txt', '.md'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     },
-    maxSize: 5 * 1024 * 1024,
+    maxSize: 4.5 * 1024 * 1024,
     noClick: true,
     onDropRejected: (fileRejections) => {
       fileRejections.forEach((rejection) => {
         rejection.errors.forEach((error) => {
           if (error.code === 'file-too-large') {
-            toast.error(`File "${rejection.file.name}" is larger than 5MB.`);
+            toast.error(`File "${rejection.file.name}" is larger than 4.5MB.`);
           } else if (error.code === 'file-invalid-type') {
             toast.error(`File "${rejection.file.name}" is not a supported format (PDF, TXT, DOCX).`);
           } else {
@@ -952,7 +952,7 @@ export default function ChatIdPage() {
               {isDragActive && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-[var(--bg-surface)]/80 backdrop-blur-sm border-2 border-dashed border-[var(--accent)]">
                   <UploadCloud className="h-4 w-4 text-[var(--accent)] mr-2 animate-bounce" />
-                  <p className="text-[11px] font-bold text-[var(--text-primary)] uppercase tracking-widest">Drop file here (Max 5MB)</p>
+                  <p className="text-[11px] font-bold text-[var(--text-primary)] uppercase tracking-widest">Drop file here (Max 4.5MB)</p>
                 </div>
               )}
               
