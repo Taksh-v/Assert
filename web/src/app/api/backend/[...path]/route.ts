@@ -13,14 +13,12 @@ type BackendRouteContext = {
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "content-encoding",
-  "content-length",
   "host",
   "keep-alive",
   "proxy-authenticate",
   "proxy-authorization",
   "te",
   "trailer",
-  "transfer-encoding",
   "upgrade",
 ]);
 
@@ -88,6 +86,8 @@ function buildResponseHeaders(upstreamHeaders: Headers) {
   for (const header of HOP_BY_HOP_HEADERS) {
     headers.delete(header);
   }
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
   headers.set("cache-control", "no-store");
   return headers;
 }
