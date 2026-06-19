@@ -252,8 +252,8 @@ export default function ChatIdPage() {
     const activeWs = getActiveWorkspace();
     if (!file || !activeWs?.id) return;
 
-    if (file.size > 4.5 * 1024 * 1024) {
-      toast.error(`File "${file.name}" exceeds the 4.5MB size limit.`);
+    if (file.size > 3.5 * 1024 * 1024) {
+      toast.error(`File "${file.name}" exceeds the 3.5MB size limit.`);
       return;
     }
 
@@ -309,13 +309,13 @@ export default function ChatIdPage() {
       'text/plain': ['.txt', '.md'],
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     },
-    maxSize: 4.5 * 1024 * 1024,
+    maxSize: 3.5 * 1024 * 1024,
     noClick: true,
     onDropRejected: (fileRejections) => {
       fileRejections.forEach((rejection) => {
         rejection.errors.forEach((error) => {
           if (error.code === 'file-too-large') {
-            toast.error(`File "${rejection.file.name}" is larger than 4.5MB.`);
+            toast.error(`File "${rejection.file.name}" is larger than 3.5MB.`);
           } else if (error.code === 'file-invalid-type') {
             toast.error(`File "${rejection.file.name}" is not a supported format (PDF, TXT, DOCX).`);
           } else {

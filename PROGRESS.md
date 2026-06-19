@@ -242,4 +242,10 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Production Log Gating (B8)**: Gated all verbose `console.log` proxy debug statements in `route.ts` behind `process.env.NODE_ENV !== "production"` to eliminate I/O backpressure in Vercel deployments.
 - [x] **Verification**: TypeScript typecheck passed (0 errors), Python import validation passed, and all 5 auth/health backend tests passed successfully.
 
-
+### 78. Phase 77: Serverless File Upload Proxy & Size Limit Adjustments — [VERIFIED]
+- [x] **Next.js Proxy Body Buffering**: Replaced `request.body` (ReadableStream passthrough) with `await request.arrayBuffer()` for multipart/form-data bodies to prevent stream consumption/corruption by Vercel edge/routing infrastructure.
+- [x] **Content-Length Header Maintenance**: Configured proxy to calculate and set an accurate `content-length` header from the buffer size instead of deleting it, satisfying Hugging Face's Nginx reverse proxy requirement.
+- [x] **Serverless Timeout Extension**: Set `export const maxDuration = 60;` in the proxy route to avoid serverless function execution timeout during file uploads.
+- [x] **Client-Side Size Limits**: Reduced file upload size threshold from 4.5MB to 3.5MB across all composer upload paths (main landing page and chat page dropzone) to account for the ~33% multipart FormData overhead, keeping requests safely below Vercel's strict 4.5MB request body size limit.
+- [x] **Backend Logging Observability**: Upgraded background Supabase Storage upload exceptions from warning to error and enriched the log trace with explicit metadata (bucket, file name, workspace ID, error details).
+- [x] **Verification**: TypeScript typecheck passed (`npx tsc --noEmit` returns 0 errors) and all backend files validate syntax.

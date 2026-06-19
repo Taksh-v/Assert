@@ -3,6 +3,7 @@ import { getServerBackendUrl } from "@/lib/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // Allow 60s for large file uploads
 
 const IS_DEV = process.env.NODE_ENV !== "production";
 
@@ -111,14 +112,19 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
       if (hasBody) {
         const contentType = request.headers.get("content-type") || "";
         if (contentType.includes("multipart/form-data")) {
-          // Read the raw byte stream into memory. This bypasses Next.js FormData serialization bugs
-          // where File objects are dropped or converted to strings in Vercel environments.
-          fetchOptions.body = request.body;
-          (fetchOptions as any).duplex = "half";
+          // Buffer the ENTIRE multipart body into memory before forwarding.
+          // This is critical for Vercel production: ReadableStream bodies can be
+          // consumed by Vercel's infrastructure (size checks, edge routing) before
+          // our fetch() call reads them, resulting in an empty/truncated body at
+          // the HF Space backend. Buffering also lets us set an accurate
+          // content-length which HF's Nginx reverse proxy requires.
+          const bodyBuffer = await request.arrayBuffer();
+          fetchOptions.body = bodyBuffer;
           
           // KEEP the original content-type because it contains the correct multipart boundary!
+          // Set accurate content-length from the buffered body size.
           if (fetchOptions.headers instanceof Headers) {
-            fetchOptions.headers.delete("content-length");
+            fetchOptions.headers.set("content-length", String(bodyBuffer.byteLength));
           }
         } else {
           fetchOptions.body = request.body;

@@ -69,7 +69,10 @@ async def run_ingestion_background(raw_doc: dict, workspace_id: str):
             raw_doc["source_url"] = storage_path
             logger.info(f"Successfully uploaded {filename} to Supabase Storage at {storage_path}")
         except Exception as e:
-            logger.warning(f"Failed to upload to Supabase Storage, continuing with local processing: {e}")
+            logger.error(
+                f"Supabase Storage upload FAILED for file='{filename}' "
+                f"bucket='{bucket_name}' workspace='{workspace_id}': {type(e).__name__}: {e}"
+            )
 
     pipeline = IngestionPipeline()
     try:
