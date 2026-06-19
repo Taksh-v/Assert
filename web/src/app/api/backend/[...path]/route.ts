@@ -111,12 +111,12 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
       if (hasBody) {
         const contentType = request.headers.get("content-type") || "";
         if (contentType.includes("multipart/form-data")) {
-          // Parse and pass FormData directly to let Undici generate correct boundaries
-          fetchOptions.body = await request.formData();
+          // Read the raw byte stream into memory. This bypasses Next.js FormData serialization bugs
+          // where File objects are dropped or converted to strings in Vercel environments.
+          fetchOptions.body = await request.arrayBuffer();
           
-          // Remove manually forwarded headers so fetch can set them automatically for FormData
+          // KEEP the original content-type because it contains the correct multipart boundary!
           if (fetchOptions.headers instanceof Headers) {
-            fetchOptions.headers.delete("content-type");
             fetchOptions.headers.delete("content-length");
           }
         } else {
