@@ -113,7 +113,8 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
         if (contentType.includes("multipart/form-data")) {
           // Read the raw byte stream into memory. This bypasses Next.js FormData serialization bugs
           // where File objects are dropped or converted to strings in Vercel environments.
-          fetchOptions.body = await request.arrayBuffer();
+          fetchOptions.body = request.body;
+          (fetchOptions as any).duplex = "half";
           
           // KEEP the original content-type because it contains the correct multipart boundary!
           if (fetchOptions.headers instanceof Headers) {

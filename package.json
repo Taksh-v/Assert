@@ -22,5 +22,8 @@
   "bugs": {
     "url": "https://github.com/Taksh-v/Assert/issues"
   },
-  "homepage": "https://github.com/Taksh-v/Assert#readme"
+  "homepage": "https://github.com/Taksh-v/Assert#readme",
+  "dependencies": {
+    "puppeteer": "^25.1.0"
+  }
 }
