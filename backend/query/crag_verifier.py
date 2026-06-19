@@ -101,6 +101,10 @@ class CRAGVerifier:
         rejected: List[VerifiedChunk] = []
 
         for chunk, verdict in zip(chunks, verdicts):
+            # Bypass CRAG for explicitly uploaded context files
+            if chunk.metadata.get("is_context_file"):
+                verdict = CRAGVerdict.RELEVANT
+
             vc = VerifiedChunk(
                 chunk_id=chunk.chunk_id,
                 content=chunk.content,

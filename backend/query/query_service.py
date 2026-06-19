@@ -208,6 +208,7 @@ class QueryService:
         conversation_id: Optional[str] = None,
         reasoning_mode: bool = False,
         request_id: Optional[str] = None,
+        context_files: Optional[List[str]] = None,
     ) -> QueryResult:
         """
         Core business logic for querying the knowledge base.
@@ -327,6 +328,7 @@ class QueryService:
                         top_k=5,
                         user_id=user_id,
                         user_role=user_role,
+                        context_files=context_files,
                     )
                 )
 
@@ -360,7 +362,7 @@ class QueryService:
             elif route.tier == ResponseTier.FAST_RAG:
                 with tracer.start_as_current_span("query.path.fast_rag"):
                     answer = await self._fast_rag_path(
-                        question, workspace_id, user_id, history, pre_retrieved_task=retrieval_task, user_role=user_role
+                        question, workspace_id, user_id, history, pre_retrieved_task=retrieval_task, user_role=user_role, context_files=context_files
                     )
                 metadata["method"] = "fast_rag_crag"
 
@@ -376,7 +378,7 @@ class QueryService:
 
             else:
                 with tracer.start_as_current_span("query.path.fallback_fast_rag"):
-                    answer = await self._fast_rag_path(question, workspace_id, user_id, history, user_role=user_role)
+                    answer = await self._fast_rag_path(question, workspace_id, user_id, history, user_role=user_role, context_files=context_files)
                 metadata["method"] = "fallback_fast_rag"
 
             metadata["grounding_score"] = answer.grounding_score
@@ -461,6 +463,7 @@ class QueryService:
         history: List[Dict[str, str]],
         pre_retrieved_task: Optional[asyncio.Task] = None,
         user_role: Optional[str] = "employee",
+        context_files: Optional[List[str]] = None,
     ) -> Answer:
         """FAST_RAG tier: retrieve → CRAG verify → generate with citations."""
         # Resolve user's role if not passed or is default
@@ -500,7 +503,8 @@ class QueryService:
                 workspace_id=workspace_id,
                 top_k=5,
                 user_id=user_id,
-                user_role=user_role
+                user_role=user_role,
+                context_files=context_files,
             )
 
 
@@ -648,6 +652,7 @@ class QueryService:
         conversation_id: Optional[str] = None,
         reasoning_mode: bool = False,
         request_id: Optional[str] = None,
+        context_files: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Core streaming logic wrapper that buffers token output chunks to yield batches of 3–5 tokens/words.
@@ -660,6 +665,7 @@ class QueryService:
             conversation_id=conversation_id,
             reasoning_mode=reasoning_mode,
             request_id=req_id,
+            context_files=context_files,
         )
 
         token_buffer = []
@@ -716,6 +722,7 @@ class QueryService:
         conversation_id: Optional[str] = None,
         reasoning_mode: bool = False,
         request_id: Optional[str] = None,
+        context_files: Optional[List[str]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Core raw streaming logic with adaptive routing, CRAG verification,
@@ -777,6 +784,7 @@ class QueryService:
                     top_k=5,
                     user_id=user_id,
                     user_role=user_role,
+                    context_files=context_files,
                 )
             )
 

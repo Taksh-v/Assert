@@ -15,7 +15,10 @@ import {
   Workflow,
   AlertCircle,
   Paperclip,
-  UploadCloud
+  UploadCloud,
+  FileText,
+  CheckCircle2,
+  Database
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
@@ -206,6 +209,10 @@ export default function ChatIdPage() {
   const [thinkingLogs, setThinkingLogs] = useState<string[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState(getActiveWorkspace());
   const isAdmin = isAdminWorkspaceRole(activeWorkspace?.role);
+  
+  const [uploadedSessionFiles, setUploadedSessionFiles] = useState<{name: string, status: 'processing' | 'ready'}[]>([]);
+  const [workspaceDocuments, setWorkspaceDocuments] = useState<any[]>([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState(false);
 
   useEffect(() => {
     const handleAuthChange = () => {
@@ -214,7 +221,6 @@ export default function ChatIdPage() {
     window.addEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
     return () => window.removeEventListener(AUTH_CHANGE_EVENT, handleAuthChange);
   }, []);
-  const [activeLensTab, setActiveLensTab] = useState<"bi" | "trace" | "signals">("bi");
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [liveTrace, setLiveTrace] = useState<Record<string, { start: number; end?: number; status: "pending" | "running" | "completed" | "failed" | "skipped"; detail?: string }>>({});
   const [hoveredPhase, setHoveredPhase] = useState<string | null>(null);
@@ -224,10 +230,23 @@ export default function ChatIdPage() {
   });
   
   const [highlightedCitation, setHighlightedCitation] = useState<number | null>(null);
+  const [activeLensTab, setActiveLensTab] = useState<"bi" | "trace" | "signals" | "context">("bi");
   const visibleLensTab = !isAdmin && activeLensTab === "signals" ? "bi" : activeLensTab;
 
+  useEffect(() => {
+    if (activeLensTab === "context" && activeWorkspace?.id) {
+      setIsLoadingDocs(true);
+      apiFetch(`/api/documents/workspace/${activeWorkspace.id}`)
+        .then(res => res.json())
+        .then(data => {
+          setWorkspaceDocuments(Array.isArray(data) ? data : []);
+        })
+        .catch(err => console.error("Failed to fetch docs", err))
+        .finally(() => setIsLoadingDocs(false));
+    }
+  }, [activeLensTab, activeWorkspace?.id]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (file: File) => {
     const activeWs = getActiveWorkspace();
@@ -241,6 +260,8 @@ export default function ChatIdPage() {
     setIsUploading(true);
     setUploadingFileName(file.name);
     setUploadStatus(null);
+    
+    setUploadedSessionFiles(prev => [...prev, { name: file.name, status: 'processing' }]);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -261,7 +282,10 @@ export default function ChatIdPage() {
         message: `File "${file.name}" uploaded successfully and is being processed in the background!` 
       });
       toast.success(`"${file.name}" is being processed!`);
-      setTimeout(() => setUploadStatus(null), 5000);
+      setTimeout(() => {
+        setUploadStatus(null);
+        setUploadedSessionFiles(prev => prev.map(f => f.name === file.name ? { ...f, status: 'ready' } : f));
+      }, 5000);
     } catch (error) {
       console.error("Upload error:", error);
       const errorMsg = error instanceof Error ? error.message : "Upload failed";
@@ -269,7 +293,8 @@ export default function ChatIdPage() {
       toast.error(errorMsg);
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      const el = document.getElementById("chat-id-file-upload") as HTMLInputElement;
+      if (el) el.value = "";
     }
   };
 
@@ -474,7 +499,8 @@ export default function ChatIdPage() {
           question: queryText,
           workspace_id: workspaceId,
           conversation_id: id,
-          reasoning_mode: false
+          reasoning_mode: false,
+          context_files: uploadedSessionFiles.map((f) => f.name)
         })
       });
 
@@ -697,6 +723,15 @@ export default function ChatIdPage() {
     const pendingQuery = sessionStorage.getItem("assest_pending_query");
     if (pendingQuery) {
       sessionStorage.removeItem("assest_pending_query");
+      const pendingFiles = sessionStorage.getItem("assest_pending_files");
+      if (pendingFiles) {
+        try {
+          setUploadedSessionFiles(JSON.parse(pendingFiles));
+        } catch (e) {
+          console.error("Failed to parse pending files", e);
+        }
+        sessionStorage.removeItem("assest_pending_files");
+      }
       window.setTimeout(() => {
         void handleSend(pendingQuery);
       }, 100);
@@ -888,6 +923,24 @@ export default function ChatIdPage() {
                 {uploadStatus.message}
               </div>
             )}
+            
+            {/* Session Files Context Chips */}
+            {uploadedSessionFiles.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                {uploadedSessionFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-sm shrink-0">
+                    <FileText className="h-3 w-3 text-[var(--accent)]" />
+                    <span className="text-[11px] font-medium text-[var(--text-primary)] max-w-[150px] truncate">{f.name}</span>
+                    {f.status === 'processing' ? (
+                      <Loader2 className="h-3 w-3 animate-spin text-[var(--text-muted)]" />
+                    ) : (
+                      <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            
             <div 
               {...getRootProps()}
               className={`relative flex items-center gap-2 p-1 rounded-xl border transition-all shadow-[var(--shadow-elevated)] z-0 ${
@@ -903,7 +956,7 @@ export default function ChatIdPage() {
                 </div>
               )}
               
-              <input {...getInputProps()} ref={fileInputRef} className="hidden" />
+              <input {...getInputProps()} id="chat-id-file-upload" className="hidden" />
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -983,6 +1036,16 @@ export default function ChatIdPage() {
               }`}
             >
               Trace
+            </button>
+            <button
+              onClick={() => setActiveLensTab("context")}
+              className={`py-2.5 text-[11px] font-semibold tracking-wider uppercase transition-all cursor-pointer ${
+                visibleLensTab === "context" 
+                  ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" 
+                  : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              Context
             </button>
             {isAdmin && (
               <button
@@ -1395,7 +1458,46 @@ export default function ChatIdPage() {
                   </div>
                 </div>
               </div>
-            ) : isAdmin ? (
+            ) : visibleLensTab === "context" ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <span className="text-[12px] font-medium text-[var(--text-muted)] tracking-wider uppercase flex items-center gap-2">
+                    <Database className="h-3.5 w-3.5" /> Workspace Knowledge Base
+                  </span>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    These documents have been ingested and are available for the AI to retrieve during this conversation.
+                  </p>
+                </div>
+                
+                {isLoadingDocs ? (
+                  <div className="flex items-center justify-center p-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" />
+                  </div>
+                ) : workspaceDocuments.length === 0 ? (
+                  <div className="text-center p-8 border border-[var(--border-subtle)] border-dashed rounded-xl bg-[var(--bg-surface)]">
+                    <p className="text-xs text-[var(--text-muted)]">No documents available in this workspace.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {workspaceDocuments.map((doc, i) => (
+                      <div key={doc.id || i} className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] flex flex-col gap-2 transition-all hover:border-[var(--border-focus)]">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FileText className="h-4 w-4 text-[var(--accent)] shrink-0" />
+                            <span className="text-sm font-semibold text-[var(--text-primary)] truncate">{doc.title || doc.source_url}</span>
+                          </div>
+                          {doc.is_active && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wider text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">Active</span>}
+                        </div>
+                        <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)]">
+                          <span className="font-mono">{new Date(doc.last_ingested_at).toLocaleDateString()}</span>
+                          {doc.chunk_count > 0 && <span className="font-mono">{doc.chunk_count} Chunks</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : visibleLensTab === "signals" && isAdmin ? (
               <div className="space-y-4">
                 <SystemSignalsPanel />
               </div>

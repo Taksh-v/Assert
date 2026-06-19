@@ -139,6 +139,9 @@ async def ensure_sqlite_dev_indexes(conn):
         ("idx_failed_ingestions_source_url", "failed_ingestions", "source_url"),
         ("idx_query_logs_created_at", "query_logs", "created_at"),
         ("idx_episodes_created_at", "episodes", "created_at"),
+        ("idx_conversations_workspace_id", "conversations", "workspace_id"),
+        ("idx_connectors_workspace_id", "connectors", "workspace_id"),
+        ("idx_sync_runs_connector_id", "sync_runs", "connector_id"),
     ]
     for index_name, table_name, column_name in indexes:
         try:

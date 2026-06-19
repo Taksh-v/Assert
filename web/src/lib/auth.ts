@@ -132,15 +132,15 @@ export async function signOut() {
 export async function isAuthenticated(): Promise<boolean> {
   if (typeof window === "undefined") return false;
   
-  // Directly check localStorage to avoid race conditions with cached state
+  // Fast path: both token and user exist in localStorage → instant true
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) return false;
 
-  // If we have a user object, we are definitely authenticated
-  if (getCurrentUser()) return true;
+  // Raw key-existence check avoids JSON.parse overhead on every call
+  if (localStorage.getItem(USER_KEY)) return true;
 
   try {
-    // Attempt verification as a last resort
+    // Attempt verification as a last resort (first login from new tab)
     const res = await apiFetch("/users/me");
     if (res.ok) {
       const userData = await res.json() as UserInfo;

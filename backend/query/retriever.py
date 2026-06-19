@@ -125,7 +125,7 @@ class Retriever:
                 span.record_exception(e)
                 return question
 
-    async def search(self, question: str, workspace_id: str, top_k: int = 5, user_id: Optional[str] = None, user_role: Optional[str] = "employee") -> List[RetrievalResult]:
+    async def search(self, question: str, workspace_id: str, top_k: int = 5, user_id: Optional[str] = None, user_role: Optional[str] = "employee", context_files: Optional[List[str]] = None) -> List[RetrievalResult]:
         """
         Perform hybrid + graph search, rerank, and return top results.
         """
@@ -184,6 +184,29 @@ class Retriever:
             async with async_session() as session:
                 keywords = question.split()
                 filters = [DBChunk.content.ilike(f"%{kw}%") for kw in keywords if len(kw) > 3]
+                
+                # Context Files Explicit Fetch
+                if context_files:
+                    context_stmt = select(DBChunk).where(
+                        DBChunk.workspace_id == workspace_id,
+                        DBChunk.document_title.in_(context_files)
+                    ).limit(30)
+                    context_res = await session.execute(context_stmt)
+                    context_chunks = context_res.scalars().all()
+                    for c in context_chunks:
+                        keyword_results.append({
+                            "chunk_id": c.id,
+                            "text": c.content,
+                            "score": 10.0, # High base score to ensure it bypasses threshold
+                            "metadata": {
+                                "title": c.document_title,
+                                "source_url": c.source_url,
+                                "content_tier": c.tier,
+                                "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
+                                "heading_path": c.heading_path or [],
+                                "is_context_file": True
+                            }
+                        })
 
                 if filters:
                     stmt = select(DBChunk).where(
@@ -193,8 +216,11 @@ class Retriever:
                     res = await session.execute(stmt)
                     db_chunks = res.scalars().all()
 
-                    keyword_results = [
-                        {
+                    for c in db_chunks:
+                        # Prevent duplicate insertion if it was already fetched by context_files
+                        if context_files and c.document_title in context_files:
+                            continue
+                        keyword_results.append({
                             "chunk_id": c.id,
                             "text": c.content,
                             "metadata": {
@@ -202,11 +228,10 @@ class Retriever:
                                 "source_url": c.source_url,
                                 "content_tier": c.tier,
                                 "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
-                                "heading_path": c.heading_path or []
+                                "heading_path": c.heading_path or [],
+                                "is_context_file": False
                             }
-                        }
-                        for c in db_chunks
-                    ]
+                        })
             span.set_attribute("keyword_results_count", len(keyword_results))
 
             # 6. Reciprocal Rank Fusion (RRF)

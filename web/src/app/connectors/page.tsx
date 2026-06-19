@@ -730,7 +730,13 @@ function ConnectorsContent() {
             void fetchConnectors();
             setNotification({ type: "success", message: "Sync started in background." });
           }}
-          initialConnectorId={connectors.find((c) => c.type.toLowerCase() === setupSource.toLowerCase())?.id}
+          initialConnectorId={(() => {
+            const conn = connectors.find((c) => c.type.toLowerCase() === setupSource.toLowerCase());
+            if (conn && (conn.status === "error" || conn.latest_sync?.status === "failed")) {
+              return undefined;
+            }
+            return conn?.id;
+          })()}
         />
       )}
     </div>

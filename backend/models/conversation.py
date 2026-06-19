@@ -13,7 +13,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
+    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False, index=True)
     
     title = Column(String, default="New Conversation")
     created_at = Column(DateTime, default=datetime.utcnow)

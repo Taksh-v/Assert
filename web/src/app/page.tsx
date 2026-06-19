@@ -13,6 +13,8 @@ import {
   Cpu,
   Paperclip,
   UploadCloud,
+  FileText,
+  CheckCircle2
 } from "lucide-react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
@@ -96,8 +98,8 @@ export default function ChatPage() {
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [user, setUser] = useState(getCurrentUser());
   const [activeWorkspace, setActiveWorkspace] = useState(getActiveWorkspace());
+  const [uploadedSessionFiles, setUploadedSessionFiles] = useState<{name: string, status: 'processing' | 'ready'}[]>([]);
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // AppShell is the single source of truth for auth. This page only renders
   // when AppShell has already confirmed the user is authenticated and workspace
@@ -114,6 +116,7 @@ export default function ChatPage() {
     setIsUploading(true);
     setUploadingFileName(file.name);
     setUploadStatus(null);
+    setUploadedSessionFiles(prev => [...prev, { name: file.name, status: 'processing' }]);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -136,7 +139,10 @@ export default function ChatPage() {
       toast.success(`"${file.name}" is being processed!`);
       
       // Auto-clear success message after 5 seconds
-      setTimeout(() => setUploadStatus(null), 5000);
+      setTimeout(() => {
+        setUploadStatus(null);
+        setUploadedSessionFiles(prev => prev.map(f => f.name === file.name ? { ...f, status: 'ready' } : f));
+      }, 5000);
       
       // Refresh connectors to show new document count if needed
       const connectorsResponse = await apiFetch(`/api/connectors?workspace_id=${activeWorkspace.id}`);
@@ -150,7 +156,8 @@ export default function ChatPage() {
       toast.error(errorMsg);
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      const el = document.getElementById("chat-file-upload") as HTMLInputElement;
+      if (el) el.value = "";
     }
   };
 
@@ -207,34 +214,27 @@ export default function ChatPage() {
         setDashboardLoading(true);
       }
 
-      // 1. Fetch connectors (resolves instantly)
-      apiFetch(`/api/connectors?workspace_id=${currentWs.id}`)
-        .then(async (res) => {
-          if (res.ok && !cancelled) {
-            const nextConnectors = await res.json() as Connector[];
-            setConnectors(nextConnectors);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to load connectors", err);
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setDashboardLoading(false);
-          }
-        });
+      // Fire BOTH requests in true parallel — neither blocks the other
+      const [connectorsResult, healthResult] = await Promise.allSettled([
+        apiFetch(`/api/connectors?workspace_id=${currentWs.id}`),
+        apiFetch("/api/health"),
+      ]);
 
-      // 2. Fetch health in the background (slower Qdrant check)
-      apiFetch("/api/health")
-        .then(async (res) => {
-          if (res.ok && !cancelled) {
-            const nextHealth = await res.json() as HealthResponse;
-            setHealth(nextHealth);
-          }
-        })
-        .catch((err) => {
-          console.error("Failed to load health status", err);
-        });
+      if (!cancelled) {
+        // Process connectors result
+        if (connectorsResult.status === "fulfilled" && connectorsResult.value.ok) {
+          const nextConnectors = await connectorsResult.value.json() as Connector[];
+          setConnectors(nextConnectors);
+        }
+
+        // Process health result
+        if (healthResult.status === "fulfilled" && healthResult.value.ok) {
+          const nextHealth = await healthResult.value.json() as HealthResponse;
+          setHealth(nextHealth);
+        }
+
+        setDashboardLoading(false);
+      }
     }
 
     void loadDashboard();
@@ -290,6 +290,9 @@ export default function ChatPage() {
 
       const data = await response.json();
       sessionStorage.setItem("assest_pending_query", textToSend);
+      if (uploadedSessionFiles.length > 0) {
+        sessionStorage.setItem("assest_pending_files", JSON.stringify(uploadedSessionFiles));
+      }
       window.dispatchEvent(new Event(CONVERSATIONS_CHANGE_EVENT));
       router.push(`/chat/${data.id}`);
     } catch (error) {
@@ -377,6 +380,23 @@ export default function ChatPage() {
                   </div>
                 )}
                 
+                {/* Session Files Context Chips */}
+                {uploadedSessionFiles.length > 0 && (
+                  <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-2 border-b border-[var(--border-subtle)]/30 scrollbar-hide">
+                    {uploadedSessionFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-root)] shadow-sm shrink-0">
+                        <FileText className="h-3 w-3 text-[var(--accent)]" />
+                        <span className="text-[11px] font-medium text-[var(--text-primary)] max-w-[150px] truncate">{f.name}</span>
+                        {f.status === 'processing' ? (
+                          <Loader2 className="h-3 w-3 animate-spin text-[var(--text-muted)]" />
+                        ) : (
+                          <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
                 <textarea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
@@ -389,7 +409,7 @@ export default function ChatPage() {
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)]/40 pt-3 relative z-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <input {...getInputProps()} ref={fileInputRef} className="hidden" />
+                    <input {...getInputProps()} id="chat-file-upload" className="hidden" />
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

@@ -38,6 +38,7 @@ class QueryRequest(BaseModel):
     conversation_id: Optional[str] = None
     response_format: str = "markdown"
     reasoning_mode: bool = False
+    context_files: Optional[List[str]] = None
 
 
 class Source(BaseModel):
@@ -85,6 +86,7 @@ async def query_knowledge_base(
                 conversation_id=query_req.conversation_id,
                 reasoning_mode=query_req.reasoning_mode,
                 request_id=request_id,
+                context_files=query_req.context_files,
             )
 
             return QueryResponse(
@@ -129,6 +131,7 @@ async def query_knowledge_base_stream(
             conversation_id=query_req.conversation_id,
             reasoning_mode=query_req.reasoning_mode,
             request_id=request_id,
+            context_files=query_req.context_files,
         ),
         media_type="text/event-stream"
     )

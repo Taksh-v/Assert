@@ -29,7 +29,7 @@ class Connector(Base):
     __tablename__ = "connectors"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False)
+    workspace_id = Column(String, ForeignKey("workspaces.id"), nullable=False, index=True)
     type = Column(Enum(ConnectorType, name="connectortype"), nullable=False)
     config = Column(JSON, nullable=False)  # Encrypted configuration
     status = Column(Enum(ConnectorStatus, name="connectorstatus"), default=ConnectorStatus.ACTIVE)

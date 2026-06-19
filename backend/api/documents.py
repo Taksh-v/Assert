@@ -2,7 +2,9 @@ import logging
 import os
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from backend.core.database import get_db
 from backend.api.users import get_current_user
@@ -11,7 +13,7 @@ from backend.api.connectors import verify_workspace_access
 from backend.ingestion.pipeline import IngestionPipeline
 from pydantic import BaseModel
 
-router = APIRouter(tags=["Documents"])
+router = APIRouter(prefix="/documents", tags=["Documents"])
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,19 @@ class DocumentUploadResponse(BaseModel):
     document_id: Optional[str] = None
     title: str
     metadata: Dict[str, Any] = {}
+
+
+class DocumentListResponse(BaseModel):
+    id: str
+    title: Optional[str] = None
+    document_type: Optional[str] = None
+    source_url: str
+    chunk_count: int
+    last_ingested_at: datetime
+    is_active: bool
+
+    class Config:
+        from_attributes = True
 
 
 async def run_ingestion_background(raw_doc: dict, workspace_id: str):
@@ -129,3 +144,26 @@ async def upload_document(
         title=file.filename,
         metadata={}
     )
+
+
+@router.get("/workspace/{workspace_id}", response_model=list[DocumentListResponse])
+async def list_workspace_documents(
+    workspace_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List all documents ingested into a specific workspace.
+    """
+    resolved_workspace_id = await verify_workspace_access(workspace_id, db, current_user)
+    
+    from backend.models.document import Document
+    stmt = select(Document).where(
+        Document.workspace_id == resolved_workspace_id,
+        Document.is_active == True
+    ).order_by(Document.last_ingested_at.desc())
+    
+    result = await db.execute(stmt)
+    documents = result.scalars().all()
+    
+    return documents

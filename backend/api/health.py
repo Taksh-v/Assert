@@ -28,6 +28,7 @@ async def health_check():
     """
     Comprehensive Brain Health Check.
     Verifies Sensory, Attention, and Executive layer connectivity.
+    All checks run in parallel for minimum latency.
     """
     health = {
         "status": "healthy",
@@ -40,55 +41,56 @@ async def health_check():
         }
     }
 
-    # 1. Check Executive Layer (LLM Proxy)
-    try:
-        # Just check if we can instantiate the client (it's fast)
-        # We avoid a real ping here to keep it fast
-        client = LLMClient()
-        health["layers"]["executive"]["status"] = "connected"
-    except Exception:
-        health["layers"]["executive"]["status"] = "offline"
+    async def check_executive():
+        """Check Executive Layer (LLM Proxy) — fast instantiation check."""
+        try:
+            LLMClient()
+            health["layers"]["executive"]["status"] = "connected"
+        except Exception:
+            health["layers"]["executive"]["status"] = "offline"
 
-    # 2 & 4. Check Attention (Vector Store) and Cache (Semantic Cache) Layers
-    try:
-        from backend.core.vector_store import get_qdrant_client_ctx
-        from backend.query.semantic_cache import CACHE_COLLECTION_NAME
-        with get_qdrant_client_ctx() as client:
-            if client:
-                health["layers"]["attention"]["status"] = "connected"
-                # Check cache layer within the same connection to avoid file lock contention
-                try:
-                    collections = client.get_collections().collections
-                    exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
-                    health["layers"]["cache"]["status"] = "connected" if exists else "offline"
-                except Exception:
+    async def check_attention_and_cache():
+        """Check Attention (Vector Store) and Cache (Semantic Cache) Layers."""
+        try:
+            from backend.core.vector_store import get_qdrant_client_ctx
+            from backend.query.semantic_cache import CACHE_COLLECTION_NAME
+            with get_qdrant_client_ctx() as client:
+                if client:
+                    health["layers"]["attention"]["status"] = "connected"
+                    try:
+                        collections = client.get_collections().collections
+                        exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
+                        health["layers"]["cache"]["status"] = "connected" if exists else "offline"
+                    except Exception:
+                        health["layers"]["cache"]["status"] = "offline"
+                else:
+                    health["layers"]["attention"]["status"] = "offline"
                     health["layers"]["cache"]["status"] = "offline"
-            else:
-                health["layers"]["attention"]["status"] = "offline"
-                health["layers"]["cache"]["status"] = "offline"
-    except Exception:
-        health["layers"]["attention"]["status"] = "error"
-        health["layers"]["cache"]["status"] = "offline"
+        except Exception:
+            health["layers"]["attention"]["status"] = "error"
+            health["layers"]["cache"]["status"] = "offline"
 
-    # 3. Check Memory Layer (Postgres)
-    try:
-        # Use a short timeout for the DB check
-        async with async_session() as session:
-            await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=8.0)
-            health["layers"]["memory"]["status"] = "connected"
-            
-            # Count users for provisioning verification
-            user_count = (await session.execute(text("SELECT count(*) FROM users"))).scalar()
-            ws_count = (await session.execute(text("SELECT count(*) FROM workspaces"))).scalar()
-            health["layers"]["memory"]["provisioned"] = {
-                "users": user_count,
-                "workspaces": ws_count
-            }
-    except Exception as e:
-        health["layers"]["memory"]["status"] = f"offline: {str(e)}"
+    async def check_memory():
+        """Check Memory Layer (Postgres) — reduced 3s timeout, no COUNT(*)."""
+        try:
+            async with async_session() as session:
+                await asyncio.wait_for(session.execute(text("SELECT 1")), timeout=3.0)
+                health["layers"]["memory"]["status"] = "connected"
+        except Exception as e:
+            health["layers"]["memory"]["status"] = f"offline: {str(e)}"
+
+    # Run all checks concurrently
+    await asyncio.gather(
+        check_executive(),
+        check_attention_and_cache(),
+        check_memory(),
+        return_exceptions=True
+    )
 
     # Overall Status
-    if any(l["status"] == "offline" for l in health["layers"].values()):
+    if any(l["status"] == "offline" or l["status"].startswith("offline:") 
+           for l in health["layers"].values() 
+           if isinstance(l["status"], str)):
         health["status"] = "degraded"
         
     return health

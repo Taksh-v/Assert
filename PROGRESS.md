@@ -232,4 +232,14 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Import and Error Hardening**: Wrapped optional libraries (`easyocr`, `whisper`) in clean exception-trapping blocks so missing runtime dependencies don't crash background workers.
 - [x] **Testing and Verification**: Created 4 unit tests in `backend/tests/test_document_upload.py` to assert upload size enforcement, Word Document parsing logic, and graceful fallback handling, and successfully ran the tests with a 100% pass rate.
 
+### 77. Phase 76: Startup Load Time Optimization — [VERIFIED]
+- [x] **N+1 Query Elimination (B1)**: Replaced the per-connector `_latest_sync_for_connector()` loop in `GET /connectors` with a single batched SQL query using a subquery + join pattern, reducing database round trips from N+1 to exactly 2 constant queries regardless of connector count.
+- [x] **In-Memory User Cache (B3)**: Added a 60-second TTL LRU cache (max 200 entries) in `get_current_user()` (`backend/api/users.py`) keyed by `supabase_id`, eliminating redundant database lookups on every authenticated request within the same minute. Also replaced the verbose `print()` debug statement with a proper `logger.debug()` call.
+- [x] **Parallel Health Checks (B4)**: Refactored `GET /health` to run all three layer checks (LLM, Qdrant, Postgres) concurrently via `asyncio.gather()` instead of sequentially. Removed heavy `COUNT(*)` queries on `users` and `workspaces` tables from the health endpoint (kept in `/health/db-stats`). Reduced Postgres health timeout from 8s to 3s.
+- [x] **Missing Database Indexes (B5)**: Added `index=True` on `workspace_id` columns in both `Conversation` and `Connector` models, and added `sync_runs.connector_id` to the auto-migration index list in `backend/core/migrations.py`.
+- [x] **Parallel Frontend Fetching (B6)**: Replaced sequential fire-and-forget fetch calls in `page.tsx` with `Promise.allSettled()` to launch connectors and health requests simultaneously.
+- [x] **Instant Auth Check (B7)**: Optimized `isAuthenticated()` in `auth.ts` to use raw `localStorage.getItem()` key-existence checks instead of `JSON.parse`, making the common-case auth verification synchronous and zero-cost.
+- [x] **Production Log Gating (B8)**: Gated all verbose `console.log` proxy debug statements in `route.ts` behind `process.env.NODE_ENV !== "production"` to eliminate I/O backpressure in Vercel deployments.
+- [x] **Verification**: TypeScript typecheck passed (0 errors), Python import validation passed, and all 5 auth/health backend tests passed successfully.
+
 

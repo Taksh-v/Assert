@@ -154,28 +154,58 @@ def serialize_sync_run_response(sync_run: SyncRun) -> SyncRunResponse:
 
 def serialize_connector(connector: Connector, latest_sync: Optional[SyncRun] = None) -> ConnectorResponse:
     # Decrypt config for internal use, but safe summary filters it
+    decryption_failed = False
     try:
         config = decrypt_config(connector.config)
         if not isinstance(config, dict):
             config = {}
-    except:
+            decryption_failed = True
+    except Exception:
         config = {}
+        decryption_failed = True
         
     # Safe summary: expose non-sensitive config fields only
     safe_keys = {"workspace_name", "team_name", "folder_id", "channels", "oauth", "direct_token"}
+    config_summary = {
+        key: value
+        for key, value in config.items()
+        if key in safe_keys
+    }
+    if decryption_failed:
+        config_summary["decryption_failed"] = True
+
+    status = getattr(connector.status, "value", connector.status)
+    if decryption_failed:
+        status = "error"
+
+    sync_summary = serialize_sync_run(latest_sync)
+    if decryption_failed:
+        decryption_error_msg = (
+            "Config decryption failed: Failed to decrypt connector configuration. "
+            "The config may be corrupted or the encryption key may have changed. "
+            "Re-authenticate the connector to fix this."
+        )
+        if not sync_summary:
+            sync_summary = SyncRunSummary(
+                id="decryption-failed-placeholder",
+                status="failed",
+                triggered_by="system",
+                error=decryption_error_msg,
+                created_at=datetime.utcnow()
+            )
+        elif not sync_summary.error:
+            sync_summary.error = decryption_error_msg
+            sync_summary.status = "failed"
+
     return ConnectorResponse(
         id=connector.id,
         workspace_id=connector.workspace_id,
         type=connector.type,
-        status=getattr(connector.status, "value", connector.status),
+        status=status,
         last_synced_at=connector.last_synced_at,
         created_at=connector.created_at,
-        config_summary={
-            key: value
-            for key, value in config.items()
-            if key in safe_keys
-        },
-        latest_sync=serialize_sync_run(latest_sync),
+        config_summary=config_summary,
+        latest_sync=sync_summary,
     )
 
 
@@ -241,16 +271,44 @@ async def list_connectors(
 ):
     """
     List all connectors for a workspace.
+    Uses a batched query for latest sync runs to avoid N+1.
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, func
 
     stmt = select(Connector).where(Connector.workspace_id == workspace_id)
     result = await db.execute(stmt)
     connectors = result.scalars().all()
     
+    if not connectors:
+        return []
+
+    # Batch fetch: get the latest sync run for ALL connectors in 1 query
+    # Subquery finds max(created_at) per connector_id
+    connector_ids = [c.id for c in connectors]
+    latest_subq = (
+        select(
+            SyncRun.connector_id,
+            func.max(SyncRun.created_at).label("max_created")
+        )
+        .where(SyncRun.connector_id.in_(connector_ids))
+        .group_by(SyncRun.connector_id)
+        .subquery()
+    )
+    # Join back to get the full SyncRun rows
+    sync_stmt = (
+        select(SyncRun)
+        .join(
+            latest_subq,
+            (SyncRun.connector_id == latest_subq.c.connector_id)
+            & (SyncRun.created_at == latest_subq.c.max_created)
+        )
+    )
+    sync_result = await db.execute(sync_stmt)
+    sync_runs_by_connector = {sr.connector_id: sr for sr in sync_result.scalars().all()}
+
     responses = []
     for connector in connectors:
-        responses.append(serialize_connector(connector, await _latest_sync_for_connector(db, connector.id)))
+        responses.append(serialize_connector(connector, sync_runs_by_connector.get(connector.id)))
     return responses
 
 
@@ -326,14 +384,15 @@ async def discover_source_content(
 
     try:
         conn_impl = connector_factory.create(connector_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Discovery not supported for this type")
 
+    try:
         # Use decrypted config for connection
         config = decrypt_config(connector.config)
         connection = await conn_impl.connect(config)
         items = await conn_impl.list_resources(connection)
         return {"items": items, "total": len(items)}
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Discovery not supported for this type")
     except ConnectionError as e:
         logger.error(f"Discovery failed — connection error: {e}")
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")

@@ -2,17 +2,24 @@ import logging
 import os
 import secrets
 import asyncio
+import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from jose import jwt, JWTError
 from datetime import datetime
 
 _jwks_cache = None
 _jwks_lock = asyncio.Lock()
+
+# In-memory user cache: supabase_id -> (User, timestamp)
+# Avoids DB round-trip on every authenticated request
+_USER_CACHE: dict[str, Tuple] = {}
+_USER_CACHE_TTL = 60  # seconds
+_USER_CACHE_MAX_SIZE = 200
 
 async def get_jwks(supabase_url: str, supabase_anon_key: str) -> dict:
     global _jwks_cache
@@ -93,7 +100,7 @@ async def get_current_user(
             # PRE-CHECK: Algorithm
             header = jwt.get_unverified_header(token)
             alg = header.get("alg")
-            print(f"DEBUG: Checking {label} (start: {token[:10]}..., alg: {alg})")
+            logger.debug("Checking %s (start: %s..., alg: %s)", label, token[:10], alg)
             
             # Skip check if algorithm is not supported
             if alg not in ("HS256", "RS256", "ES256"):
@@ -133,7 +140,19 @@ async def get_current_user(
             email = payload.get("email")
             
             if supabase_id and email:
-                # FOUND IT! Sync user
+                # Fast path: check in-memory cache first
+                cached = _USER_CACHE.get(supabase_id)
+                if cached:
+                    cached_user, cached_at = cached
+                    if time.monotonic() - cached_at < _USER_CACHE_TTL:
+                        if cached_user.is_active:
+                            return cached_user
+                        else:
+                            raise HTTPException(status_code=403, detail="Account disabled")
+                    else:
+                        del _USER_CACHE[supabase_id]
+
+                # DB lookup
                 stmt = select(User).where(User.supabase_id == supabase_id)
                 result = await db.execute(stmt)
                 user = result.scalars().first()
@@ -168,8 +187,15 @@ async def get_current_user(
                     await db.commit()
                     await db.refresh(user)
                 
-                if user.is_active: return user
-                else: raise HTTPException(status_code=403, detail="Account disabled")
+                if user.is_active:
+                    # Populate cache (evict oldest if over limit)
+                    if len(_USER_CACHE) >= _USER_CACHE_MAX_SIZE:
+                        oldest_key = min(_USER_CACHE, key=lambda k: _USER_CACHE[k][1])
+                        del _USER_CACHE[oldest_key]
+                    _USER_CACHE[supabase_id] = (user, time.monotonic())
+                    return user
+                else:
+                    raise HTTPException(status_code=403, detail="Account disabled")
                     
         except JWTError as e:
             best_error = f"JWT Invalid on {label}: {str(e)}"

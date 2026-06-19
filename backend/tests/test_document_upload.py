@@ -34,8 +34,7 @@ def test_document_upload_async():
         # Create a mock file
         files = {"file": ("readme.md", b"Mock Markdown Content", "text/markdown")}
         data = {"workspace_id": "ws123"}
-
-        response = client.post("/upload", files=files, data=data)
+        response = client.post("/documents/upload", files=files, data=data)
 
         # Assert status code is 202 Accepted
         assert response.status_code == 202
@@ -74,8 +73,7 @@ def test_document_upload_size_limit():
         large_content = b"x" * (11 * 1024 * 1024)
         files = {"file": ("large.txt", large_content, "text/plain")}
         data = {"workspace_id": "ws123"}
-
-        response = client.post("/upload", files=files, data=data)
+        response = client.post("/documents/upload", files=files, data=data)
         assert response.status_code == 413
         assert "File size exceeds the maximum limit" in response.json()["detail"]
 

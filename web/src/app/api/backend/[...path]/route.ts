@@ -4,6 +4,8 @@ import { getServerBackendUrl } from "@/lib/config";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const IS_DEV = process.env.NODE_ENV !== "production";
+
 type BackendRouteContext = {
   params: Promise<{ path?: string[] }>;
 };
@@ -35,7 +37,7 @@ function buildBackendUrl(pathSegments: string[] = [], search: string, request: N
   let tokenParam = "";
   if (auth) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
-    console.log(`[Proxy] Forwarding token (start: ${token.slice(0, 10)}...) as query params`);
+    if (IS_DEV) console.log(`[Proxy] Forwarding token (start: ${token.slice(0, 10)}...) as query params`);
     const separator = search ? "&" : (search.includes("?") ? "&" : "?");
     tokenParam = `${separator}supabase_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(token)}`;
   }
@@ -51,13 +53,13 @@ function buildForwardHeaders(request: NextRequest) {
   if (auth) {
     headers.set("x-user-authorization", auth);
     const clean = auth.startsWith("Bearer ") ? auth.slice(7) : auth;
-    console.log(`[Proxy] Incoming User Token (start: ${clean.slice(0, 10)}...)`);
+    if (IS_DEV) console.log(`[Proxy] Incoming User Token (start: ${clean.slice(0, 10)}...)`);
   }
   
   const supToken = request.headers.get("x-supabase-token");
   if (supToken) {
       headers.set("x-supabase-token", supToken);
-      console.log(`[Proxy] Incoming Custom Header Token (start: ${supToken.slice(0, 10)}...)`);
+      if (IS_DEV) console.log(`[Proxy] Incoming Custom Header Token (start: ${supToken.slice(0, 10)}...)`);
   }
 
   for (const header of HOP_BY_HOP_HEADERS) {
@@ -74,7 +76,7 @@ function buildForwardHeaders(request: NextRequest) {
 
   const hfToken = process.env.HF_TOKEN;
   if (hfToken) {
-    console.log(`[Proxy] Injecting HF_TOKEN (start: ${hfToken.slice(0, 10)}...)`);
+    if (IS_DEV) console.log(`[Proxy] Injecting HF_TOKEN (start: ${hfToken.slice(0, 10)}...)`);
     headers.set("authorization", `Bearer ${hfToken}`);
   }
 
@@ -97,7 +99,7 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
     const method = request.method.toUpperCase();
     const hasBody = method !== "GET" && method !== "HEAD";
 
-    console.log(`[Proxy] ${method} -> ${targetUrl}`);
+    if (IS_DEV) console.log(`[Proxy] ${method} -> ${targetUrl}`);
 
     let bodyBuffer: ArrayBuffer | undefined = undefined;
     if (hasBody) {
@@ -112,7 +114,7 @@ async function proxyBackend(request: NextRequest, context: BackendRouteContext) 
         cache: "no-store",
       });
 
-      console.log(`[Proxy] Backend Response: ${upstream.status}`);
+      if (IS_DEV) console.log(`[Proxy] Backend Response: ${upstream.status}`);
 
       return new Response(upstream.body, {
         status: upstream.status,
