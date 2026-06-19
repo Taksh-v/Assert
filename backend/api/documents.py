@@ -73,7 +73,9 @@ async def run_ingestion_background(raw_doc: dict, workspace_id: str):
 
     pipeline = IngestionPipeline()
     try:
-        await pipeline.runner.process(raw_doc, workspace_id)
+        import types
+        raw_doc_obj = types.SimpleNamespace(**raw_doc)
+        await pipeline.runner.process(raw_doc_obj, workspace_id)
         logger.info(f"Successfully finished background document ingestion for: {raw_doc.get('title')}")
     except Exception as e:
         logger.exception(f"Background document ingestion failed for {raw_doc.get('title')}: {e}")
