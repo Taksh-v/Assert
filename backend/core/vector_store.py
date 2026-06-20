@@ -190,7 +190,25 @@ class VectorStore:
                 collections = client.get_collections().collections
                 exists = any(c.name == target_collection for c in collections)
                 
-                if not exists:
+                recreate = False
+                if exists and target_collection == settings.qdrant_collection_name:
+                    try:
+                        col_info = client.get_collection(target_collection)
+                        vectors_obj = col_info.config.params.vectors
+                        if not isinstance(vectors_obj, dict) or "title" not in vectors_obj:
+                            logger.warning(f"Collection {target_collection} is single-vector but needs Named Vectors. Re-creating...")
+                            recreate = True
+                    except Exception as ve:
+                        logger.error(f"Failed to inspect collection {target_collection}: {ve}")
+
+                if not exists or recreate:
+                    if recreate:
+                        try:
+                            client.delete_collection(target_collection)
+                            logger.info(f"Deleted old single-vector collection: {target_collection}")
+                        except Exception as de:
+                            logger.error(f"Failed to delete collection {target_collection}: {de}")
+                    
                     logger.info(f"Creating collection: {target_collection}")
                     
                     if target_collection == settings.qdrant_collection_name:
@@ -208,15 +226,23 @@ class VectorStore:
                         collection_name=target_collection,
                         vectors_config=vectors_config,
                     )
-                
-                    # Create common payload indexes
-                    client.create_payload_index(
-                        collection_name=target_collection,
-                        field_name="workspace_id",
-                        field_schema=self._models.PayloadSchemaType.KEYWORD,
-                    )
+
+                # Ensure payload indexes are created (best effort, try-except wrapped)
+                for field, schema in [
+                    ("workspace_id", self._models.PayloadSchemaType.KEYWORD),
+                    ("is_active", self._models.PayloadSchemaType.BOOL),
+                    ("title", self._models.PayloadSchemaType.KEYWORD)
+                ]:
+                    try:
+                        client.create_payload_index(
+                            collection_name=target_collection,
+                            field_name=field,
+                            field_schema=schema,
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
-                logger.error(f"Collection creation failed for {target_collection}: {e}")
+                logger.error(f"Collection creation/indexing failed for {target_collection}: {e}")
     
 
     # Add retry wrapper to reduce transient failures during collection creation
