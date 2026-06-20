@@ -204,6 +204,14 @@ class Settings(BaseSettings):
         default=0.82,
         description="If top retrieval confidence is above this threshold, skip CRAG verification",
     )
+    enable_contextual_retrieval: bool = Field(
+        default=False,
+        description="Enable generating contextualized chunk summaries via LLM on ingestion",
+    )
+    enable_query_decomposition: bool = Field(
+        default=False,
+        description="Enable decomposing compound queries into sub-queries",
+    )
 
     # ── Worker Pool ──────────────────────────────────────
     enable_workers: bool = Field(default=True)

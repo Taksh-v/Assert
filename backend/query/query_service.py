@@ -27,6 +27,7 @@ from backend.query.adaptive_router import AdaptiveRouter, RouteDecision
 from backend.query.crag_verifier import CRAGVerifier, KnowledgeGapHandler
 from backend.query.generator import Generator, Answer
 from backend.query.retriever import Retriever
+from backend.query.citation_validator import CitationValidator
 from backend.query.resolution import (
     QueryResult,
     QueryResolutionPlan,
@@ -49,6 +50,8 @@ from backend.core import metrics
 settings = get_settings()
 
 
+from backend.core.llm_client import LLMClient
+
 class QueryService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -58,6 +61,7 @@ class QueryService:
         self.crag = CRAGVerifier()
         self.gap_handler = KnowledgeGapHandler()
         self.generator = Generator()
+        self.llm = LLMClient(model_type="fast")
         self._reasoning_orchestrator = None
 
     def _get_reasoning_orchestrator(self):
@@ -565,13 +569,52 @@ class QueryService:
         value_filter = ValueAlignmentFilter()
         answer.answer_text = await value_filter.filter_values(question, answer.answer_text)
 
+        # SOTA Critic & Self-Correction retry loop (Verify claims and citations)
+        validator = CitationValidator()
+        
+        context_chunks = [c.content for c in verified.verified_chunks]
+        context_str = "\n\n".join([f"Chunk {i+1}:\n{c}" for i, c in enumerate(context_chunks)])
+        
+        for attempt in range(2):
+            is_valid, violations = await validator.validate_answer(answer.answer_text, context_chunks)
+            if is_valid:
+                break
+                
+            logger.info(f"Self-correction: citation validator flagged {len(violations)} violations on attempt {attempt+1}. Rewriting...")
+            violations_text = "\n".join([f"- Sentence: \"{v['sentence']}\"\n  Citation: [{v['citation']}]\n  Problem: {v['reason']}" for v in violations])
+            
+            rewrite_prompt = f"""You are a precise citation corrector.
+The user asked: "{question}"
+Here are the referenced context chunks:
+{context_str}
+
+The system generated this answer which contains citation errors (i.e. claims not supported by the cited chunk):
+"{answer.answer_text}"
+
+The following citation errors/hallucinations were found:
+{violations_text}
+
+Please rewrite the answer to correct all citation errors. Ensure that every statement containing a citation [N] is fully and directly supported by Chunk N. If a statement cannot be supported by any chunk, modify or remove the statement. Output only the corrected answer text and nothing else.
+"""
+            try:
+                corrected_text = await self.llm.chat_completion(
+                    system_prompt="You are a precise citation corrector. Output ONLY the corrected response.",
+                    user_prompt=rewrite_prompt,
+                    temperature=0.1,
+                    max_tokens=512,
+                    prompt_cache_key="citation_corrector:v1"
+                )
+                answer.answer_text = await value_filter.filter_values(question, corrected_text.strip())
+            except Exception as e:
+                logger.warning(f"Self-correction rewrite attempt {attempt+1} failed: {e}")
+                break
 
         # Run evaluations only when policy allows them.
         if self._should_run_quality_eval(verified.grounding_score):
             from backend.query.evaluators import evaluate_faithfulness, evaluate_relevance
 
-            context_str = "\n\n".join([c.content for c in verified.verified_chunks])
-            faith_task = evaluate_faithfulness(context_str, answer.answer_text)
+            context_eval_str = "\n\n".join([c.content for c in verified.verified_chunks])
+            faith_task = evaluate_faithfulness(context_eval_str, answer.answer_text)
             relevance_task = evaluate_relevance(question, answer.answer_text)
             faith_eval, relevance_eval = await asyncio.gather(faith_task, relevance_task)
 

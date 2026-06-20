@@ -30,7 +30,11 @@ def reset_litellm_state():
 @pytest.fixture
 def mock_vector_store():
     with patch("backend.query.semantic_cache.VectorStore") as MockVS:
-        yield MockVS.return_value
+        vs = MockVS.return_value
+        async def mock_async_search(*args, **kwargs):
+            return vs.search(*args, **kwargs)
+        vs.async_search = mock_async_search
+        yield vs
 
 @pytest.fixture
 def mock_embedder():

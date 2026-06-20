@@ -95,7 +95,53 @@ class ResearcherAgent:
                     )
 
                     # Use only verified chunks
-                    verified_chunks = verified.verified_chunks
+                    verified_chunks = list(verified.verified_chunks)
+
+                    # --- SOTA ACTIVE RECURSIVE RETRIEVAL ---
+                    # Scan verified chunks for cross-reference document names or entities
+                    import re
+                    detected_references = set()
+
+                    doc_pattern = re.compile(r"(?i)(?:see|refer to|in|read)\s+[\"']?([A-Za-z0-9_\-\.]{3,30}\.(?:pdf|docx|txt|md))[\"']?")
+                    entity_pattern = re.compile(r"\b([A-Z][a-zA-Z0-9_\-]{2,20}(?:\s+[A-Z][a-zA-Z0-9_\-]{2,20})+)\b")
+
+                    for vc in verified_chunks:
+                        # Extract document pattern matches
+                        for doc_match in doc_pattern.findall(vc.content):
+                            detected_references.add(doc_match.strip())
+                        # Extract capitalized entity/title pattern matches
+                        for ent_match in entity_pattern.findall(vc.content):
+                            # Skip common capitalized words that aren't specific entities
+                            if not any(stopword in ent_match.lower() for stopword in ["the ", "this ", "company"]):
+                                detected_references.add(ent_match.strip())
+
+                    # Bound the recursion: max 3 unique references
+                    refs_to_fetch = list(detected_references)[:3]
+                    if refs_to_fetch:
+                        logger.info(f"Recursive retrieval triggered for references: {refs_to_fetch}")
+                        for ref in refs_to_fetch:
+                            try:
+                                sec_results = await self._retriever.search(
+                                    question=ref,
+                                    workspace_id=workspace_id,
+                                    top_k=2,
+                                    user_id=user_id,
+                                    user_role=user_role
+                                )
+                                if sec_results:
+                                    sec_verified = await self._crag.verify(
+                                        question=ref,
+                                        chunks=sec_results,
+                                        workspace_id=workspace_id,
+                                    )
+                                    for svc in sec_verified.verified_chunks:
+                                        # Avoid adding duplicate chunks
+                                        if not any(existing.chunk_id == svc.chunk_id for existing in verified_chunks):
+                                            verified_chunks.append(svc)
+                            except Exception as re_err:
+                                logger.warning(f"Failed to fetch recursive reference '{ref}': {re_err}")
+                    # ----------------------------------------
+
                     if verified_chunks:
                         evidence_parts = []
                         for vc in verified_chunks:
@@ -111,7 +157,7 @@ class ResearcherAgent:
                                 "score": vc.score,
                             })
                         evidence_content = "\n\n---\n\n".join(evidence_parts)
-                        evidence_source = f"retrieval_verified (grounding: {verified.grounding_score:.2f})"
+                        evidence_source = f"retrieval_verified (grounding: {verified.grounding_score:.2f}, recursive_refs: {len(refs_to_fetch)})"
                     else:
                         evidence_content = (
                             f"No verified evidence found for: {search_query}. "

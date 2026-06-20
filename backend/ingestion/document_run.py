@@ -21,6 +21,7 @@ from backend.models.chunk import Chunk as DBChunk
 from backend.models.document import Document
 from backend.models.knowledge_event import KnowledgeEvent
 from backend.ingestion.document_store import DocumentStore, SQLDocumentStore, VersionPlan
+from backend.ingestion.contextualizer import ChunkContextualizer
 
 logger = logging.getLogger(__name__)
 DEFAULT_EXTRACTOR = object()
@@ -306,29 +307,82 @@ class DocumentIngestionRun:
                     )
 
             chunks_data = self.chunker.chunk_elements(scrubbed_elements, doc_type="auto")
-            chunks = [c["content"] for c in chunks_data]
+            
+            # Hierarchical Parent-Child & Contextual Retrieval logic
+            contextualizer = ChunkContextualizer()
+            hierarchical_chunks = []
+            flat_child_chunks = []
+            doc_content = full_text
+            doc_title = normalized.title or raw_doc.title
+            
+            for c in chunks_data:
+                parent_text = c["raw_content"]
+                children_texts = c.get("children", [])
+                heading_path = c.get("heading_path", [])
+                chunk_type = c.get("type", "text")
+                structural_metadata = c.get("structural_metadata", {})
+                
+                hierarchical_children = []
+                for child_text in children_texts:
+                    if contextualizer.enabled:
+                        context = await contextualizer.contextualize(
+                            doc_title=doc_title,
+                            doc_content=doc_content,
+                            chunk_content=child_text
+                        )
+                        if context:
+                            contextualized_text = f"<context>\n{context}\n</context>\n{child_text}"
+                        else:
+                            contextualized_text = child_text
+                    else:
+                        contextualized_text = child_text
+                    
+                    hierarchical_children.append({
+                        "raw_content": child_text,
+                        "contextualized_content": contextualized_text
+                    })
+                    flat_child_chunks.append(contextualized_text)
+                    
+                hierarchical_chunks.append({
+                    "parent_content": parent_text,
+                    "heading_path": heading_path,
+                    "chunk_type": chunk_type,
+                    "structural_metadata": structural_metadata,
+                    "children": hierarchical_children
+                })
+
+            if not flat_child_chunks:
+                flat_child_chunks = [c["content"] for c in chunks_data]
+            chunks = flat_child_chunks
+
+            # Prepare child payloads
+            child_payloads = [
+                {
+                    "title": raw_doc.title,
+                    "source_url": raw_doc.source_url,
+                    "source_type": raw_doc.source_type,
+                    "content_tier": tier,
+                    "extracted_entities": [
+                        e.get("name") if isinstance(e, dict) else getattr(e, "name", str(e))
+                        for e in (resolved_entities or extracted_entities)
+                    ],
+                    "summary": enriched_metadata.get("summary", ""),
+                    "version": version_plan.current_version,
+                    "is_active": True,
+                }
+                for _ in range(len(chunks))
+            ]
 
             # Persist document and chunks via helper (centralised behaviour)
             doc_record = await self.persist_document_and_chunks(
-                raw_doc, workspace_id, connector_id, doc_type, getattr(raw_doc, "content_hash", str(hash(raw_content))), chunks, [
-                    {
-                        "title": raw_doc.title,
-                        "source_url": raw_doc.source_url,
-                        "source_type": raw_doc.source_type,
-                        "content_tier": tier,
-                        "extracted_entities": [e["name"] for e in (resolved_entities or extracted_entities)],
-                        "summary": enriched_metadata.get("summary", ""),
-                        "version": version_plan.current_version,
-                        "is_active": True,
-                    }
-                    for _ in range(len(chunks))
-                ],
+                raw_doc, workspace_id, connector_id, doc_type, getattr(raw_doc, "content_hash", str(hash(raw_content))), chunks, child_payloads,
                 version_plan,
                 tags=enriched_metadata.get("keywords", []),
+                hierarchical_chunks=hierarchical_chunks,
             )
 
             # Index embeddings (blocking embedder used deliberately via embed_multi)
-            self.embed_and_index(workspace_id, raw_doc, chunks, enriched_metadata, version=version_plan.current_version)
+            self.embed_and_index(workspace_id, raw_doc, chunks, enriched_metadata, version=version_plan.current_version, payloads=child_payloads)
 
             # Persist graph & events via helper
             extracted_events = enriched_metadata.get("events", [])
@@ -434,25 +488,73 @@ class DocumentIngestionRun:
             )
         return resolved
 
-    def chunk_and_prepare(self, scrubbed_elements, doc_type: str, raw_doc: Any, enriched_metadata, version):
+    async def chunk_and_prepare_hierarchical(self, scrubbed_elements, doc_type: str, raw_doc: Any, enriched_metadata, version, doc_title: str, doc_content: str):
         chunks_data = self.chunker.chunk_elements(scrubbed_elements, doc_type="auto")
-        chunks = [c["content"] for c in chunks_data]
+        
+        contextualizer = ChunkContextualizer()
+        hierarchical_chunks = []
+        flat_child_chunks = []
+        
+        for c in chunks_data:
+            parent_text = c["raw_content"]
+            children_texts = c.get("children", [])
+            heading_path = c.get("heading_path", [])
+            chunk_type = c.get("type", "text")
+            structural_metadata = c.get("structural_metadata", {})
+            
+            hierarchical_children = []
+            for child_text in children_texts:
+                if contextualizer.enabled:
+                    context = await contextualizer.contextualize(
+                        doc_title=doc_title,
+                        doc_content=doc_content,
+                        chunk_content=child_text
+                    )
+                    if context:
+                        contextualized_text = f"<context>\n{context}\n</context>\n{child_text}"
+                    else:
+                        contextualized_text = child_text
+                else:
+                    contextualized_text = child_text
+                
+                hierarchical_children.append({
+                    "raw_content": child_text,
+                    "contextualized_content": contextualized_text
+                })
+                flat_child_chunks.append(contextualized_text)
+                
+            hierarchical_chunks.append({
+                "parent_content": parent_text,
+                "heading_path": heading_path,
+                "chunk_type": chunk_type,
+                "structural_metadata": structural_metadata,
+                "children": hierarchical_children
+            })
+
+        if not flat_child_chunks:
+            flat_child_chunks = [c["content"] for c in chunks_data]
+            
+        chunks = flat_child_chunks
+        
         payloads = [
             {
                 "title": raw_doc.title,
                 "source_url": raw_doc.source_url,
                 "source_type": raw_doc.source_type,
                 "content_tier": getattr(raw_doc, "tier", 2),
-                "extracted_entities": [e["name"] for e in (enriched_metadata.get("entities", []) or [])],
+                "extracted_entities": [
+                    e.get("name") if isinstance(e, dict) else getattr(e, "name", str(e))
+                    for e in (enriched_metadata.get("entities", []) or [])
+                ],
                 "summary": enriched_metadata.get("summary", ""),
                 "version": version,
                 "is_active": True,
             }
-            for _ in range(len(chunks))
+            for _ in chunks
         ]
-        return chunks, payloads
+        return chunks, payloads, hierarchical_chunks
 
-    async def persist_document_and_chunks(self, raw_doc, workspace_id, connector_id, doc_type, content_hash, chunks, payloads, version_plan, tags: Optional[list] = None):
+    async def persist_document_and_chunks(self, raw_doc, workspace_id, connector_id, doc_type, content_hash, chunks, payloads, version_plan, tags: Optional[list] = None, hierarchical_chunks: Optional[list] = None):
         if tags is None:
             tags = []
         if hasattr(self.document_store, "persist_document_bundle"):
@@ -469,6 +571,7 @@ class DocumentIngestionRun:
                 previous_document_id=version_plan.previous_document_id,
                 chunks=chunks,
                 payloads=payloads,
+                hierarchical_chunks=hierarchical_chunks,
             )
 
         doc_record = await self.document_store.persist_document(
@@ -489,25 +592,28 @@ class DocumentIngestionRun:
             chunks=chunks,
             payloads=payloads,
             version=version_plan.current_version,
+            hierarchical_chunks=hierarchical_chunks,
         )
         return doc_record
 
-    def embed_and_index(self, workspace_id: str, raw_doc: Any, chunks, enriched_metadata, version: int = 1):
+    def embed_and_index(self, workspace_id: str, raw_doc: Any, chunks, enriched_metadata, version: int = 1, payloads: Optional[list] = None):
         multi_embeddings = self.embedder.embed_multi(
             chunks=chunks,
             title=raw_doc.title,
             summary=enriched_metadata.get("summary", ""),
         )
-        self.vector_index.upsert_batch(workspace_id, multi_embeddings, payloads=[{
-            "title": raw_doc.title,
-            "source_url": raw_doc.source_url,
-            "source_type": raw_doc.source_type,
-            "content_tier": getattr(raw_doc, "tier", 2),
-            "extracted_entities": [],
-            "summary": enriched_metadata.get("summary", ""),
-            "version": version,
-            "is_active": True,
-        } for _ in range(len(chunks))])
+        if payloads is None:
+            payloads = [{
+                "title": raw_doc.title,
+                "source_url": raw_doc.source_url,
+                "source_type": raw_doc.source_type,
+                "content_tier": getattr(raw_doc, "tier", 2),
+                "extracted_entities": [],
+                "summary": enriched_metadata.get("summary", ""),
+                "version": version,
+                "is_active": True,
+            } for _ in range(len(chunks))]
+        self.vector_index.upsert_batch(workspace_id, multi_embeddings, payloads)
 
     async def persist_graph_and_events(self, workspace_id: str, doc_record, raw_doc: Any, resolved_entities, extracted_events):
         if self.graph_index:
@@ -534,15 +640,19 @@ class DocumentIngestionRun:
             doc_type, enriched_metadata, tier = await self.enrich_and_classify(raw_doc, scrubbed_elements, workspace_id)
             extracted_entities = enriched_metadata.get("entities", [])
             resolved_entities = await self.resolve_entities(extracted_entities, workspace_id)
-            chunks, payloads = self.chunk_and_prepare(scrubbed_elements, doc_type, raw_doc, enriched_metadata, version_plan.current_version)
+            chunks, payloads, hierarchical_chunks = await self.chunk_and_prepare_hierarchical(
+                scrubbed_elements, doc_type, raw_doc, enriched_metadata, version_plan.current_version,
+                doc_title=normalized.title or raw_doc.title,
+                doc_content="\n\n".join([el["content"] for el in scrubbed_elements])
+            )
 
             # Persist document and chunks
             doc_record = await self.persist_document_and_chunks(
-                raw_doc, workspace_id, connector_id, doc_type, getattr(raw_doc, "content_hash", str(hash(normalized.raw_content))), chunks, payloads, version_plan, tags=enriched_metadata.get("keywords", [])
+                raw_doc, workspace_id, connector_id, doc_type, getattr(raw_doc, "content_hash", str(hash(normalized.raw_content))), chunks, payloads, version_plan, tags=enriched_metadata.get("keywords", []), hierarchical_chunks=hierarchical_chunks
             )
 
             # Index embeddings (blocking embedder used deliberately via embed_multi)
-            self.embed_and_index(workspace_id, raw_doc, chunks, enriched_metadata, version=version_plan.current_version)
+            self.embed_and_index(workspace_id, raw_doc, chunks, enriched_metadata, version=version_plan.current_version, payloads=payloads)
 
             # Persist graph & events
             extracted_events = enriched_metadata.get("events", [])

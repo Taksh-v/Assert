@@ -12,9 +12,12 @@ from backend.core.vector_store import VectorStore
 from backend.graph.graph_store import GraphStore
 from backend.graph.entity_resolver import EntityResolver
 from backend.ingestion.document_run import IngestionPackage, IngestionState
+from backend.core.config import get_settings
+from backend.ingestion.contextualizer import ChunkContextualizer
 from backend.ingestion.document_store import VersionPlan
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 class Transformer(Protocol):
     async def transform(self, package: IngestionPackage) -> None:
@@ -105,14 +108,62 @@ class ClassifierTransformer:
 class ChunkerTransformer:
     def __init__(self, chunker: Any):
         self.chunker = chunker
+        self.contextualizer = ChunkContextualizer()
 
     async def transform(self, package: IngestionPackage) -> None:
         doc_type = package.metadata.get("document_type", "auto")
         # Ensure element contents are strings to avoid test-injected MagicMock or lists
         safe_elements = [{**el, "content": str(el.get("content", ""))} for el in package.elements]
         chunks_data = self.chunker.chunk_elements(safe_elements, doc_type=doc_type)
-        chunks = [c["content"] for c in chunks_data]
-        package.set_chunks(chunks)
+        
+        doc_content = package.content or "\n\n".join([el["content"] for el in safe_elements])
+        doc_title = package.title or "Untitled"
+
+        hierarchical_chunks = []
+        flat_child_chunks = []
+        
+        for c in chunks_data:
+            parent_text = c["raw_content"]
+            children_texts = c.get("children", [])
+            heading_path = c.get("heading_path", [])
+            chunk_type = c.get("type", "text")
+            structural_metadata = c.get("structural_metadata", {})
+            
+            hierarchical_children = []
+            for child_text in children_texts:
+                if self.contextualizer.enabled:
+                    context = await self.contextualizer.contextualize(
+                        doc_title=doc_title,
+                        doc_content=doc_content,
+                        chunk_content=child_text
+                    )
+                    if context:
+                        contextualized_text = f"<context>\n{context}\n</context>\n{child_text}"
+                    else:
+                        contextualized_text = child_text
+                else:
+                    contextualized_text = child_text
+                
+                hierarchical_children.append({
+                    "raw_content": child_text,
+                    "contextualized_content": contextualized_text
+                })
+                flat_child_chunks.append(contextualized_text)
+                
+            hierarchical_chunks.append({
+                "parent_content": parent_text,
+                "heading_path": heading_path,
+                "chunk_type": chunk_type,
+                "structural_metadata": structural_metadata,
+                "children": hierarchical_children
+            })
+            
+        package.metadata["hierarchical_chunks"] = hierarchical_chunks
+        
+        if not flat_child_chunks:
+            flat_child_chunks = [c["content"] for c in chunks_data]
+            
+        package.set_chunks(flat_child_chunks)
 
 class EmbedderTransformer:
     def __init__(self, embedder: Any):
@@ -240,6 +291,7 @@ class KnowledgeStore:
                     previous_document_id=version_plan.previous_document_id,
                     chunks=package.chunks,
                     payloads=payloads,
+                    hierarchical_chunks=package.metadata.get("hierarchical_chunks"),
                 )
                 package.doc_record = doc_record
             else:
@@ -266,7 +318,28 @@ class KnowledgeStore:
                         chunks=package.chunks,
                         payloads=payloads,
                         version=version_plan.current_version,
+                        hierarchical_chunks=package.metadata.get("hierarchical_chunks"),
                     )
+
+            # Update dynamic BM25 sparse indexer in-memory
+            try:
+                from backend.query.sparse_indexer import get_sparse_indexer
+                sparse_indexer = get_sparse_indexer()
+                hierarchical_chunks = package.metadata.get("hierarchical_chunks")
+                if hierarchical_chunks:
+                    child_idx = 0
+                    for parent_chunk_data in hierarchical_chunks:
+                        for child_data in parent_chunk_data["children"]:
+                            child_text = child_data["contextualized_content"]
+                            child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:child:{child_idx}"))
+                            sparse_indexer.add_document(child_id, child_text)
+                            child_idx += 1
+                else:
+                    for idx, chunk_text in enumerate(package.chunks):
+                        c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
+                        sparse_indexer.add_document(c_id, chunk_text)
+            except Exception as se:
+                logger.warning(f"Failed to update BM25 index: {se}")
 
             # Index embeddings via index_adapter if available; otherwise use vector_store
             if package.embeddings:
@@ -323,34 +396,96 @@ class KnowledgeStore:
 
                 # 2. Prepare Chunks
                 payloads = []
-                for idx, chunk_text in enumerate(package.chunks):
-                    c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{idx}"))
-                    payload = {
-                        "title": doc_record.title,
-                        "source_url": doc_record.source_url,
-                        "source_type": getattr(package.raw_doc, "source_type", "unknown"),
-                        "content_tier": doc_record.tier,
-                        "extracted_entities": [e.get("name") if isinstance(e, dict) else e for e in package.metadata.get("entities", [])],
-                        "summary": package.metadata.get("summary", ""),
-                        "version": version_plan.current_version,
-                        "is_active": True,
-                    }
-                    payloads.append(payload)
+                hierarchical_chunks = package.metadata.get("hierarchical_chunks")
+                if hierarchical_chunks:
+                    child_idx = 0
+                    for parent_idx, parent_chunk_data in enumerate(hierarchical_chunks):
+                        parent_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:parent:{parent_idx}"))
+                        parent_text = parent_chunk_data["parent_content"]
+                        
+                        parent_db_chunk = DBChunk(
+                            id=parent_id,
+                            document_id=doc_id,
+                            workspace_id=package.workspace_id,
+                            content=parent_text,
+                            parent_id=None,
+                            heading_path=parent_chunk_data.get("heading_path", []),
+                            chunk_type=parent_chunk_data.get("chunk_type", "text"),
+                            structural_metadata=parent_chunk_data.get("structural_metadata", {}),
+                            chunk_index=parent_idx,
+                            tier=doc_record.tier,
+                            source_type=getattr(package.raw_doc, "source_type", "unknown"),
+                            source_url=doc_record.source_url,
+                            document_title=doc_record.title,
+                            version=version_plan.current_version,
+                            is_active=True,
+                        )
+                        session.add(parent_db_chunk)
+                        
+                        for c_j, child_data in enumerate(parent_chunk_data["children"]):
+                            child_text = child_data["contextualized_content"]
+                            child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:child:{child_idx}"))
+                            
+                            payload = {
+                                "title": doc_record.title,
+                                "source_url": doc_record.source_url,
+                                "source_type": getattr(package.raw_doc, "source_type", "unknown"),
+                                "content_tier": doc_record.tier,
+                                "extracted_entities": [e.get("name") if isinstance(e, dict) else e for e in package.metadata.get("entities", [])],
+                                "summary": package.metadata.get("summary", ""),
+                                "version": version_plan.current_version,
+                                "is_active": True,
+                                "parent_id": parent_id,
+                            }
+                            payloads.append(payload)
+                            
+                            child_db_chunk = DBChunk(
+                                id=child_id,
+                                document_id=doc_id,
+                                workspace_id=package.workspace_id,
+                                content=child_text,
+                                parent_id=parent_id,
+                                heading_path=parent_chunk_data.get("heading_path", []),
+                                chunk_type="text",
+                                chunk_index=child_idx,
+                                tier=payload.get("content_tier", 2),
+                                source_type=payload.get("source_type"),
+                                source_url=payload.get("source_url"),
+                                document_title=payload.get("title"),
+                                version=version_plan.current_version,
+                                is_active=True,
+                            )
+                            session.add(child_db_chunk)
+                            child_idx += 1
+                else:
+                    for idx, chunk_text in enumerate(package.chunks):
+                        c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{idx}"))
+                        payload = {
+                            "title": doc_record.title,
+                            "source_url": doc_record.source_url,
+                            "source_type": getattr(package.raw_doc, "source_type", "unknown"),
+                            "content_tier": doc_record.tier,
+                            "extracted_entities": [e.get("name") if isinstance(e, dict) else e for e in package.metadata.get("entities", [])],
+                            "summary": package.metadata.get("summary", ""),
+                            "version": version_plan.current_version,
+                            "is_active": True,
+                        }
+                        payloads.append(payload)
 
-                    new_chunk = DBChunk(
-                        id=c_id,
-                        document_id=doc_id,
-                        workspace_id=package.workspace_id,
-                        content=chunk_text,
-                        chunk_index=idx,
-                        tier=payload.get("content_tier", 2),
-                        source_type=payload.get("source_type"),
-                        source_url=payload.get("source_url"),
-                        document_title=payload.get("title"),
-                        version=version_plan.current_version,
-                        is_active=True,
-                    )
-                    session.add(new_chunk)
+                        new_chunk = DBChunk(
+                            id=c_id,
+                            document_id=doc_id,
+                            workspace_id=package.workspace_id,
+                            content=chunk_text,
+                            chunk_index=idx,
+                            tier=payload.get("content_tier", 2),
+                            source_type=payload.get("source_type"),
+                            source_url=payload.get("source_url"),
+                            document_title=payload.get("title"),
+                            version=version_plan.current_version,
+                            is_active=True,
+                        )
+                        session.add(new_chunk)
 
                 # 3. Resolve Entities (needs a session)
                 resolved_entities = []
@@ -380,6 +515,26 @@ class KnowledgeStore:
 
                 # Atomic SQL Commit
                 await session.commit()
+
+                # Update dynamic BM25 sparse indexer in-memory
+                try:
+                    from backend.query.sparse_indexer import get_sparse_indexer
+                    sparse_indexer = get_sparse_indexer()
+                    hierarchical_chunks = package.metadata.get("hierarchical_chunks")
+                    if hierarchical_chunks:
+                        child_idx = 0
+                        for parent_chunk_data in hierarchical_chunks:
+                            for child_data in parent_chunk_data["children"]:
+                                child_text = child_data["contextualized_content"]
+                                child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:child:{child_idx}"))
+                                sparse_indexer.add_document(child_id, child_text)
+                                child_idx += 1
+                    else:
+                        for idx, chunk_text in enumerate(package.chunks):
+                            c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{idx}"))
+                            sparse_indexer.add_document(c_id, chunk_text)
+                except Exception as se:
+                    logger.warning(f"Failed to update BM25 index: {se}")
 
                 # 5. Vector Store Persistence (external)
                 if package.embeddings:

@@ -158,6 +158,7 @@ class SQLDocumentStore:
         previous_document_id: Optional[str],
         chunks: list[str],
         payloads: list[dict[str, Any]],
+        hierarchical_chunks: Optional[list[dict[str, Any]]] = None,
     ) -> Document:
         async with async_session() as session:
             doc_record = Document(
@@ -176,23 +177,74 @@ class SQLDocumentStore:
             )
             doc_record = await session.merge(doc_record)
 
-            for idx, chunk_text in enumerate(chunks):
-                c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
-                payload = payloads[idx]
-                new_chunk = DBChunk(
-                    id=c_id,
-                    document_id=doc_record.id,
-                    workspace_id=workspace_id,
-                    content=chunk_text,
-                    chunk_index=idx,
-                    tier=payload.get("content_tier", 2),
-                    source_type=payload.get("source_type"),
-                    source_url=payload.get("source_url"),
-                    document_title=payload.get("title"),
-                    version=version,
-                    is_active=True,
-                )
-                await session.merge(new_chunk)
+            if hierarchical_chunks:
+                child_idx = 0
+                for parent_idx, parent_chunk_data in enumerate(hierarchical_chunks):
+                    parent_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:parent:{parent_idx}"))
+                    parent_text = parent_chunk_data["parent_content"]
+                    
+                    parent_db_chunk = DBChunk(
+                        id=parent_id,
+                        document_id=doc_record.id,
+                        workspace_id=workspace_id,
+                        content=parent_text,
+                        parent_id=None,
+                        heading_path=parent_chunk_data.get("heading_path", []),
+                        chunk_type=parent_chunk_data.get("chunk_type", "text"),
+                        structural_metadata=parent_chunk_data.get("structural_metadata", {}),
+                        chunk_index=parent_idx,
+                        tier=tier,
+                        source_type=getattr(raw_doc, "source_type", "unknown"),
+                        source_url=doc_record.source_url,
+                        document_title=doc_record.title,
+                        version=version,
+                        is_active=True,
+                    )
+                    await session.merge(parent_db_chunk)
+                    
+                    for c_j, child_data in enumerate(parent_chunk_data["children"]):
+                        child_text = child_data["contextualized_content"]
+                        child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:child:{child_idx}"))
+                        
+                        payload = payloads[child_idx] if child_idx < len(payloads) else {}
+                        payload["parent_id"] = parent_id
+                        
+                        child_db_chunk = DBChunk(
+                            id=child_id,
+                            document_id=doc_record.id,
+                            workspace_id=workspace_id,
+                            content=child_text,
+                            parent_id=parent_id,
+                            heading_path=parent_chunk_data.get("heading_path", []),
+                            chunk_type="text",
+                            chunk_index=child_idx,
+                            tier=payload.get("content_tier", tier),
+                            source_type=payload.get("source_type"),
+                            source_url=payload.get("source_url"),
+                            document_title=payload.get("title"),
+                            version=version,
+                            is_active=True,
+                        )
+                        await session.merge(child_db_chunk)
+                        child_idx += 1
+            else:
+                for idx, chunk_text in enumerate(chunks):
+                    c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
+                    payload = payloads[idx]
+                    new_chunk = DBChunk(
+                        id=c_id,
+                        document_id=doc_record.id,
+                        workspace_id=workspace_id,
+                        content=chunk_text,
+                        chunk_index=idx,
+                        tier=payload.get("content_tier", 2),
+                        source_type=payload.get("source_type"),
+                        source_url=payload.get("source_url"),
+                        document_title=payload.get("title"),
+                        version=version,
+                        is_active=True,
+                    )
+                    await session.merge(new_chunk)
 
             await session.commit()
             await session.refresh(doc_record)
@@ -205,25 +257,77 @@ class SQLDocumentStore:
         chunks: list[str],
         payloads: list[dict[str, Any]],
         version: int,
+        hierarchical_chunks: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         async with async_session() as session:
-            for idx, chunk_text in enumerate(chunks):
-                c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document_id}:{idx}"))
-                payload = payloads[idx]
-                new_chunk = DBChunk(
-                    id=c_id,
-                    document_id=document_id,
-                    workspace_id=workspace_id,
-                    content=chunk_text,
-                    chunk_index=idx,
-                    tier=payload.get("content_tier", 2),
-                    source_type=payload.get("source_type"),
-                    source_url=payload.get("source_url"),
-                    document_title=payload.get("title"),
-                    version=version,
-                    is_active=True,
-                )
-                await session.merge(new_chunk)
+            if hierarchical_chunks:
+                child_idx = 0
+                for parent_idx, parent_chunk_data in enumerate(hierarchical_chunks):
+                    parent_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document_id}:parent:{parent_idx}"))
+                    parent_text = parent_chunk_data["parent_content"]
+                    
+                    parent_db_chunk = DBChunk(
+                        id=parent_id,
+                        document_id=document_id,
+                        workspace_id=workspace_id,
+                        content=parent_text,
+                        parent_id=None,
+                        heading_path=parent_chunk_data.get("heading_path", []),
+                        chunk_type=parent_chunk_data.get("chunk_type", "text"),
+                        structural_metadata=parent_chunk_data.get("structural_metadata", {}),
+                        chunk_index=parent_idx,
+                        tier=payloads[0].get("content_tier", 2) if payloads else 2,
+                        source_type=payloads[0].get("source_type") if payloads else None,
+                        source_url=payloads[0].get("source_url") if payloads else None,
+                        document_title=payloads[0].get("title") if payloads else None,
+                        version=version,
+                        is_active=True,
+                    )
+                    await session.merge(parent_db_chunk)
+                    
+                    for c_j, child_data in enumerate(parent_chunk_data["children"]):
+                        child_text = child_data["contextualized_content"]
+                        child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document_id}:child:{child_idx}"))
+                        
+                        payload = payloads[child_idx] if child_idx < len(payloads) else {}
+                        payload["parent_id"] = parent_id
+                        
+                        child_db_chunk = DBChunk(
+                            id=child_id,
+                            document_id=document_id,
+                            workspace_id=workspace_id,
+                            content=child_text,
+                            parent_id=parent_id,
+                            heading_path=parent_chunk_data.get("heading_path", []),
+                            chunk_type="text",
+                            chunk_index=child_idx,
+                            tier=payload.get("content_tier", 2),
+                            source_type=payload.get("source_type"),
+                            source_url=payload.get("source_url"),
+                            document_title=payload.get("title"),
+                            version=version,
+                            is_active=True,
+                        )
+                        await session.merge(child_db_chunk)
+                        child_idx += 1
+            else:
+                for idx, chunk_text in enumerate(chunks):
+                    c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{document_id}:{idx}"))
+                    payload = payloads[idx]
+                    new_chunk = DBChunk(
+                        id=c_id,
+                        document_id=document_id,
+                        workspace_id=workspace_id,
+                        content=chunk_text,
+                        chunk_index=idx,
+                        tier=payload.get("content_tier", 2),
+                        source_type=payload.get("source_type"),
+                        source_url=payload.get("source_url"),
+                        document_title=payload.get("title"),
+                        version=version,
+                        is_active=True,
+                    )
+                    await session.merge(new_chunk)
             await session.commit()
 
     async def persist_events(

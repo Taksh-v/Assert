@@ -44,6 +44,100 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ── Custom Safety Middleware ─────────────────────────────
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
+import re
+import json
+
+class ValueAlignmentMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        # Apply safety checks only on query, reasoning, and orchestrator routes
+        if not any(prefix in path for prefix in ["/api/query", "/api/reasoning", "/api/orchestrator"]):
+            await self.app(scope, receive, send)
+            return
+
+        accumulated_text = ""
+        CREDENTIAL_PATTERNS = [
+            (re.compile(r"(?i)(password|passwd|secret|apikey|api_key|client_secret|db_password)\s*[:=]\s*['\"][^'\"]{3,}['\"]"), r"\1: '[REDACTED]'"),
+            (re.compile(r"(?i)bearer\s+[a-zA-Z0-9_\-\.]{15,}"), "Bearer [REDACTED]")
+        ]
+
+        def redact_text(text: str) -> str:
+            for pattern, repl in CREDENTIAL_PATTERNS:
+                text = pattern.sub(repl, text)
+            return text
+
+        is_sse = False
+
+        async def send_wrapper(message: Message):
+            nonlocal accumulated_text, is_sse
+            if message["type"] == "http.response.start":
+                headers = message.get("headers", [])
+                for k, v in headers:
+                    if k == b"content-type" and b"text/event-stream" in v:
+                        is_sse = True
+                        break
+            elif message["type"] == "http.response.body":
+                body = message.get("body", b"")
+
+                if is_sse:
+                    try:
+                        decoded = body.decode("utf-8", errors="ignore")
+                        lines = decoded.split("\n")
+                        new_lines = []
+                        for line in lines:
+                            if line.startswith("data:"):
+                                try:
+                                    payload_str = line[5:].strip()
+                                    payload = json.loads(payload_str)
+                                    if payload.get("type") == "token":
+                                        token = payload.get("token", "")
+                                        accumulated_text += token
+                                        redacted_accumulated = redact_text(accumulated_text)
+                                        if redacted_accumulated != accumulated_text:
+                                            sent_so_far = accumulated_text[:-len(token)] if len(token) <= len(accumulated_text) else ""
+                                            redacted_sent = redact_text(sent_so_far)
+                                            redacted_token = redacted_accumulated[len(redacted_sent):]
+                                            payload["token"] = redacted_token
+                                            accumulated_text = redacted_accumulated
+                                        line = f"data: {json.dumps(payload)}"
+                                except Exception:
+                                    pass
+                            new_lines.append(line)
+                        message["body"] = "\n".join(new_lines).encode("utf-8")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        decoded = body.decode("utf-8", errors="ignore")
+                        try:
+                            data = json.loads(decoded)
+                            if isinstance(data, dict):
+                                if "answer" in data and isinstance(data["answer"], str):
+                                    data["answer"] = redact_text(data["answer"])
+                                if "final_answer" in data and isinstance(data["final_answer"], str):
+                                    data["final_answer"] = redact_text(data["final_answer"])
+                            message["body"] = json.dumps(data).encode("utf-8")
+                        except json.JSONDecodeError:
+                            message["body"] = redact_text(decoded).encode("utf-8")
+                    except Exception:
+                        pass
+
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+app.add_middleware(ValueAlignmentMiddleware)
+
+
 # ── CORS Middleware ─────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,

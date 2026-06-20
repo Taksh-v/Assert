@@ -170,23 +170,29 @@ class Retriever:
             # 4. Vector Search (Semantic) — use async embedder to avoid blocking
             with tracer.start_as_current_span("retrieval.vector_search") as vspan:
                 question_embedding = (await self.embedder.aembed([hyde_answer]))[0]
-                vector_results = await self.vector_store.async_search(
-                    workspace_id=workspace_id,
-                    query_vector=question_embedding,
-                    top_k=top_k * 2, # Get more for fusion
-                    user_id=user_id,
-                    vector_name=vector_target
-                )
+                search_kwargs = {
+                    "workspace_id": workspace_id,
+                    "query_vector": question_embedding,
+                    "top_k": top_k * 2, # Get more for fusion
+                    "user_id": user_id,
+                    "vector_name": vector_target,
+                }
+                if context_files is not None:
+                    search_kwargs["filter_titles"] = context_files
+                vector_results = await self.vector_store.async_search(**search_kwargs)
+                if context_files:
+                    for res in vector_results:
+                        if "metadata" not in res:
+                            res["metadata"] = {}
+                        res["metadata"]["is_context_file"] = True
                 vspan.set_attribute("vector_results_count", len(vector_results))
 
-            # 5. Keyword Search (BM25 style via Postgres)
+            # 5. Keyword Search (In-Memory BM25 Indexer)
             keyword_results = []
-            async with async_session() as session:
-                keywords = question.split()
-                filters = [DBChunk.content.ilike(f"%{kw}%") for kw in keywords if len(kw) > 3]
-                
-                # Context Files Explicit Fetch
-                if context_files:
+            
+            # Context Files Explicit Fetch
+            if context_files:
+                async with async_session() as session:
                     context_stmt = select(DBChunk).where(
                         DBChunk.workspace_id == workspace_id,
                         DBChunk.document_title.in_(context_files)
@@ -204,34 +210,71 @@ class Retriever:
                                 "content_tier": c.tier,
                                 "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
                                 "heading_path": c.heading_path or [],
-                                "is_context_file": True
+                                "is_context_file": True,
+                                "parent_id": c.parent_id
                             }
                         })
 
-                if filters:
-                    stmt = select(DBChunk).where(
+            # Fetch filtered chunk IDs for sparse indexer when context_files is present
+            filter_chunk_ids = None
+            if context_files:
+                async with async_session() as session:
+                    stmt = select(DBChunk.id).where(
                         DBChunk.workspace_id == workspace_id,
-                        or_(*filters)
-                    ).limit(20)
+                        DBChunk.document_title.in_(context_files)
+                    )
+                    res = await session.execute(stmt)
+                    filter_chunk_ids = []
+                    for row in res.all():
+                        if hasattr(row, "_mapping"):
+                            filter_chunk_ids.append(row._mapping["id"])
+                        elif isinstance(row, tuple):
+                            filter_chunk_ids.append(row[0])
+                        elif hasattr(row, "id"):
+                            filter_chunk_ids.append(row.id)
+                        else:
+                            filter_chunk_ids.append(row)
+
+            # BM25 Search
+            from backend.query.sparse_indexer import get_sparse_indexer
+            sparse_indexer = get_sparse_indexer()
+            bm25_hits = sparse_indexer.search(question, top_k=top_k * 2, filter_ids=filter_chunk_ids)
+            keyword_chunk_ids = [hit["chunk_id"] for hit in bm25_hits]
+            
+            if keyword_chunk_ids:
+                async with async_session() as session:
+                    stmt = select(DBChunk).where(
+                        DBChunk.id.in_(keyword_chunk_ids),
+                        DBChunk.workspace_id == workspace_id
+                    )
                     res = await session.execute(stmt)
                     db_chunks = res.scalars().all()
-
+                    
+                    score_map = {hit["chunk_id"]: hit["score"] for hit in bm25_hits}
+                    fetched_ids = {item["chunk_id"] for item in keyword_results}
                     for c in db_chunks:
-                        # Prevent duplicate insertion if it was already fetched by context_files
-                        if context_files and c.document_title in context_files:
+                        # Prevent duplicate insertion if it was already fetched
+                        if c.id in fetched_ids:
                             continue
+                        is_ctx = context_files and c.document_title in context_files
                         keyword_results.append({
                             "chunk_id": c.id,
                             "text": c.content,
+                            "score": score_map.get(c.id, 0.0),
                             "metadata": {
                                 "title": c.document_title,
                                 "source_url": c.source_url,
                                 "content_tier": c.tier,
                                 "source_modified_at": c.source_modified_at.isoformat() if c.source_modified_at else None,
                                 "heading_path": c.heading_path or [],
-                                "is_context_file": False
+                                "is_context_file": is_ctx,
+                                "parent_id": c.parent_id
                             }
                         })
+                    
+                    # Sort keyword_results by score descending to preserve ranking order for RRF
+                    keyword_results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+            
             span.set_attribute("keyword_results_count", len(keyword_results))
 
             # 6. Reciprocal Rank Fusion (RRF)
@@ -247,7 +290,6 @@ class Retriever:
                 user_role=user_role
             )
 
-        
             # 7. Multi-Signal Reranking (Metadata, Tier, Recency Boosted)
             # The Ranker will now automatically use the temporal metadata
             # Prune candidates to N=8 to optimize CPU FlashRank reranking latency
@@ -265,16 +307,48 @@ class Retriever:
             
             span.set_attribute("final_results_count", len(final_ranked))
 
+            # 8.5. Map matched child chunks back to parent chunks if parent_id exists
+            parent_ids_to_fetch = []
+            for res in final_ranked:
+                parent_id = res.get("metadata", {}).get("parent_id")
+                if parent_id:
+                    parent_ids_to_fetch.append(parent_id)
+
+            parent_chunks_map = {}
+            if parent_ids_to_fetch:
+                async with async_session() as session:
+                    stmt = select(DBChunk.id, DBChunk.content).where(DBChunk.id.in_(parent_ids_to_fetch))
+                    res = await session.execute(stmt)
+                    parent_db_chunks = res.all()
+                    for row in parent_db_chunks:
+                        if hasattr(row, "_mapping"):
+                            p_id = row._mapping["id"]
+                            p_content = row._mapping["content"]
+                        elif isinstance(row, tuple):
+                            p_id, p_content = row
+                        elif hasattr(row, "id") and hasattr(row, "content"):
+                            p_id = row.id
+                            p_content = row.content
+                        else:
+                            p_id, p_content = row
+                        parent_chunks_map[p_id] = p_content
         
             # 9. Map to RetrievalResult
-            return [
-                RetrievalResult(
-                    chunk_id=res.get("chunk_id", "unknown"),
-                    content=res.get("text", ""),
-                    source_url=res.get("metadata", {}).get("source_url", ""),
-                    title=res.get("metadata", {}).get("title", "Untitled"),
-                    score=res.get("cross_encoder_score", res.get("final_rank_score", res.get("score", 0.0))),
-                    metadata=res.get("metadata", {})
+            results = []
+            for res in final_ranked:
+                parent_id = res.get("metadata", {}).get("parent_id")
+                content = res.get("text", "")
+                if parent_id and parent_id in parent_chunks_map:
+                    content = parent_chunks_map[parent_id]
+                
+                results.append(
+                    RetrievalResult(
+                        chunk_id=res.get("chunk_id", "unknown"),
+                        content=content,
+                        source_url=res.get("metadata", {}).get("source_url", ""),
+                        title=res.get("metadata", {}).get("title", "Untitled"),
+                        score=res.get("cross_encoder_score", res.get("final_rank_score", res.get("score", 0.0))),
+                        metadata=res.get("metadata", {})
+                    )
                 )
-                for res in final_ranked
-            ]
+            return results

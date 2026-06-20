@@ -95,12 +95,14 @@ else:
     )
 
 # Enable WAL mode for SQLite to prevent database lock errors
-if settings.database_url.startswith("sqlite"):
+if db_url.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA mmap_size=268435456")
+        cursor.execute("PRAGMA cache_size=-64000")
         cursor.close()
 
 # ── Session Factory ─────────────────────────────────────

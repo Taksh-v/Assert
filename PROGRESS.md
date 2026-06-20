@@ -249,3 +249,29 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Client-Side Size Limits**: Reduced file upload size threshold from 4.5MB to 3.5MB across all composer upload paths (main landing page and chat page dropzone) to account for the ~33% multipart FormData overhead, keeping requests safely below Vercel's strict 4.5MB request body size limit.
 - [x] **Backend Logging Observability**: Upgraded background Supabase Storage upload exceptions from warning to error and enriched the log trace with explicit metadata (bucket, file name, workspace ID, error details).
 - [x] **Verification**: TypeScript typecheck passed (`npx tsc --noEmit` returns 0 errors) and all backend files validate syntax.
+
+### 79. Phase 78: SOTA AI Patterns Integration — [VERIFIED]
+- [x] **Durable Safety Middleware**: Integrated `ValueAlignmentMiddleware` in `backend/main.py` that intercepts HTTP start/body response flows. Performs sliding-window diff parsing to redact raw credentials and secret tokens inside real-time stream (SSE) and JSON responses on `/api/query`, `/api/reasoning`, and `/api/orchestrator` routes.
+- [x] **Active Recursive Search**: Enhanced `ResearcherAgent.run` in `backend/reasoning/agents/researcher.py` to extract document cross-references (names, extensions, entity titles) from primary RAG results and execute secondary retrieval lookups dynamically.
+- [x] **Critic Backtracking & Self-Correction**: Configured LangGraph StateGraph conditional routing in `backend/reasoning/orchestrator.py` to loop back to the planner agent with criticism feedback when response quality scores are low (< 0.70).
+- [x] **Verification**: Created [test_sota_enhancements.py](file:///Users/takshvadaliya/Desktop/assert/backend/tests/test_sota_enhancements.py) and ran all 4 backend unit tests successfully (100% pass rate).
+
+### 80. Phase 79: SOTA RAG Upgrade (Contextual, In-Memory Hybrid Search, and Self-Correction Loop) — [VERIFIED]
+- [x] **Parent-Child Hierarchical Chunking**: Enabled small child chunks (200-300 characters) mapping to parent chunks (1000-1200 characters) for precise matching and contextual responses.
+- [x] **Contextual Retrieval Service**: Developed contextualizer to enrich child chunks with document-level summaries before indexing.
+- [x] **Thread-Safe Sparse Indexer**: Built a thread-safe, in-memory BM25 indexer loaded from SQLite and updated dynamically on uploads.
+- [x] **Hybrid Search Fusion & Parent Resolution**: Integrated concurrent sparse/dense search, fusing results via RRF and resolving matched child chunks back to their parents before generation.
+- [x] **NLI Claim Validator & Critic Correction Loop**: Implemented NLI citation checker and retry loop to rewrite responses and correct erroneous citations.
+- [x] **Verification**: Developed and ran test suites for Phase 1, Phase 2, and Phase 3, achieving a 100% pass rate.
+
+### 81. Phase 80: High-Throughput Ingestion & Retrieval Robustness Verification — [VERIFIED]
+- [x] **Projected Row Unpacking & Test Compatibility**: Fixed a type/unpacking error when projecting only `id` and `content` from database queries. Refactored the `Retriever` parent resolution loop and the `SparseIndexer` SQLite initialization loop to dynamically support SQLAlchemy `Row` tuples, list/tuple sequences, and mocked model entities.
+- [x] **Asynchronous Search Caching Mocks**: Updated the `test_semantic_cache.py` mock vector store fixture to automatically delegate `async_search` calls to synchronous `search` mock configurations. This resolved the "object MagicMock can't be used in 'await' expression" error, allowing all semantic cache, stream cache hit/miss, and freshness tests to pass warn-free and error-free.
+- [x] **Automated Validation**: Ran and passed the entire 4-part unit test suite including `test_contextual_retrieval.py` (3 tests), `test_hybrid_sparse_search.py` (3 tests), `test_citation_validator.py` (4 tests), and `test_semantic_cache.py` (13 tests) with a 100% success rate.
+
+### 82. Phase 81: Contextual Scoping & Document-Filtered Search — [VERIFIED]
+- [x] **Scoped Semantic Search**: Extended Qdrant `search()` and `async_search()` methods in `backend/core/vector_store.py` to support `filter_titles` parameters, utilizing Qdrant's `MatchValue` or `MatchAny` conditions to filter semantic queries specifically inside attached documents.
+- [x] **Doc-Filtered BM25 Search**: Extended `SparseIndexer.search()` in `backend/query/sparse_indexer.py` with `filter_ids` to pre-filter BM25 token frequencies to only include chunk IDs of the attached files.
+- [x] **Duplicate Retrieval Bug Fix**: Fixed a critical duplicate checking bug in `backend/query/retriever.py` where any chunk from context files was ignored by BM25 if its title was in `context_files`. Now checks chunk ID presence in already fetched results, allowing the remaining chunks of large files to be searched.
+- [x] **Implicit CRAG Bypassing**: Ensured all retrieved chunks (both vector and sparse) from context documents are tagged with `is_context_file = True`, allowing the LLM critic loop and CRAG verifier to accept all relevant context without erroneous hallucination/relevance exclusions.
+- [x] **Automated Validation**: Re-ran the full 23-test pytest suite successfully with 100% pass rate.

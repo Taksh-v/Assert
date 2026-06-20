@@ -41,7 +41,7 @@ class SemanticCache:
             await self._ensure_collection()
             
             query_vector = await self.embedder.aembed([question])
-            results = self.vector_store.search(
+            results = await self.vector_store.async_search(
                 workspace_id=workspace_id,
                 query_vector=query_vector[0],
                 top_k=1,

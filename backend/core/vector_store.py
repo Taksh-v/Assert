@@ -298,7 +298,8 @@ class VectorStore:
         query_vector: List[float], 
         top_k: int = 5,
         user_id: Optional[str] = None,
-        vector_name: str = "content"
+        vector_name: str = "content",
+        filter_titles: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search. Keep DB-side filters minimal (workspace and active flag).
@@ -313,6 +314,21 @@ class VectorStore:
                     self._models.FieldCondition(key="workspace_id", match=self._models.MatchValue(value=workspace_id)),
                     self._models.FieldCondition(key="is_active", match=self._models.MatchValue(value=True))
                 ]
+                if filter_titles:
+                    if len(filter_titles) == 1:
+                        must_filters.append(
+                            self._models.FieldCondition(
+                                key="title",
+                                match=self._models.MatchValue(value=filter_titles[0])
+                            )
+                        )
+                    else:
+                        must_filters.append(
+                            self._models.FieldCondition(
+                                key="title",
+                                match=self._models.MatchAny(any=filter_titles)
+                            )
+                        )
 
                 response = client.query_points(
                     collection_name=self.collection_name,
@@ -347,9 +363,10 @@ class VectorStore:
         top_k: int = 5,
         user_id: Optional[str] = None,
         vector_name: str = "content",
+        filter_titles: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Async wrapper around the synchronous `search` method."""
-        return await asyncio.to_thread(self.search, workspace_id, query_vector, top_k, user_id, vector_name)
+        return await asyncio.to_thread(self.search, workspace_id, query_vector, top_k, user_id, vector_name, filter_titles)
 
     def reciprocal_rank_fusion(
         self, 

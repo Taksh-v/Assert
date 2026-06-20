@@ -82,27 +82,8 @@ class IngestionRunner:
                         package.state = IngestionState.PERSISTED
                         return
 
-                    with timer(f"ingestion.persist_document.{package.title}"):
-                        doc_record = await self.document_store.persist_document(
-                            raw_doc=package.raw_doc,
-                            workspace_id=package.workspace_id,
-                            connector_id=package.connector_id,
-                            doc_type=package.metadata.get("document_type", "auto"),
-                            content_hash=getattr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
-                            chunk_count=len(package.chunks),
-                            tier=getattr(package.raw_doc, "tier", 2),
-                            tags=package.metadata.get("keywords", []),
-                            version=version_plan.current_version,
-                            previous_document_id=version_plan.previous_document_id,
-                        )
-                    package.doc_record = doc_record
-
-                    # index embeddings
-                    if package.embeddings and self.index_adapter:
-                        with timer(f"ingestion.index_vectors.{package.title}"):
-                            await self.index_adapter.upsert_vectors(package.workspace_id, package.embeddings, [{} for _ in package.embeddings])
-
-                    # persist chunks
+                    # Build payloads first so they are available for both vector store and DB bundle writes
+                    payloads = []
                     if package.chunks:
                         payloads = [
                             {
@@ -117,14 +98,74 @@ class IngestionRunner:
                             }
                             for _ in package.chunks
                         ]
-                        with timer(f"ingestion.persist_chunks.{package.title}"):
-                            await self.document_store.persist_chunks(
-                                document_id=doc_record.id,
+
+                    if hasattr(self.document_store, "persist_document_bundle"):
+                        with timer(f"ingestion.persist_document_bundle.{package.title}"):
+                            doc_record = await self.document_store.persist_document_bundle(
+                                raw_doc=package.raw_doc,
                                 workspace_id=package.workspace_id,
+                                connector_id=package.connector_id,
+                                doc_type=package.metadata.get("document_type", "auto"),
+                                content_hash=getattr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
+                                chunk_count=len(package.chunks),
+                                tier=getattr(package.raw_doc, "tier", 2),
+                                tags=package.metadata.get("keywords", []),
+                                version=version_plan.current_version,
+                                previous_document_id=version_plan.previous_document_id,
                                 chunks=package.chunks,
                                 payloads=payloads,
-                                version=version_plan.current_version,
+                                hierarchical_chunks=package.metadata.get("hierarchical_chunks"),
                             )
+                    else:
+                        with timer(f"ingestion.persist_document.{package.title}"):
+                            doc_record = await self.document_store.persist_document(
+                                raw_doc=package.raw_doc,
+                                workspace_id=package.workspace_id,
+                                connector_id=package.connector_id,
+                                doc_type=package.metadata.get("document_type", "auto"),
+                                content_hash=getattr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
+                                chunk_count=len(package.chunks),
+                                tier=getattr(package.raw_doc, "tier", 2),
+                                tags=package.metadata.get("keywords", []),
+                                version=version_plan.current_version,
+                                previous_document_id=version_plan.previous_document_id,
+                            )
+                        if package.chunks:
+                            with timer(f"ingestion.persist_chunks.{package.title}"):
+                                await self.document_store.persist_chunks(
+                                    document_id=doc_record.id,
+                                    workspace_id=package.workspace_id,
+                                    chunks=package.chunks,
+                                    payloads=payloads,
+                                    version=version_plan.current_version,
+                                )
+                    package.doc_record = doc_record
+
+                    # index embeddings with fully populated payloads
+                    if package.embeddings and self.index_adapter:
+                        with timer(f"ingestion.index_vectors.{package.title}"):
+                            await self.index_adapter.upsert_vectors(package.workspace_id, package.embeddings, payloads)
+
+                    # Update dynamic BM25 sparse indexer in-memory
+                    try:
+                        from backend.query.sparse_indexer import get_sparse_indexer
+                        import uuid
+                        sparse_indexer = get_sparse_indexer()
+                        hierarchical_chunks = package.metadata.get("hierarchical_chunks")
+                        if hierarchical_chunks:
+                            child_idx = 0
+                            for parent_chunk_data in hierarchical_chunks:
+                                for child_data in parent_chunk_data["children"]:
+                                    child_text = child_data["contextualized_content"]
+                                    child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:child:{child_idx}"))
+                                    sparse_indexer.add_document(child_id, child_text)
+                                    child_idx += 1
+                        else:
+                            for idx, chunk_text in enumerate(package.chunks):
+                                c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
+                                sparse_indexer.add_document(c_id, chunk_text)
+                    except Exception as se:
+                        logger.warning(f"Failed to update BM25 index: {se}")
 
                     # graph artifacts
                     resolved_entities = package.metadata.get("entities", [])
