@@ -144,6 +144,27 @@ class HybridParser:
         result = model.transcribe(file_path)
         return [{"type": "transcript", "content": result["text"], "metadata": {"language": result.get("language")}}]
 
+    def _clean_pdf_spacing(self, text: str) -> str:
+        """Heuristic to detect and fix PDFs extracted with spacing between every character."""
+        import re
+        lines = text.split("\n")
+        cleaned_lines = []
+        for line in lines:
+            words = line.split()
+            if not words:
+                cleaned_lines.append(line)
+                continue
+            single_char_words = [w for w in words if len(w) == 1]
+            if len(single_char_words) / len(words) > 0.65:
+                # Reconstruct the line
+                parts = re.split(r'\s{2,}', line)
+                cleaned_parts = [p.replace(" ", "") for p in parts]
+                cleaned_line = " ".join(cleaned_parts)
+                cleaned_lines.append(cleaned_line)
+            else:
+                cleaned_lines.append(line)
+        return "\n".join(cleaned_lines)
+
     async def _parse_pdf(self, file_path: str) -> List[Dict[str, Any]]:
         """Structured PDF parsing with automatic OCR for scanned pages."""
         elements = []
@@ -151,6 +172,8 @@ class HybridParser:
             reader = pypdf.PdfReader(f)
             for page_num, page in enumerate(reader.pages):
                 text = page.extract_text()
+                if text:
+                    text = self._clean_pdf_spacing(text)
                 
                 # If page has text, handle it (including tables)
                 if text and text.strip():
