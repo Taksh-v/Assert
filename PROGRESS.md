@@ -275,3 +275,33 @@ The Assest engine has been transformed into a production-grade Reasoning Infrast
 - [x] **Duplicate Retrieval Bug Fix**: Fixed a critical duplicate checking bug in `backend/query/retriever.py` where any chunk from context files was ignored by BM25 if its title was in `context_files`. Now checks chunk ID presence in already fetched results, allowing the remaining chunks of large files to be searched.
 - [x] **Implicit CRAG Bypassing**: Ensured all retrieved chunks (both vector and sparse) from context documents are tagged with `is_context_file = True`, allowing the LLM critic loop and CRAG verifier to accept all relevant context without erroneous hallucination/relevance exclusions.
 - [x] **Automated Validation**: Re-ran the full 23-test pytest suite successfully with 100% pass rate.
+
+### 83. Phase 82: SOTA RAG Response Channel Upgrade — [VERIFIED]
+- [x] **Query Preprocessing & Reformulation**: Added `_preprocess_query()` in `backend/query/query_service.py` to intercept and rewrite vague queries (like "what do you know about the document") and multi-turn pronouns ("tell me more about it") using conversational context and rule-based optimizations, without relying on slow/expensive LLM calls in simple cases.
+- [x] **Dynamic Context-Aware Token Budgets**: Replaced static output token caps in `backend/query/generator.py` with adaptive budgets (scaling from 192 up to 768 tokens) depending on query intent, complexity, and retrieved context size.
+- [x] **Query-Type-Aware Format Prompts**: Added prefix/keyword type detection in `backend/query/generator.py` supporting definitions, comparisons (tables), how-tos (steps), lists, summaries, and standard forms.
+- [x] **Latency Reduction**: Removed redundant `ValueAlignmentFilter.filter_values()` LLM calls on the hot query execution and streaming paths in `backend/query/query_service.py`, replacing them with fast regex-only checks in `inspect_security()`.
+- [x] **Automated Verification**: Ran and verified 21 query/cognitive/SOTA backend tests with a 100% success rate.
+
+### 84. Phase 83: Systems Audit, Transaction boundaries, Cache Mocks & Document Persistence — [VERIFIED]
+- [x] **Database Transaction Hardening**: Removed implicit auto-commits in the `get_db` session dependency generator. Handled transaction commits explicitly in workspace-generation and connectors APIs to protect database session boundaries.
+- [x] **Sparse Search Startup Warming**: Registered `load_from_sqlite()` inside `backend/core/lifecycle.py` to automatically load existing document text indices into memory at FastAPI startup.
+- [x] **TruthResolver Scoring & Filtering Optimization**: Prioritized the FlashRank cross-encoder score and Ranker composite score over raw query similarity. Reduced the trust filter cutoff threshold from `0.4` to `0.25` for Slack, Jira, and GitHub channels to prevent information starvation.
+- [x] **CRAG Relevance Expansion**: Extended the LLM judge relevance window in `backend/query/crag_verifier.py` to evaluate parent chunks up to 1000 characters rather than truncating them at 300 characters, preserving key query contexts.
+- [x] **Mock Cache Isolation**: Corrected `qs.cache.check_cache` mocks in `test_query_service.py`, `test_stream_buffering.py`, and `test_latency_optimizations.py` to `qs.cache.get`, preventing test queries from falling through to local Redis instances.
+- [x] **Ingestion UUID Persistence Fix**: Added pre-generated document UUIDs inside `persist_document_bundle` and supported `content`/`raw_content` fallbacks in `pipeline_v2.py` and `document_run.py`, eliminating the `NOT NULL constraint failed: chunks.document_id` error on sqlite.
+- [x] **Automated Validation**: Ran the complete 155-test backend suite achieving a **100% pass rate** (155/155 tests passed).
+
+### 85. Phase 84: RAG Hardening & Optimization — [VERIFIED]
+- [x] **Workspace-Isolated BM25 Sparse Indexer**: Partitioned BM25 index memory structures by `workspace_id`. Modified sparse search, `pipeline_v2`, and ingestion runner logic to supply and filter by active tenant workspace, preventing multi-tenant data leakage.
+- [x] **Context-Aware L2 Cache (Semantic Cache)**: Integrated `context_files` lists in cache payloads and exact key generation, enforcing distinct caching/matching based on attached document scope to avoid context-blind cache hits.
+- [x] **Sliding Window Chunk Contextualizer**: Replaced document prefix slicing with a sliding-window text extractor centering ± 2,500 characters around the target chunk, combined with document title and metadata.
+- [x] **Verification**: Created `backend/tests/test_rag_hardening.py` testing workspace isolation, IDF calculations, cache collisions, and sliding windows. Ran the full suite of 156 tests achieving a **100% pass rate**.
+
+### 86. Phase 85: RAG Connection Teardown & Ingestion Fast-Paths — [VERIFIED]
+- [x] **Test Session Connection Teardown**: Implemented a session-scoped pytest teardown fixture `cleanup_connections` in `backend/tests/conftest.py` that cleanly closes Redis pools (`close_redis()`), SQL engines (`close_db()`), and Qdrant client pools (`_close_global_qdrant()`). This eliminates background process hangs after test suite completion.
+- [x] **Memgraph Connectivity Test Isolation**: Modified `document_run.py` and `index_adapter.py` to bypass `GraphIndex()` and Memgraph connection attempts in `sandbox` / `memory` test environments, defaulting to `NullGraphIndex()`. This prevents 1-second TCP timeout blocks per test when Memgraph is offline.
+- [x] **Pydantic v2 model_config Transition**: Resolved Pydantic config warnings by migrating legacy `class Config` configurations to standard v2 `model_config = {"from_attributes": True}` dictionaries on `UserResponse` and `DocumentListResponse` models in `users.py` and `documents.py`.
+- [x] **Verification**: Successfully executed RAG, contextual retrieval, citation, cache, and upload test suites (45 tests total) with a 100% pass rate and clean, instant process exits.
+
+

@@ -366,10 +366,11 @@ class ConnectorSyncRunner:
                     .values(status=ConnectorStatus.ACTIVE, last_synced_at=now)
                 )
                 try:
-                    from backend.query.semantic_cache import SemanticCache
-                    await asyncio.to_thread(SemanticCache().purge_workspace_cache, sync_run.workspace_id)
+                    from backend.core.cache_service import CacheService
+                    cache = CacheService()
+                    await cache.invalidate_workspace(sync_run.workspace_id)
                 except Exception as ce:
-                    logger.warning(f"Failed to proactively purge semantic cache on successful sync: {ce}")
+                    logger.warning(f"Failed to proactively purge cache on successful sync: {ce}")
 
             state.last_stats = stats or {}
             state.updated_at = now

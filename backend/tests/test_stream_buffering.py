@@ -17,7 +17,7 @@ def mock_db():
 def query_service(mock_db):
     qs = QueryService(mock_db)
     qs.retriever.search = AsyncMock(return_value=[])
-    qs.cache.check_cache = AsyncMock(return_value=None)
+    qs.cache.get = AsyncMock(return_value=None)
     qs._should_run_quality_eval = MagicMock(return_value=True) # Enable to test bypass
     return qs
 

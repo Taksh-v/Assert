@@ -226,14 +226,28 @@ class AdaptiveRouter:
         return mapping.get(intent, ResponseTier.FAST_RAG)
 
     def _estimate_complexity(self, intent: QueryIntent, query: str) -> str:
-        """Estimate query complexity for logging/metrics."""
+        """Estimate query complexity for downstream token budget decisions."""
         if intent in (QueryIntent.CONVERSATIONAL,):
             return "low"
-        if intent in (QueryIntent.QUICK_LOOKUP,):
-            return "low" if len(query.split()) < 10 else "medium"
-        if intent in (QueryIntent.COMPARISON, QueryIntent.DEEP_ANALYSIS):
+        lower = query.lower()
+        word_count = len(query.split())
+        # Multi-clause or comparison queries are always high complexity
+        multi_clause_markers = (" and ", " also ", " as well as ", " in addition ", " furthermore ")
+        comparison_markers = ("compare", "versus", " vs ", "difference between", "tradeoff")
+        if any(m in lower for m in multi_clause_markers):
             return "high"
-        return "medium"
+        if any(m in lower for m in comparison_markers):
+            return "high"
+        if intent in (QueryIntent.DEEP_ANALYSIS,):
+            return "high"
+        if intent in (QueryIntent.COMPARISON,):
+            return "high"
+        # Long queries typically require detailed answers
+        if word_count > 15:
+            return "high"
+        if word_count > 8:
+            return "medium"
+        return "low"
 
     def _guess_tools(self, query: str) -> list[str]:
         """Guess which tools might be needed from the query text."""

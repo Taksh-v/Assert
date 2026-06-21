@@ -25,18 +25,84 @@ STOPWORDS = {
 class SparseIndexer:
     """
     SOTA Query: In-Memory BM25 keyword indexer.
-    Thread-safe and fast retrieval on low-end hardware.
+    Thread-safe, partitioned by workspace, and fast retrieval.
     """
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.doc_ids: List[str] = []
-        self.doc_texts: Dict[str, str] = {}
-        self.doc_lens: Dict[str, int] = {}
-        self.tf: Dict[str, Dict[str, int]] = {}  # term -> doc_id -> count
-        self.df: Dict[str, int] = {}  # term -> doc_count
-        self.N: int = 0
-        self.avg_doc_len: float = 0.0
+        self.by_workspace: Dict[str, Dict[str, Any]] = {}
+        self.doc_to_workspace: Dict[str, str] = {}
+
+    def _get_workspace_state(self, workspace_id: Optional[str]) -> Dict[str, Any]:
+        ws_id = workspace_id or "default"
+        if ws_id not in self.by_workspace:
+            self.by_workspace[ws_id] = {
+                "doc_ids": [],
+                "doc_texts": {},
+                "doc_lens": {},
+                "tf": {},
+                "df": {},
+                "N": 0,
+                "avg_doc_len": 0.0
+            }
+        return self.by_workspace[ws_id]
+
+    # Properties mapping flat access to 'default' workspace for test compatibility
+    @property
+    def doc_ids(self):
+        return self._get_workspace_state("default")["doc_ids"]
+
+    @doc_ids.setter
+    def doc_ids(self, val):
+        self._get_workspace_state("default")["doc_ids"] = val
+
+    @property
+    def doc_texts(self):
+        return self._get_workspace_state("default")["doc_texts"]
+
+    @doc_texts.setter
+    def doc_texts(self, val):
+        self._get_workspace_state("default")["doc_texts"] = val
+
+    @property
+    def doc_lens(self):
+        return self._get_workspace_state("default")["doc_lens"]
+
+    @doc_lens.setter
+    def doc_lens(self, val):
+        self._get_workspace_state("default")["doc_lens"] = val
+
+    @property
+    def tf(self):
+        return self._get_workspace_state("default")["tf"]
+
+    @tf.setter
+    def tf(self, val):
+        self._get_workspace_state("default")["tf"] = val
+
+    @property
+    def df(self):
+        return self._get_workspace_state("default")["df"]
+
+    @df.setter
+    def df(self, val):
+        self._get_workspace_state("default")["df"] = val
+
+    @property
+    def N(self):
+        return self._get_workspace_state("default")["N"]
+
+    @N.setter
+    def N(self, val):
+        self._get_workspace_state("default")["N"] = val
+
+    @property
+    def avg_doc_len(self):
+        return self._get_workspace_state("default")["avg_doc_len"]
+
+    @avg_doc_len.setter
+    def avg_doc_len(self, val):
+        self._get_workspace_state("default")["avg_doc_len"] = val
 
     def tokenize(self, text: str) -> List[str]:
         if not text:
@@ -45,30 +111,36 @@ class SparseIndexer:
         words = re.findall(r"\w+", text.lower())
         return [w for w in words if w not in STOPWORDS]
 
-    def add_document(self, doc_id: str, text: str):
+    def add_document(self, doc_id: str, text: str, workspace_id: Optional[str] = None):
         """Add or update a document in the index in a thread-safe manner."""
         with self.lock:
-            self._add_document_unlocked(doc_id, text)
-            self._recalculate_stats_unlocked()
+            self._add_document_unlocked(doc_id, text, workspace_id)
+            self._recalculate_stats_unlocked(workspace_id)
 
     def remove_document(self, doc_id: str):
         """Remove a document from the index in a thread-safe manner."""
         with self.lock:
+            ws_id = self.doc_to_workspace.get(doc_id)
             self._remove_document_unlocked(doc_id)
-            self._recalculate_stats_unlocked()
+            if ws_id:
+                self._recalculate_stats_unlocked(ws_id)
 
-    def _add_document_unlocked(self, doc_id: str, text: str):
-        if doc_id in self.doc_texts:
+    def _add_document_unlocked(self, doc_id: str, text: str, workspace_id: Optional[str] = None):
+        ws_id = workspace_id or "default"
+        state = self._get_workspace_state(ws_id)
+        
+        if doc_id in self.doc_to_workspace:
             self._remove_document_unlocked(doc_id)
 
         tokens = self.tokenize(text)
         if not tokens:
             return
 
-        self.doc_ids.append(doc_id)
-        self.doc_texts[doc_id] = text
-        self.doc_lens[doc_id] = len(tokens)
-        self.N += 1
+        self.doc_to_workspace[doc_id] = ws_id
+        state["doc_ids"].append(doc_id)
+        state["doc_texts"][doc_id] = text
+        state["doc_lens"][doc_id] = len(tokens)
+        state["N"] += 1
 
         # Count frequencies
         doc_tf: Dict[str, int] = {}
@@ -77,33 +149,43 @@ class SparseIndexer:
 
         # Update global structures
         for term, count in doc_tf.items():
-            if term not in self.tf:
-                self.tf[term] = {}
-            self.tf[term][doc_id] = count
-            self.df[term] = self.df.get(term, 0) + 1
+            if term not in state["tf"]:
+                state["tf"][term] = {}
+            state["tf"][term][doc_id] = count
+            state["df"][term] = state["df"].get(term, 0) + 1
 
     def _remove_document_unlocked(self, doc_id: str):
-        if doc_id not in self.doc_texts:
+        ws_id = self.doc_to_workspace.get(doc_id)
+        if not ws_id:
             return
 
-        self.doc_ids.remove(doc_id)
-        del self.doc_texts[doc_id]
-        del self.doc_lens[doc_id]
-        self.N -= 1
+        state = self._get_workspace_state(ws_id)
+        if doc_id not in state["doc_texts"]:
+            return
 
-        for term in list(self.tf.keys()):
-            if doc_id in self.tf[term]:
-                del self.tf[term][doc_id]
-                self.df[term] -= 1
-                if self.df[term] == 0:
-                    del self.df[term]
-                    del self.tf[term]
+        state["doc_ids"].remove(doc_id)
+        del state["doc_texts"][doc_id]
+        del state["doc_lens"][doc_id]
+        state["N"] -= 1
 
-    def _recalculate_stats_unlocked(self):
-        if self.N > 0:
-            self.avg_doc_len = sum(self.doc_lens.values()) / self.N
+        for term in list(state["tf"].keys()):
+            if doc_id in state["tf"][term]:
+                del state["tf"][term][doc_id]
+                state["df"][term] -= 1
+                if state["df"][term] == 0:
+                    del state["df"][term]
+                    del state["tf"][term]
+                    
+        if doc_id in self.doc_to_workspace:
+            del self.doc_to_workspace[doc_id]
+
+    def _recalculate_stats_unlocked(self, workspace_id: Optional[str] = None):
+        ws_id = workspace_id or "default"
+        state = self._get_workspace_state(ws_id)
+        if state["N"] > 0:
+            state["avg_doc_len"] = sum(state["doc_lens"].values()) / state["N"]
         else:
-            self.avg_doc_len = 0.0
+            state["avg_doc_len"] = 0.0
 
     async def load_from_sqlite(self):
         """Initialize the in-memory index from SQL database chunks."""
@@ -114,42 +196,51 @@ class SparseIndexer:
         logger.info("Syncing BM25 index with SQLite database chunks...")
         try:
             async with async_session() as session:
-                # Load all active chunks (only id and content projected for memory optimization)
-                stmt = select(DBChunk.id, DBChunk.content).where(DBChunk.is_active == True)
+                # Load all active chunks (id, content, and workspace_id projected)
+                stmt = select(DBChunk.id, DBChunk.content, DBChunk.workspace_id).where(DBChunk.is_active == True)
                 res = await session.execute(stmt)
                 chunks = res.all()
 
                 with self.lock:
-                    self.doc_ids = []
-                    self.doc_texts = {}
-                    self.doc_lens = {}
-                    self.tf = {}
-                    self.df = {}
-                    self.N = 0
-                    self.avg_doc_len = 0.0
+                    self.by_workspace = {}
+                    self.doc_to_workspace = {}
 
                     for row in chunks:
                         if hasattr(row, "_mapping"):
                             chunk_id = row._mapping["id"]
                             chunk_content = row._mapping["content"]
-                        elif isinstance(row, tuple):
-                            chunk_id, chunk_content = row
-                        elif hasattr(row, "id") and hasattr(row, "content"):
+                            chunk_workspace_id = row._mapping["workspace_id"]
+                        elif isinstance(row, tuple) and len(row) >= 3:
+                            chunk_id, chunk_content, chunk_workspace_id = row[:3]
+                        elif hasattr(row, "id") and hasattr(row, "content") and hasattr(row, "workspace_id"):
                             chunk_id = row.id
                             chunk_content = row.content
+                            chunk_workspace_id = row.workspace_id
                         else:
-                            chunk_id, chunk_content = row
-                        self._add_document_unlocked(chunk_id, chunk_content)
-                    self._recalculate_stats_unlocked()
+                            chunk_id, chunk_content, chunk_workspace_id = row[:3]
+                        self._add_document_unlocked(chunk_id, chunk_content, chunk_workspace_id)
+                    
+                    # Recalculate stats for all loaded workspaces
+                    for ws_id in self.by_workspace:
+                        self._recalculate_stats_unlocked(ws_id)
 
-            logger.info(f"Loaded {self.N} active chunks into BM25 index.")
+            logger.info(f"Loaded BM25 index from SQLite for {len(self.by_workspace)} active workspaces.")
         except Exception as e:
             logger.error(f"Failed to load BM25 index from SQLite: {e}")
 
-    def search(self, query: str, top_k: int = 10, filter_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_ids: Optional[List[str]] = None,
+        workspace_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Search the in-memory BM25 index."""
         tokens = self.tokenize(query)
-        if not tokens or self.N == 0:
+        ws_id = workspace_id or "default"
+        state = self._get_workspace_state(ws_id)
+        
+        if not tokens or state["N"] == 0:
             return []
 
         scores: Dict[str, float] = {}
@@ -159,18 +250,18 @@ class SparseIndexer:
 
         with self.lock:
             for term in tokens:
-                if term not in self.tf:
+                if term not in state["tf"]:
                     continue
 
-                df = self.df[term]
+                df = state["df"][term]
                 # IDF calculation with smoothing
-                idf = math.log(1.0 + (self.N - df + 0.5) / (df + 0.5))
+                idf = math.log(1.0 + (state["N"] - df + 0.5) / (df + 0.5))
 
-                for doc_id, tf in self.tf[term].items():
+                for doc_id, tf in state["tf"][term].items():
                     if filter_set is not None and doc_id not in filter_set:
                         continue
-                    doc_len = self.doc_lens[doc_id]
-                    denom = tf + k1 * (1.0 - b + b * (doc_len / self.avg_doc_len))
+                    doc_len = state["doc_lens"][doc_id]
+                    denom = tf + k1 * (1.0 - b + b * (doc_len / state["avg_doc_len"]))
                     score_term = idf * (tf * (k1 + 1)) / denom
                     scores[doc_id] = scores.get(doc_id, 0.0) + score_term
 
@@ -182,7 +273,7 @@ class SparseIndexer:
             for doc_id, score in sorted_hits:
                 results.append({
                     "chunk_id": doc_id,
-                    "text": self.doc_texts[doc_id],
+                    "text": state["doc_texts"][doc_id],
                     "score": score
                 })
         return results

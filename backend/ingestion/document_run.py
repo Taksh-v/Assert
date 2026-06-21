@@ -214,11 +214,15 @@ class DocumentIngestionRun:
         self.vector_index = vector_index or VectorIndex()
         self.graph_index = graph_index
         if self.graph_index is None:
-            try:
-                self.graph_index = GraphIndex()
-            except Exception as e:
-                logger.warning("GraphStore init failed (non-fatal): %s", e)
-                self.graph_index = None
+            import os
+            if os.getenv("ASSEST_DEV_MODE") == "sandbox" or os.getenv("QDRANT_MODE") == "memory":
+                self.graph_index = NullGraphIndex()
+            else:
+                try:
+                    self.graph_index = GraphIndex()
+                except Exception as e:
+                    logger.warning("GraphStore init failed (non-fatal): %s", e)
+                    self.graph_index = None
         self.entity_resolver_factory = entity_resolver_factory
 
     async def process(
@@ -316,7 +320,7 @@ class DocumentIngestionRun:
             doc_title = normalized.title or raw_doc.title
             
             for c in chunks_data:
-                parent_text = c["raw_content"]
+                parent_text = c.get("raw_content", c.get("content", ""))
                 children_texts = c.get("children", [])
                 heading_path = c.get("heading_path", [])
                 chunk_type = c.get("type", "text")
@@ -496,7 +500,7 @@ class DocumentIngestionRun:
         flat_child_chunks = []
         
         for c in chunks_data:
-            parent_text = c["raw_content"]
+            parent_text = c.get("raw_content", c.get("content", ""))
             children_texts = c.get("children", [])
             heading_path = c.get("heading_path", [])
             chunk_type = c.get("type", "text")

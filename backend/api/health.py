@@ -37,7 +37,8 @@ async def health_check():
             "executive": {"status": "unknown", "engine": "LiteLLM/Ollama"},
             "attention": {"status": "unknown", "engine": "Qdrant"},
             "memory": {"status": "unknown", "engine": "PostgreSQL"},
-            "cache": {"status": "unknown", "engine": "Qdrant Cache"}
+            "cache_l1": {"status": "unknown", "engine": "Redis"},
+            "cache_l2": {"status": "unknown", "engine": "Qdrant Semantic Cache"},
         }
     }
 
@@ -49,8 +50,8 @@ async def health_check():
         except Exception:
             health["layers"]["executive"]["status"] = "offline"
 
-    async def check_attention_and_cache():
-        """Check Attention (Vector Store) and Cache (Semantic Cache) Layers."""
+    async def check_attention_and_cache_l2():
+        """Check Attention (Vector Store) and L2 Semantic Cache layers."""
         try:
             from backend.core.vector_store import get_qdrant_client_ctx
             from backend.query.semantic_cache import CACHE_COLLECTION_NAME
@@ -60,15 +61,20 @@ async def health_check():
                     try:
                         collections = client.get_collections().collections
                         exists = any(c.name == CACHE_COLLECTION_NAME for c in collections)
-                        health["layers"]["cache"]["status"] = "connected" if exists else "offline"
+                        health["layers"]["cache_l2"]["status"] = "connected" if exists else "offline"
                     except Exception:
-                        health["layers"]["cache"]["status"] = "offline"
+                        health["layers"]["cache_l2"]["status"] = "offline"
                 else:
                     health["layers"]["attention"]["status"] = "offline"
-                    health["layers"]["cache"]["status"] = "offline"
+                    health["layers"]["cache_l2"]["status"] = "offline"
         except Exception:
             health["layers"]["attention"]["status"] = "error"
-            health["layers"]["cache"]["status"] = "offline"
+            health["layers"]["cache_l2"]["status"] = "offline"
+
+    async def check_cache_l1():
+        """Check L1 Redis hot cache layer."""
+        from backend.core.redis_client import redis_health_check
+        health["layers"]["cache_l1"] = await redis_health_check()
 
     async def check_memory():
         """Check Memory Layer (Postgres) — reduced 3s timeout, no COUNT(*)."""
@@ -79,12 +85,12 @@ async def health_check():
         except Exception as e:
             health["layers"]["memory"]["status"] = f"offline: {str(e)}"
 
-    # Run all checks concurrently
     await asyncio.gather(
         check_executive(),
-        check_attention_and_cache(),
+        check_attention_and_cache_l2(),
+        check_cache_l1(),
         check_memory(),
-        return_exceptions=True
+        return_exceptions=True,
     )
 
     # Overall Status
@@ -94,6 +100,27 @@ async def health_check():
         health["status"] = "degraded"
         
     return health
+
+
+@router.get("/health/ready")
+async def readiness_check():
+    """
+    Strict readiness probe — returns 503 if any critical dependency is offline.
+    Use for Kubernetes readiness; liveness should use /health/live.
+    """
+    from fastapi.responses import JSONResponse
+
+    health = await health_check()
+    critical = ("memory", "attention")
+    degraded = any(
+        health["layers"][layer]["status"] in ("offline", "error")
+        or str(health["layers"][layer]["status"]).startswith("offline:")
+        for layer in critical
+    )
+    if degraded:
+        return JSONResponse(status_code=503, content=health)
+    return health
+
 
 @router.get("/health/db-stats")
 async def get_db_stats():

@@ -72,10 +72,43 @@ _FORMAT_CONCISE = (
     "Keep it simple and easy to understand."
 )
 
-_FORMAT_STANDARD = (
-    "RESPONSE FORMAT: Provide a clear answer with key points as bullet points. "
+_FORMAT_DEFINITION = (
+    "RESPONSE FORMAT: Provide a clear, direct definition or explanation in 2-4 sentences. "
     "Use inline citations [1], [2] for each factual claim. "
-    "Include a brief explanation after the bullets if needed."
+    "Be precise and avoid unnecessary elaboration."
+)
+
+_FORMAT_COMPARISON = (
+    "RESPONSE FORMAT: Provide a structured comparison:\n"
+    "1. Start with a one-sentence summary of the key difference.\n"
+    "2. Use a comparison format (similarities vs differences) with inline citations.\n"
+    "3. End with a brief recommendation if applicable."
+)
+
+_FORMAT_HOWTO = (
+    "RESPONSE FORMAT: Provide step-by-step instructions:\n"
+    "1. Start with a brief overview of what will be accomplished.\n"
+    "2. List numbered steps with inline citations [1], [2] for each.\n"
+    "3. Include any prerequisites or important notes."
+)
+
+_FORMAT_LIST = (
+    "RESPONSE FORMAT: Provide a comprehensive bulleted list. "
+    "Use inline citations [1], [2] for each item. "
+    "Group items by category if there are many."
+)
+
+_FORMAT_SUMMARY = (
+    "RESPONSE FORMAT: Provide an executive summary:\n"
+    "1. A concise overview paragraph (2-3 sentences).\n"
+    "2. Key points as bullet points with inline citations [1], [2].\n"
+    "3. Any notable details or caveats."
+)
+
+_FORMAT_STANDARD = (
+    "RESPONSE FORMAT: Answer the question directly in the first sentence, then provide "
+    "supporting details as bullet points. Use inline citations [1], [2] for each factual claim. "
+    "Synthesize information across sources rather than just quoting them."
 )
 
 _FORMAT_STRUCTURED = (
@@ -87,25 +120,57 @@ _FORMAT_STRUCTURED = (
 )
 
 
-def _get_format_instruction(tier: ResponseTier) -> str:
-    """Select the format template based on response tier."""
+def _detect_query_type(question: str) -> str:
+    """Detect the type of question to select the optimal response format."""
+    lower = question.lower().strip()
+    if lower.startswith(("what is", "what are", "what's", "define", "what does")):
+        return "definition"
+    if any(kw in lower for kw in ("compare", "versus", " vs ", "difference between", "differ")):
+        return "comparison"
+    if lower.startswith(("how to", "how do", "how can", "how should", "steps to")):
+        return "howto"
+    if any(kw in lower for kw in ("list ", "list all", "show all", "enumerate", "name all")):
+        return "list"
+    if any(kw in lower for kw in ("summarize", "summary", "overview", "brief", "recap", "highlights")):
+        return "summary"
+    return "standard"
+
+
+def _get_format_instruction(tier: ResponseTier, question: str = "") -> str:
+    """Select the format template based on response tier and query type."""
     if tier == ResponseTier.DIRECT:
         return _FORMAT_CONCISE
-    elif tier == ResponseTier.FAST_RAG:
-        return _FORMAT_STANDARD
     elif tier in (ResponseTier.FULL_SWARM, ResponseTier.TOOL_EXEC):
         return _FORMAT_STRUCTURED
-    return _FORMAT_STANDARD
+    # FAST_RAG: adapt format to the question type
+    query_type = _detect_query_type(question)
+    type_map = {
+        "definition": _FORMAT_DEFINITION,
+        "comparison": _FORMAT_COMPARISON,
+        "howto": _FORMAT_HOWTO,
+        "list": _FORMAT_LIST,
+        "summary": _FORMAT_SUMMARY,
+        "standard": _FORMAT_STANDARD,
+    }
+    return type_map.get(query_type, _FORMAT_STANDARD)
 
 
-def _max_output_tokens_for_tier(tier: ResponseTier) -> int:
+def _max_output_tokens_for_tier(
+    tier: ResponseTier,
+    context_volume: int = 0,
+    query_complexity: str = "low",
+) -> int:
+    """Dynamic token budget based on tier, context volume, and query complexity."""
     if tier == ResponseTier.DIRECT:
-        return 128
+        return 192
     if tier == ResponseTier.FAST_RAG:
-        return 256
+        base = 384
+        if context_volume > 2000 or query_complexity == "high":
+            return min(base + 128, 768)
+        return base
     if tier in (ResponseTier.FULL_SWARM, ResponseTier.TOOL_EXEC):
-        return 384
-    return 256
+        return 512
+    return 384
 
 
 # ─── Citation builder ──────────────────────────────────────────
@@ -201,6 +266,7 @@ class Generator:
         verified_context: VerifiedContext,
         tier: ResponseTier = ResponseTier.FAST_RAG,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        query_complexity: str = "low",
     ) -> Answer:
         """
         Primary generation method — uses CRAG-verified chunks with citations.
@@ -221,7 +287,8 @@ class Generator:
 
         # Build citation context
         context_text, citations = build_citation_manifest(chunks=chunks)
-        format_instruction = _get_format_instruction(tier)
+        context_volume = len(context_text)
+        format_instruction = _get_format_instruction(tier, question)
 
         # Build source reference for the prompt
         source_ref = "\n".join(
@@ -233,12 +300,14 @@ class Generator:
             "You are Assest, a company knowledge assistant. "
             "Answer the user's question using ONLY the provided context.\n\n"
             "RULES:\n"
-            "1. Cite every factual claim using [1], [2] etc. matching the SOURCES list.\n"
-            "2. If the context doesn't contain the answer, say: "
+            "1. Answer the question DIRECTLY in your first sentence, then provide supporting details.\n"
+            "2. SYNTHESIZE information across multiple sources rather than just quoting individual chunks.\n"
+            "3. Cite every factual claim using [1], [2] etc. matching the SOURCES list.\n"
+            "4. If the context doesn't contain the answer, say: "
             "\"I don't have enough information in the knowledge base to answer this fully.\"\n"
-            "3. Never make up information not present in the context.\n"
-            "4. When documents conflict, cite both and note the conflict with dates.\n"
-            "5. Be professional but conversational — explain things clearly.\n\n"
+            "5. Never make up information not present in the context.\n"
+            "6. When documents conflict, cite both and note the conflict with dates.\n"
+            "7. Be professional but conversational — explain things clearly.\n\n"
             f"{format_instruction}\n\n"
             f"SOURCES:\n{source_ref}"
         )
@@ -263,8 +332,8 @@ class Generator:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=0.1,
-                max_tokens=_max_output_tokens_for_tier(tier),
-                prompt_cache_key=f"grounded:{tier.value}:v1",
+                max_tokens=_max_output_tokens_for_tier(tier, context_volume, query_complexity),
+                prompt_cache_key=f"grounded:{tier.value}:v2",
             )
 
             # JSON leak protection
@@ -313,6 +382,7 @@ class Generator:
         verified_context: VerifiedContext,
         tier: ResponseTier = ResponseTier.FAST_RAG,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        query_complexity: str = "low",
     ) -> AsyncGenerator[str, None]:
         """
         Streaming version of generate_grounded_response.
@@ -327,7 +397,8 @@ class Generator:
 
         # Build citation context
         context_text, citations = build_citation_manifest(chunks=chunks)
-        format_instruction = _get_format_instruction(tier)
+        context_volume = len(context_text)
+        format_instruction = _get_format_instruction(tier, question)
 
         # Build source reference for the prompt
         source_ref = "\n".join(
@@ -339,12 +410,14 @@ class Generator:
             "You are Assest, a company knowledge assistant. "
             "Answer the user's question using ONLY the provided context.\n\n"
             "RULES:\n"
-            "1. Cite every factual claim using [1], [2] etc. matching the SOURCES list.\n"
-            "2. If the context doesn't contain the answer, say: "
+            "1. Answer the question DIRECTLY in your first sentence, then provide supporting details.\n"
+            "2. SYNTHESIZE information across multiple sources rather than just quoting individual chunks.\n"
+            "3. Cite every factual claim using [1], [2] etc. matching the SOURCES list.\n"
+            "4. If the context doesn't contain the answer, say: "
             "\"I don't have enough information in the knowledge base to answer this fully.\"\n"
-            "3. Never make up information not present in the context.\n"
-            "4. When documents conflict, cite both and note the conflict with dates.\n"
-            "5. Be professional but conversational — explain things clearly.\n\n"
+            "5. Never make up information not present in the context.\n"
+            "6. When documents conflict, cite both and note the conflict with dates.\n"
+            "7. Be professional but conversational — explain things clearly.\n\n"
             f"{format_instruction}\n\n"
             f"SOURCES:\n{source_ref}"
         )
@@ -369,8 +442,8 @@ class Generator:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.1,
-            max_tokens=_max_output_tokens_for_tier(tier),
-            prompt_cache_key=f"grounded-stream:{tier.value}:v1",
+            max_tokens=_max_output_tokens_for_tier(tier, context_volume, query_complexity),
+            prompt_cache_key=f"grounded-stream:{tier.value}:v2",
         ):
             yield token
 
@@ -405,7 +478,7 @@ class Generator:
                 user_prompt=user_prompt,
                 temperature=0.5,
                 max_tokens=_max_output_tokens_for_tier(ResponseTier.DIRECT),
-                prompt_cache_key="direct:v1",
+                prompt_cache_key="direct:v2",
             )
             return Answer(
                 answer_text=answer_text or "Hello! How can I help you today?",

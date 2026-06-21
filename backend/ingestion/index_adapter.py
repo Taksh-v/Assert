@@ -22,8 +22,16 @@ class DefaultIndexAdapter:
         try:
             from backend.ingestion.document_run import VectorIndex, GraphIndex
 
+            import os
+            is_sandbox = os.getenv("ASSEST_DEV_MODE") == "sandbox" or os.getenv("QDRANT_MODE") == "memory"
             self.vector_index = vector_index or VectorIndex()
-            self.graph_index = graph_index or (GraphIndex() if GraphIndex is not None else None)
+            if graph_index is not None:
+                self.graph_index = graph_index
+            elif is_sandbox:
+                from backend.ingestion.document_run import NullGraphIndex
+                self.graph_index = NullGraphIndex()
+            else:
+                self.graph_index = GraphIndex() if GraphIndex is not None else None
         except Exception:
             # Best-effort: if underlying index implementations fail to initialize
             # (e.g., vector store unavailable in test env), fall back to no-op

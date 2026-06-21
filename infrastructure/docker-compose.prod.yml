@@ -1,0 +1,122 @@
+# Production Docker Compose Overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Adds: resource limits, health checks, restart policies, and the API service.
+# Secrets should be injected via environment or a secrets manager — never hardcoded.
+
+version: '3.8'
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: assest
+      POSTGRES_USER: assest
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assest -d assest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  qdrant:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: assest-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://assest:${POSTGRES_PASSWORD}@postgres:5432/assest
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_MODE: server
+      LITELLM_PROXY_URL: http://litellm:4000
+      ENABLE_PROMETHEUS: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: assest-worker
+    command: ["python", "-m", "backend.worker_main"]
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://assest:${POSTGRES_PASSWORD}@postgres:5432/assest
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_MODE: server
+      ENABLE_WORKERS: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    restart: unless-stopped
+
+volumes:
+  redis_data:

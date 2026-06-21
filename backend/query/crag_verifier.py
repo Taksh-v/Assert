@@ -176,7 +176,7 @@ class CRAGVerifier:
         # Build a compact representation of each chunk for scoring
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
-            preview = chunk.content[:300].replace("\n", " ").strip()
+            preview = chunk.content[:1000].replace("\n", " ").strip()
             chunk_summaries.append(f"[{i}] Title: {chunk.title}\nContent: {preview}")
 
         prompt = f"""You are a relevance judge for a company knowledge base. 

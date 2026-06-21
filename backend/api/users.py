@@ -55,8 +55,9 @@ class UserResponse(UserBase):
     is_active: bool
     is_superuser: bool
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 async def get_current_user(
     request: Request,

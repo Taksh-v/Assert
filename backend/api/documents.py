@@ -33,8 +33,9 @@ class DocumentListResponse(BaseModel):
     last_ingested_at: datetime
     is_active: bool
 
-    class Config:
-        from_attributes = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 async def run_ingestion_background(raw_doc: dict, workspace_id: str):

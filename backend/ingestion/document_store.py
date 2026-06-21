@@ -56,11 +56,18 @@ class DocumentStore(Protocol):
         ...
 
 
+def _get_doc_attr(raw_doc: Any, key: str, default: Any = "") -> Any:
+    if isinstance(raw_doc, dict):
+        return raw_doc.get(key, default)
+    return getattr(raw_doc, key, default)
+
+
 class SQLDocumentStore:
     async def prepare_version(self, raw_doc: Any, workspace_id: str) -> VersionPlan:
         async with async_session() as session:
+            source_url = _get_doc_attr(raw_doc, "source_url", "")
             stmt = select(Document).where(
-                Document.source_url == getattr(raw_doc, "source_url", ""),
+                Document.source_url == source_url,
                 Document.workspace_id == workspace_id,
                 Document.is_active == True,
             )
@@ -70,7 +77,16 @@ class SQLDocumentStore:
             if not existing_doc:
                 return VersionPlan()
 
-            if hasattr(raw_doc, "content_hash") and existing_doc.content_hash == raw_doc.content_hash:
+            has_content_hash = False
+            raw_content_hash = None
+            if isinstance(raw_doc, dict):
+                has_content_hash = "content_hash" in raw_doc
+                raw_content_hash = raw_doc.get("content_hash")
+            else:
+                has_content_hash = hasattr(raw_doc, "content_hash")
+                raw_content_hash = getattr(raw_doc, "content_hash", None)
+
+            if has_content_hash and existing_doc.content_hash == raw_content_hash:
                 # Verify that chunks actually exist — a previous partial failure
                 # may have written the document metadata but failed before persisting
                 # chunks / embeddings, leaving the system in a permanently stuck state.
@@ -111,6 +127,7 @@ class SQLDocumentStore:
                 previous_document_id=existing_doc.id,
             )
 
+
     async def persist_document(
         self,
         raw_doc: Any,
@@ -128,8 +145,8 @@ class SQLDocumentStore:
             doc_record = Document(
                 workspace_id=workspace_id,
                 connector_id=connector_id,
-                source_url=getattr(raw_doc, "source_url", ""),
-                title=getattr(raw_doc, "title", "Untitled"),
+                source_url=_get_doc_attr(raw_doc, "source_url", ""),
+                title=_get_doc_attr(raw_doc, "title", "Untitled"),
                 document_type=doc_type,
                 content_hash=content_hash,
                 chunk_count=chunk_count,
@@ -161,11 +178,13 @@ class SQLDocumentStore:
         hierarchical_chunks: Optional[list[dict[str, Any]]] = None,
     ) -> Document:
         async with async_session() as session:
+            doc_id = str(uuid.uuid4())
             doc_record = Document(
+                id=doc_id,
                 workspace_id=workspace_id,
                 connector_id=connector_id,
-                source_url=getattr(raw_doc, "source_url", ""),
-                title=getattr(raw_doc, "title", "Untitled"),
+                source_url=_get_doc_attr(raw_doc, "source_url", ""),
+                title=_get_doc_attr(raw_doc, "title", "Untitled"),
                 document_type=doc_type,
                 content_hash=content_hash,
                 chunk_count=chunk_count,
@@ -194,12 +213,13 @@ class SQLDocumentStore:
                         structural_metadata=parent_chunk_data.get("structural_metadata", {}),
                         chunk_index=parent_idx,
                         tier=tier,
-                        source_type=getattr(raw_doc, "source_type", "unknown"),
+                        source_type=_get_doc_attr(raw_doc, "source_type", "unknown"),
                         source_url=doc_record.source_url,
                         document_title=doc_record.title,
                         version=version,
                         is_active=True,
                     )
+
                     await session.merge(parent_db_chunk)
                     
                     for c_j, child_data in enumerate(parent_chunk_data["children"]):

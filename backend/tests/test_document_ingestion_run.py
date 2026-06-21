@@ -79,13 +79,14 @@ class FakeDocumentStore:
         }
         return SimpleNamespace(id="new-doc-id")
 
-    async def persist_chunks(self, document_id, workspace_id, chunks, payloads, version):
+    async def persist_chunks(self, document_id, workspace_id, chunks, payloads, version, hierarchical_chunks=None):
         self.persisted_chunks = {
             "document_id": document_id,
             "workspace_id": workspace_id,
             "chunks": chunks,
             "payloads": payloads,
             "version": version,
+            "hierarchical_chunks": hierarchical_chunks,
         }
 
     async def persist_events(self, workspace_id, document_id, events):

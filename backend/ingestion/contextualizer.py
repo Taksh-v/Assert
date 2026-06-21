@@ -26,10 +26,32 @@ class ChunkContextualizer:
         if not self.enabled:
             return ""
 
-        # Limit document content size for safety and token efficiency
-        doc_summary_text = doc_content[:15000].strip() if doc_content else ""
+        # Limit document content size with a sliding-window strategy surrounding chunk_content
+        if not doc_content or not doc_content.strip():
+            return ""
+
+        doc_content_str = doc_content.strip()
+        chunk_content_str = chunk_content.strip()
+
+        if not chunk_content_str:
+            doc_summary_text = doc_content_str[:5000].strip()
+        else:
+            idx = doc_content_str.find(chunk_content_str)
+            if idx == -1:
+                idx = doc_content_str.lower().find(chunk_content_str.lower())
+
+            if idx != -1:
+                start_pos = max(0, idx - 2500)
+                end_pos = min(len(doc_content_str), idx + len(chunk_content_str) + 2500)
+                doc_summary_text = doc_content_str[start_pos:end_pos].strip()
+            else:
+                doc_summary_text = doc_content_str[:5000].strip()
+
         if not doc_summary_text:
             return ""
+
+        # Combine sliding window context with document title and header context
+        doc_summary_text = f"Document Title: {doc_title}\n\n{doc_summary_text}"
 
         prompt = f"""<document>
 {doc_summary_text}

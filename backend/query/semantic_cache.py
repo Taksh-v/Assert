@@ -32,7 +32,7 @@ class SemanticCache:
             self._initialized = True
 
     async def check_cache(
-        self, workspace_id: str, question: str, session: Optional[Any] = None
+        self, workspace_id: str, question: str, session: Optional[Any] = None, context_files: Optional[List[str]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Check if a similar question has been answered before.
@@ -87,6 +87,21 @@ class SemanticCache:
                         except Exception as te:
                             logger.error(f"Error parsing semantic cache timestamps: {te}")
                 
+                # Check for context_files match
+                cached_context_files_str = metadata.get("context_files", "[]")
+                try:
+                    cached_context_files = json.loads(cached_context_files_str)
+                except Exception:
+                    cached_context_files = []
+                
+                req_context_files = context_files or []
+                if sorted(cached_context_files) != sorted(req_context_files):
+                    logger.info(
+                        f"Semantic cache context mismatch. Cached context files: {cached_context_files}, "
+                        f"requested context files: {req_context_files}. Cache miss."
+                    )
+                    return None
+
                 logger.info(f"Semantic cache hit! Similarity: {results[0]['score']}")
                 return {
                     "answer": metadata.get("answer"),
@@ -99,7 +114,7 @@ class SemanticCache:
         
         return None
 
-    async def set_cache(self, workspace_id: str, question: str, result: Dict[str, Any]):
+    async def set_cache(self, workspace_id: str, question: str, result: Dict[str, Any], context_files: Optional[List[str]] = None):
         """
         Store a query result in the semantic cache.
         """
@@ -120,6 +135,7 @@ class SemanticCache:
                 "answer": result.get("answer"),
                 "sources": json.dumps(result.get("sources", [])),
                 "created_at": datetime.utcnow().isoformat(),
+                "context_files": json.dumps(context_files) if context_files else "[]",
                 "is_active": True # VectorStore search filters for is_active: True
             }]
             

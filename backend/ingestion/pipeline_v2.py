@@ -123,7 +123,7 @@ class ChunkerTransformer:
         flat_child_chunks = []
         
         for c in chunks_data:
-            parent_text = c["raw_content"]
+            parent_text = c.get("raw_content", c.get("content", ""))
             children_texts = c.get("children", [])
             heading_path = c.get("heading_path", [])
             chunk_type = c.get("type", "text")
@@ -332,12 +332,12 @@ class KnowledgeStore:
                         for child_data in parent_chunk_data["children"]:
                             child_text = child_data["contextualized_content"]
                             child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:child:{child_idx}"))
-                            sparse_indexer.add_document(child_id, child_text)
+                            sparse_indexer.add_document(child_id, child_text, workspace_id=package.workspace_id)
                             child_idx += 1
                 else:
                     for idx, chunk_text in enumerate(package.chunks):
                         c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
-                        sparse_indexer.add_document(c_id, chunk_text)
+                        sparse_indexer.add_document(c_id, chunk_text, workspace_id=package.workspace_id)
             except Exception as se:
                 logger.warning(f"Failed to update BM25 index: {se}")
 
@@ -527,12 +527,12 @@ class KnowledgeStore:
                             for child_data in parent_chunk_data["children"]:
                                 child_text = child_data["contextualized_content"]
                                 child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:child:{child_idx}"))
-                                sparse_indexer.add_document(child_id, child_text)
+                                sparse_indexer.add_document(child_id, child_text, workspace_id=package.workspace_id)
                                 child_idx += 1
                     else:
                         for idx, chunk_text in enumerate(package.chunks):
                             c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{idx}"))
-                            sparse_indexer.add_document(c_id, chunk_text)
+                            sparse_indexer.add_document(c_id, chunk_text, workspace_id=package.workspace_id)
                 except Exception as se:
                     logger.warning(f"Failed to update BM25 index: {se}")
 

@@ -4,13 +4,12 @@ Company knowledge base for Indian startups.
 """
 
 import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from backend.core.config import get_settings
-from backend.core.database import init_db
+from backend.core.lifecycle import app_lifespan
 from backend.api.health import router as health_router
 from backend.api.webhooks import router as webhooks_router
 from backend.api.query import router as query_router
@@ -29,19 +28,11 @@ from backend.api.memory import router as memory_router
 
 settings = get_settings()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifecycle events: startup and shutdown."""
-    print("🧠 Assest Brain starting up...")
-    await init_db()
-    yield
-    print("🛑 Assest Brain shutting down...")
-
 app = FastAPI(
     title="Assest — Company Brain",
     description="High-precision agentic knowledge retrieval engine.",
     version=settings.app_version,
-    lifespan=lifespan,
+    lifespan=app_lifespan,
 )
 
 # ── Custom Safety Middleware ─────────────────────────────

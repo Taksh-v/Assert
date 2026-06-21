@@ -238,7 +238,7 @@ class Retriever:
             # BM25 Search
             from backend.query.sparse_indexer import get_sparse_indexer
             sparse_indexer = get_sparse_indexer()
-            bm25_hits = sparse_indexer.search(question, top_k=top_k * 2, filter_ids=filter_chunk_ids)
+            bm25_hits = sparse_indexer.search(question, top_k=top_k * 2, filter_ids=filter_chunk_ids, workspace_id=workspace_id)
             keyword_chunk_ids = [hit["chunk_id"] for hit in bm25_hits]
             
             if keyword_chunk_ids:

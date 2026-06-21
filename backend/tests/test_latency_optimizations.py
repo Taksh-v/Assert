@@ -51,7 +51,7 @@ async def test_optimized_streaming_cache_hits():
     
     # Mock cache hit returning a multi-word answer
     mock_cache = AsyncMock()
-    mock_cache.check_cache.return_value = {
+    mock_cache.get.return_value = {
         "answer": "This is a long test response containing multiple words to verify chunking behavior.",
         "sources": [{"title": "Doc 1", "url": "https://doc1.com"}],
         "similarity": 0.95

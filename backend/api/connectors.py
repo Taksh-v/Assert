@@ -62,7 +62,7 @@ async def verify_workspace_access(
             role=WorkspaceRole.OWNER
         )
         db.add(membership)
-        await db.flush()
+        await db.commit()
     
     return workspace.id
 
@@ -248,7 +248,7 @@ async def create_connector(
         # Update existing connector config
         existing.config = encrypted_config
         existing.status = "active"
-        await db.flush()
+        await db.commit()
         return serialize_connector(existing, await _latest_sync_for_connector(db, existing.id))
 
     new_connector = Connector(
@@ -258,7 +258,7 @@ async def create_connector(
         config=encrypted_config
     )
     db.add(new_connector)
-    await db.flush()
+    await db.commit()
     await db.refresh(new_connector)
     
     return serialize_connector(new_connector)
@@ -439,6 +439,7 @@ async def trigger_sync(
     if created:
         task_id = await enqueue_task("connector_sync", {"sync_run_id": sync_run.id}, db=db)
         await coordinator.attach_task(db, sync_run, task_id)
+        await db.commit()
 
     return {
         "sync_run_id": sync_run.id,
@@ -567,7 +568,7 @@ async def upload_file(
         upload_dir = f"data/uploads/{connector.workspace_id}/{connector.id}"
         config["upload_dir"] = upload_dir
         connector.config = encrypt_config(config)
-        await db.flush()
+        await db.commit()
         
     # Create dir if not exists
     os.makedirs(upload_dir, exist_ok=True)

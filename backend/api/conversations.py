@@ -28,7 +28,7 @@ async def resolve_workspace_id(db: AsyncSession, workspace_ref: str) -> str:
     if workspace_ref == "default-workspace":
         workspace = Workspace(name="Default Workspace", slug="default-workspace")
         db.add(workspace)
-        await db.flush()
+        await db.commit()
         return workspace.id
     raise HTTPException(status_code=404, detail="Workspace not found")
 

@@ -167,3 +167,31 @@ def _ensure_common_external_mocks(monkeypatch):
             monkeypatch.setitem(sys.modules, mod, MagicMock())
 
     yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_connections():
+    yield
+    import asyncio
+    async def _async_cleanup():
+        try:
+            from backend.core.redis_client import close_redis
+            await close_redis()
+        except Exception:
+            pass
+        try:
+            from backend.core.database import close_db
+            await close_db()
+        except Exception:
+            pass
+    try:
+        from backend.core.vector_store import _close_global_qdrant
+        _close_global_qdrant()
+    except Exception:
+        pass
+    try:
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(_async_cleanup())
+        loop.close()
+    except Exception:
+        pass

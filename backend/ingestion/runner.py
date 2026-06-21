@@ -12,6 +12,12 @@ from backend.memory.store import MemoryStore
 logger = logging.getLogger(__name__)
 
 
+def _get_doc_attr(raw_doc: Any, key: str, default: Any = "") -> Any:
+    if isinstance(raw_doc, dict):
+        return raw_doc.get(key, default)
+    return getattr(raw_doc, key, default)
+
+
 class IngestionRunner:
     def __init__(
         self,
@@ -32,11 +38,11 @@ class IngestionRunner:
         if doc_type and doc_type.lower() in self.templates:
             return self.templates[doc_type.lower()]
 
-        source_type = getattr(package.raw_doc, "source_type", None)
+        source_type = _get_doc_attr(package.raw_doc, "source_type", None)
         if source_type and source_type.lower() in self.templates:
             return self.templates[source_type.lower()]
 
-        source_url = getattr(package.raw_doc, "source_url", "").lower()
+        source_url = _get_doc_attr(package.raw_doc, "source_url", "").lower()
         if source_url:
             import urllib.parse
             import os
@@ -88,9 +94,9 @@ class IngestionRunner:
                         payloads = [
                             {
                                 "title": package.title,
-                                "source_url": getattr(package.raw_doc, "source_url", ""),
-                                "source_type": getattr(package.raw_doc, "source_type", "unknown"),
-                                "content_tier": getattr(package.raw_doc, "tier", 2),
+                                "source_url": _get_doc_attr(package.raw_doc, "source_url", ""),
+                                "source_type": _get_doc_attr(package.raw_doc, "source_type", "unknown"),
+                                "content_tier": _get_doc_attr(package.raw_doc, "tier", 2),
                                 "extracted_entities": [e.get("name") if isinstance(e, dict) else e for e in package.metadata.get("entities", [])],
                                 "summary": package.metadata.get("summary", ""),
                                 "version": version_plan.current_version,
@@ -106,9 +112,9 @@ class IngestionRunner:
                                 workspace_id=package.workspace_id,
                                 connector_id=package.connector_id,
                                 doc_type=package.metadata.get("document_type", "auto"),
-                                content_hash=getattr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
+                                content_hash=_get_doc_attr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
                                 chunk_count=len(package.chunks),
-                                tier=getattr(package.raw_doc, "tier", 2),
+                                tier=_get_doc_attr(package.raw_doc, "tier", 2),
                                 tags=package.metadata.get("keywords", []),
                                 version=version_plan.current_version,
                                 previous_document_id=version_plan.previous_document_id,
@@ -123,9 +129,9 @@ class IngestionRunner:
                                 workspace_id=package.workspace_id,
                                 connector_id=package.connector_id,
                                 doc_type=package.metadata.get("document_type", "auto"),
-                                content_hash=getattr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
+                                content_hash=_get_doc_attr(package.raw_doc, "content_hash", str(hash(package.content or ""))),
                                 chunk_count=len(package.chunks),
-                                tier=getattr(package.raw_doc, "tier", 2),
+                                tier=_get_doc_attr(package.raw_doc, "tier", 2),
                                 tags=package.metadata.get("keywords", []),
                                 version=version_plan.current_version,
                                 previous_document_id=version_plan.previous_document_id,
@@ -158,12 +164,12 @@ class IngestionRunner:
                                 for child_data in parent_chunk_data["children"]:
                                     child_text = child_data["contextualized_content"]
                                     child_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:child:{child_idx}"))
-                                    sparse_indexer.add_document(child_id, child_text)
+                                    sparse_indexer.add_document(child_id, child_text, workspace_id=package.workspace_id)
                                     child_idx += 1
                         else:
                             for idx, chunk_text in enumerate(package.chunks):
                                 c_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_record.id}:{idx}"))
-                                sparse_indexer.add_document(c_id, chunk_text)
+                                sparse_indexer.add_document(c_id, chunk_text, workspace_id=package.workspace_id)
                     except Exception as se:
                         logger.warning(f"Failed to update BM25 index: {se}")
 

@@ -31,18 +31,18 @@ def test_apply_security_filter_role_exclusions():
 
 
 def test_truth_resolver_weight_scaling():
-    """Verify that TruthResolver scales scores according to source trust weight and filters < 0.4."""
+    """Verify that TruthResolver scales scores according to source trust weight and filters < 0.25."""
     results = [
         {"chunk_id": "wiki", "text": "wiki page", "score": 0.8, "metadata": {"source_url": "notion.so/wiki", "title": "Notion Wiki"}},
         {"chunk_id": "slack", "text": "slack chat", "score": 0.9, "metadata": {"source_url": "slack.com/archive", "title": "Slack Message"}},
         {"chunk_id": "jira", "text": "jira ticket", "score": 0.6, "metadata": {"source_url": "jira.atlassian.com/ticket", "title": "Jira Ticket"}},
-        {"chunk_id": "low_trust_slack", "text": "slack msg 2", "score": 0.7, "metadata": {"source_url": "slack.com/channel", "title": "Slack Msg 2"}},
+        {"chunk_id": "low_trust_slack", "text": "slack msg 2", "score": 0.4, "metadata": {"source_url": "slack.com/channel", "title": "Slack Msg 2"}},
     ]
 
-    # Weights: Wiki (1.0) -> score remains 0.8 (>= 0.4, passes)
-    # Slack (0.5) -> score becomes 0.9 * 0.5 = 0.45 (>= 0.4, passes)
-    # Jira (0.8) -> score becomes 0.6 * 0.8 = 0.48 (>= 0.4, passes)
-    # Low trust Slack (0.5) -> score becomes 0.7 * 0.5 = 0.35 (< 0.4, filtered out)
+    # Weights: Wiki (1.0) -> score remains 0.8 (>= 0.25, passes)
+    # Slack (0.5) -> score becomes 0.9 * 0.5 = 0.45 (>= 0.25, passes)
+    # Jira (0.8) -> score becomes 0.6 * 0.8 = 0.48 (>= 0.25, passes)
+    # Low trust Slack (0.5) -> score becomes 0.4 * 0.5 = 0.20 (< 0.25, filtered out)
     
     resolved = TruthResolver.resolve_weights(results)
     ids = [item["chunk_id"] for item in resolved]

@@ -40,7 +40,7 @@ from backend.reasoning.supervisor import SupervisorAgent, QueryIntent
 from backend.models.query_log import QueryLog
 from backend.models.conversation import Conversation
 from backend.models.user import User
-from backend.query.semantic_cache import SemanticCache
+from backend.core.cache_service import CacheService
 from backend.observability.telemetry import tracer
 from backend.core.config import get_settings
 from backend.core.database import async_session
@@ -55,7 +55,7 @@ from backend.core.llm_client import LLMClient
 class QueryService:
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.cache = SemanticCache()
+        self.cache = CacheService()
         self.router = AdaptiveRouter()
         self.retriever = Retriever()
         self.crag = CRAGVerifier()
@@ -202,6 +202,59 @@ class QueryService:
             logger.warning("Failed to load conversation history: %s", e)
             return []
 
+    # ── Query preprocessing ────────────────────────────────
+
+    def _preprocess_query(
+        self,
+        question: str,
+        context_files: Optional[List[str]] = None,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """Reformulate vague queries into retrieval-optimized search queries.
+
+        Handles three common failure modes without an LLM call:
+        1. Vague document queries with context_files attached
+        2. Pronoun/reference resolution from conversation history
+        3. Overly short ambiguous queries
+        """
+        lower = question.lower().strip()
+        words = lower.split()
+
+        # Case 1: Context files attached + vague query about "the document"
+        if context_files:
+            vague_doc_patterns = [
+                "what do you know about", "tell me about this",
+                "what is this", "what's in this", "summarize this",
+                "what does this say", "what is in the", "about the document",
+                "about this document", "what do you know", "what's this",
+                "explain this", "describe this", "analyze this",
+            ]
+            if any(p in lower for p in vague_doc_patterns) or (
+                len(words) <= 8 and any(w in lower for w in ("document", "file", "this", "it"))
+            ):
+                filenames = ", ".join(context_files)
+                return (
+                    f"Summarize the key contents, topics, and main information "
+                    f"contained in the following documents: {filenames}"
+                )
+
+        # Case 2: Pronoun resolution from conversation history
+        if history and len(words) <= 10:
+            pronoun_patterns = [
+                "tell me more", "explain that", "what about it",
+                "elaborate on", "go deeper", "more about this",
+                "more details", "can you explain",
+            ]
+            if any(p in lower for p in pronoun_patterns):
+                # Find the last assistant message and extract the topic
+                for msg in reversed(history):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        # Use the first substantial sentence as context
+                        prev_answer = msg["content"][:200].strip()
+                        return f"{question} (context: {prev_answer})"
+
+        return question
+
     # ── Core query execution (non-streaming) ───────────────
 
     async def execute_query(
@@ -254,7 +307,7 @@ class QueryService:
 
             # 1.5 Semantic Cache Check
             with tracer.start_as_current_span("query.cache_lookup"):
-                cached_result = await self.cache.check_cache(workspace_id, question, session=self.db)
+                cached_result = await self.cache.get(workspace_id, question, session=self.db, context_files=context_files)
             if cached_result and cached_result.get("answer", "").strip():
                 span.set_attribute("query.method", "semantic_cache")
                 response_time_ms = int((datetime.utcnow() - start_ts).total_seconds() * 1000)
@@ -281,7 +334,7 @@ class QueryService:
                     sources=cached_result["sources"],
                     query_id=query_log.id,
                     conversation_id=conversation_id,
-                    metadata={"method": "semantic_cache", "similarity": cached_result["similarity"]},
+                    metadata={"method": "semantic_cache", "similarity": cached_result.get("similarity", 1.0)},
                 )
 
             # 1.6 System Metadata Check
@@ -414,10 +467,11 @@ class QueryService:
 
                 # Update cache
                 if answer.answer_text and answer.answer_text.strip():
-                    await self.cache.set_cache(
+                    await self.cache.set(
                         workspace_id,
                         question,
                         {"answer": answer.answer_text, "sources": answer.sources},
+                        context_files=context_files,
                     )
 
 
@@ -494,22 +548,26 @@ class QueryService:
                 chunks = await pre_retrieved_task
             except Exception as e:
                 logger.error("Speculative retrieval task failed, falling back to synchronous search: %s", e)
+                retrieval_query = self._preprocess_query(question, context_files)
                 chunks = await self.retriever.search(
-                    question=question,
+                    question=retrieval_query,
                     workspace_id=workspace_id,
                     top_k=5,
                     user_id=user_id,
-                    user_role=user_role
+                    user_role=user_role,
+                    context_files=context_files,
                 )
         else:
+            retrieval_query = self._preprocess_query(question, context_files)
             chunks = await self.retriever.search(
-                question=question,
+                question=retrieval_query,
                 workspace_id=workspace_id,
                 top_k=5,
                 user_id=user_id,
                 user_role=user_role,
                 context_files=context_files,
             )
+
 
 
         # 2. CRAG Verify
@@ -562,12 +620,13 @@ class QueryService:
             verified_context=verified,
             tier=ResponseTier.FAST_RAG,
             conversation_history=history if history else None,
+            query_complexity=getattr(self, '_current_query_complexity', 'medium'),
         )
 
-        # Apply value alignment and ethical filtering to verify response neutrality and security
+        # Apply security redaction (regex-only, no LLM rewrite)
         from backend.query.cognitive_alignment import ValueAlignmentFilter
         value_filter = ValueAlignmentFilter()
-        answer.answer_text = await value_filter.filter_values(question, answer.answer_text)
+        answer.answer_text = value_filter.inspect_security(answer.answer_text)
 
         # SOTA Critic & Self-Correction retry loop (Verify claims and citations)
         validator = CitationValidator()
@@ -604,7 +663,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                     max_tokens=512,
                     prompt_cache_key="citation_corrector:v1"
                 )
-                answer.answer_text = await value_filter.filter_values(question, corrected_text.strip())
+                answer.answer_text = value_filter.inspect_security(corrected_text.strip())
             except Exception as e:
                 logger.warning(f"Self-correction rewrite attempt {attempt+1} failed: {e}")
                 break
@@ -651,10 +710,10 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
         if not answer_text:
             answer_text = "Reasoning execution started but did not complete synchronously."
         else:
-            # Apply value alignment and ethical filtering to verify response neutrality and security
+            # Apply security redaction (regex-only, no LLM rewrite)
             from backend.query.cognitive_alignment import ValueAlignmentFilter
             value_filter = ValueAlignmentFilter()
-            answer_text = await value_filter.filter_values(question, answer_text)
+            answer_text = value_filter.inspect_security(answer_text)
 
         confidence = reason_result.get("confidence", 0.0)
 
@@ -807,7 +866,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
 
             # 1.5 Semantic Cache Check
             with tracer.start_as_current_span("query.cache_lookup"):
-                cached_result = await self.cache.check_cache(workspace_id, question, session=session)
+                cached_result = await self.cache.get(workspace_id, question, session=session, context_files=context_files)
 
             # 1.6 System Metadata Check (only on cache miss)
             sys_res = None
@@ -820,9 +879,11 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
 
         retrieval_task = None
         if not is_greeting and not reasoning_mode and not cached_result:
+            # Preprocess query for better retrieval (reformulate vague queries)
+            retrieval_query = self._preprocess_query(question, context_files, history)
             retrieval_task = asyncio.create_task(
                 self.retriever.search(
-                    question=question,
+                    question=retrieval_query,
                     workspace_id=workspace_id,
                     top_k=5,
                     user_id=user_id,
@@ -1013,6 +1074,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                             top_k=5,
                             user_id=user_id,
                             user_role=user_role,
+                            context_files=context_files,
                         )
                 else:
                     chunks = await self.retriever.search(
@@ -1021,7 +1083,9 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                         top_k=5,
                         user_id=user_id,
                         user_role=user_role,
+                        context_files=context_files,
                     )
+
 
             # CRAG Verify
             yield f"data: {json.dumps({'type': 'status', 'status': 'Verifying source relevance...', 'phase': 'verification', 'request_id': request_id})}\n\n"
@@ -1071,6 +1135,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                             verified_context=verified,
                             tier=ResponseTier.FAST_RAG,
                             conversation_history=history if history else None,
+                            query_complexity=route.estimated_complexity,
                         ):
                             answer_text += token
                             yield f"data: {json.dumps({'type': 'token', 'token': token, 'request_id': request_id})}\n\n"
@@ -1212,8 +1277,11 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                         )
                         write_session.add(query_log)
                         if answer_text and answer_text.strip():
-                            await self.cache.set_cache(
-                                workspace_id, question, {"answer": answer_text, "sources": sources}
+                            await self.cache.set(
+                                workspace_id,
+                                question,
+                                {"answer": answer_text, "sources": sources},
+                                context_files=context_files,
                             )
 
                         stmt = select(Conversation).where(Conversation.id == conversation_id)
