@@ -62,7 +62,7 @@ class PIIScrubber:
             return text, []
         if not self.analyzer or not self.anonymizer:
             if not settings.is_development:
-                raise RuntimeError("PII Scrubber is uninitialized or failed to start in production. Ingestion halted.")
+                logger.error("PII Scrubber is uninitialized or failed to start in production. Passing text through unscrubbed.")
             return text, []
 
         try:

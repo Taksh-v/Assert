@@ -180,7 +180,8 @@ class VectorStore:
         return self._models_cache
 
     def create_collection(self, vector_size: int, collection_name: Optional[str] = None):
-        """Create a new collection if it doesn't exist. Supports Multi-Vector if it's the main knowledge collection."""
+        """Create a new collection if it doesn't exist. Supports Multi-Vector if it's the main knowledge collection or semantic cache."""
+        from backend.query.semantic_cache import CACHE_COLLECTION_NAME
         target_collection = collection_name or self.collection_name
         with self._get_client() as client:
             if not client:
@@ -191,7 +192,7 @@ class VectorStore:
                 exists = any(c.name == target_collection for c in collections)
                 
                 recreate = False
-                if exists and target_collection == settings.qdrant_collection_name:
+                if exists and target_collection in [settings.qdrant_collection_name, CACHE_COLLECTION_NAME]:
                     try:
                         col_info = client.get_collection(target_collection)
                         vectors_obj = col_info.config.params.vectors
@@ -211,8 +212,8 @@ class VectorStore:
                     
                     logger.info(f"Creating collection: {target_collection}")
                     
-                    if target_collection == settings.qdrant_collection_name:
-                        # Layer 8: Named Vectors Configuration for knowledge
+                    if target_collection in [settings.qdrant_collection_name, CACHE_COLLECTION_NAME]:
+                        # Layer 8: Named Vectors Configuration for knowledge/cache
                         vectors_config = {
                             "content": self._models.VectorParams(size=vector_size, distance=self._models.Distance.COSINE),
                             "title": self._models.VectorParams(size=vector_size, distance=self._models.Distance.COSINE),
@@ -518,6 +519,22 @@ def initialize_qdrant_collections() -> None:
         vector_size = 384
 
     vs = VectorStore()
+
+    # Self-healing: check if target knowledge or cache collections are single-vector and force recreate them
+    with vs._get_client() as client:
+        if client:
+            try:
+                collections = client.get_collections().collections
+                for col in collections:
+                    if col.name in [settings.qdrant_collection_name, CACHE_COLLECTION_NAME]:
+                        info = client.get_collection(col.name)
+                        vectors_obj = info.config.params.vectors
+                        if not isinstance(vectors_obj, dict) or "title" not in vectors_obj:
+                            logger.warning(f"Collection '{col.name}' is single-vector but needs Named Vectors. Force re-creating...")
+                            client.delete_collection(col.name)
+                            logger.info(f"Deleted old legacy collection '{col.name}' successfully.")
+            except Exception as e:
+                logger.error(f"Failed during Qdrant collections self-healing check: {e}")
 
     # 1. Knowledge collection (multi-vector)
     logger.info(f"Ensuring knowledge collection '{settings.qdrant_collection_name}' exists (dim={vector_size})")

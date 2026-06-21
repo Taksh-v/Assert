@@ -27,6 +27,14 @@ async def startup() -> None:
     await init_db()
     logger.info("Database initialized")
 
+    # Warm up Qdrant collections and self-heal if necessary
+    try:
+        from backend.core.vector_store import initialize_qdrant_collections
+        initialize_qdrant_collections()
+        logger.info("Qdrant collections initialized/warmed up")
+    except Exception as e:
+        logger.error("Failed to warm up Qdrant collections: %s", e)
+
     # Warm up sparse indexer
     try:
         from backend.query.sparse_indexer import get_sparse_indexer
