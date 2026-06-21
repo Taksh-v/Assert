@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -16,7 +16,7 @@ class UnifiedDocument(BaseModel):
     document_type: str = Field(default="general", description="Normalized document type (sop, policy, code, etc.)")
     mime_type: str = Field(default="text/plain", description="Source file MIME type")
     title: str = Field(..., description="Document title")
-    raw_content: str = Field(..., description="Cleaned, normalized text content")
+    raw_content: Union[str, bytes] = Field(..., description="Cleaned, normalized text content")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Source-specific metadata")
     permissions: List[str] = Field(default_factory=list, description="ACLs and access permissions")
     source_url: str = Field(..., description="Direct link to source")

@@ -130,3 +130,45 @@ async def test_graceful_missing_library_handling():
             sys.modules["easyocr"] = sys_modules_backup
         else:
             sys.modules.pop("easyocr", None)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_binary_validation():
+    """Verify that the ingestion pipeline processes bytes content without raising a ValidationError."""
+    from backend.ingestion.pipeline import IngestionPipeline
+    from backend.ingestion.document_run import IngestionPackage, IngestionState
+    import types
+    
+    pipeline = IngestionPipeline()
+    raw_doc = {
+        "title": "test_document.pdf",
+        "source_url": "test_document.pdf",
+        "source_type": "upload",
+        "raw_content": b"%PDF-1.4 mock binary content",
+        "content_format": "auto",
+        "metadata": {
+            "filename": "test_document.pdf",
+            "content_type": "application/pdf",
+            "size": 28
+        }
+    }
+    
+    package = IngestionPackage(raw_doc=types.SimpleNamespace(**raw_doc), workspace_id="ws123")
+    
+    # Run normalizer
+    from backend.ingestion.pipeline_v2 import NormalizerTransformer, ParserTransformer
+    normalizer_tx = NormalizerTransformer(pipeline.normalizer)
+    await normalizer_tx.transform(package)
+    
+    assert package.state == IngestionState.NORMALIZED
+    assert isinstance(package.content, bytes)
+    
+    # Run parser
+    parser_tx = ParserTransformer(pipeline.parser)
+    with patch.object(pipeline.parser, "parse_bytes", return_value=[{"type": "text", "content": "Extracted PDF content", "metadata": {}}]) as mock_parse:
+        await parser_tx.transform(package)
+        mock_parse.assert_called_once_with(b"%PDF-1.4 mock binary content", "test_document.pdf")
+        
+    assert package.state == IngestionState.PARSED
+    assert len(package.elements) == 1
+    assert package.elements[0]["content"] == "Extracted PDF content"
