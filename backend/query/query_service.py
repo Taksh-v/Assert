@@ -202,6 +202,58 @@ class QueryService:
             logger.warning("Failed to load conversation history: %s", e)
             return []
 
+    # ── Implicit Context File Resolution ───────────────────
+
+    async def _resolve_implicit_context_files(
+        self,
+        question: str,
+        workspace_id: str,
+        context_files: Optional[List[str]] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> Optional[List[str]]:
+        """
+        If context_files is empty/None and the query is a vague query about "the document",
+        resolve the most recently active documents in the workspace.
+        """
+        if context_files:
+            return context_files
+
+        lower = question.lower().strip()
+        words = lower.split()
+        vague_doc_patterns = [
+            "what do you know about", "tell me about this",
+            "what is this", "what's in this", "summarize this",
+            "what does this say", "what is in the", "about the document",
+            "about this document", "what do you know", "what's this",
+            "explain this", "describe this", "analyze this",
+            "read this", "read the file", "about the file", "about this file",
+            "what is in the file", "what does the file say",
+        ]
+        is_vague = any(p in lower for p in vague_doc_patterns) or (
+            len(words) <= 8 and any(w in lower for w in ("document", "file", "this", "it"))
+        )
+
+        if not is_vague:
+            return context_files
+
+        db = session or self.db
+        try:
+            from backend.models.document import Document
+            stmt = select(Document.title).where(
+                Document.workspace_id == workspace_id,
+                Document.is_active == True
+            ).order_by(Document.last_ingested_at.desc()).limit(5)
+            
+            res = await db.execute(stmt)
+            titles = [row[0] for row in res.all() if row[0]]
+            if titles:
+                logger.info(f"Implicitly resolved context_files for vague query: {titles}")
+                return titles
+        except Exception as e:
+            logger.warning(f"Failed to resolve implicit context files: {e}")
+            
+        return context_files
+
     # ── Query preprocessing ────────────────────────────────
 
     def _preprocess_query(
@@ -286,7 +338,13 @@ class QueryService:
                     workspace_id, question, conversation_id
                 )
 
-            # 1.2 Resolve user's role early
+            # 1.2 Resolve implicit context files and preprocess query (without history first)
+            context_files = await self._resolve_implicit_context_files(
+                question, workspace_id, context_files, session=self.db
+            )
+            processed_query = self._preprocess_query(question, context_files, None)
+
+            # 1.3 Resolve user's role early
             user_role = "employee"
             if user_id and workspace_id:
                 try:
@@ -337,7 +395,8 @@ class QueryService:
                     metadata={"method": "semantic_cache", "similarity": cached_result.get("similarity", 1.0)},
                 )
 
-            # 1.6 System Metadata Check
+            # 1.6 System Metadata Check (use original question — processed_query may
+            #     have been reformulated into a summarise request by _preprocess_query)
             sys_res = await self._handle_system_metadata_query(question, workspace_id)
             if sys_res:
                 answer_text, sources = sys_res
@@ -370,8 +429,15 @@ class QueryService:
                     metadata={"method": "system_metadata_query"},
                 )
 
+            # 1.8 Load conversation history for multi-turn and pronoun preprocessing
+            with tracer.start_as_current_span("query.history"):
+                history = await self._load_conversation_history(conversation_id, max_messages=6)
+            
+            # Re-preprocess query with history
+            processed_query = self._preprocess_query(question, context_files, history)
+
             # 2. Route the query
-            lower = question.lower().strip()
+            lower = processed_query.lower().strip()
             is_greeting = lower in self.router.GREETING_PATTERNS or (
                 len(lower.split()) <= 2 and "?" not in lower
             )
@@ -380,7 +446,7 @@ class QueryService:
             if not is_greeting and not reasoning_mode:
                 retrieval_task = asyncio.create_task(
                     self.retriever.search(
-                        question=question,
+                        question=processed_query,
                         workspace_id=workspace_id,
                         top_k=5,
                         user_id=user_id,
@@ -390,7 +456,7 @@ class QueryService:
                 )
 
             with tracer.start_as_current_span("query.routing"):
-                route = await self.router.route(question, reasoning_mode=reasoning_mode)
+                route = await self.router.route(processed_query, reasoning_mode=reasoning_mode)
             logger.info(
                 "Query routed: tier=%s, intent=%s, rationale=%s",
                 route.tier.value,
@@ -403,39 +469,35 @@ class QueryService:
             if route.tier != ResponseTier.FAST_RAG and retrieval_task:
                 retrieval_task.cancel()
 
-            # 3. Load conversation history for multi-turn
-            with tracer.start_as_current_span("query.history"):
-                history = await self._load_conversation_history(conversation_id, max_messages=6)
-
             # 4. Execute the appropriate path
             answer: Answer
             metadata: Dict[str, Any] = {"intent": route.intent.value, "tier": route.tier.value}
 
             if route.tier == ResponseTier.DIRECT:
                 with tracer.start_as_current_span("query.path.direct"):
-                    answer = await self._direct_path(question, history)
+                    answer = await self._direct_path(processed_query, history)
                 metadata["method"] = "direct_conversational"
 
             elif route.tier == ResponseTier.FAST_RAG:
                 with tracer.start_as_current_span("query.path.fast_rag"):
                     answer = await self._fast_rag_path(
-                        question, workspace_id, user_id, history, pre_retrieved_task=retrieval_task, user_role=user_role, context_files=context_files
+                        processed_query, workspace_id, user_id, history, pre_retrieved_task=retrieval_task, user_role=user_role, context_files=context_files
                     )
                 metadata["method"] = "fast_rag_crag"
 
             elif route.tier == ResponseTier.FULL_SWARM:
                 with tracer.start_as_current_span("query.path.full_swarm"):
-                    answer = await self._full_swarm_path(question, workspace_id, user_id, history)
+                    answer = await self._full_swarm_path(processed_query, workspace_id, user_id, history)
                 metadata["method"] = "reasoning_swarm"
 
             elif route.tier == ResponseTier.TOOL_EXEC:
                 with tracer.start_as_current_span("query.path.tool_exec"):
-                    answer = await self._full_swarm_path(question, workspace_id, user_id, history)
+                    answer = await self._full_swarm_path(processed_query, workspace_id, user_id, history)
                 metadata["method"] = "tool_execution"
 
             else:
                 with tracer.start_as_current_span("query.path.fallback_fast_rag"):
-                    answer = await self._fast_rag_path(question, workspace_id, user_id, history, user_role=user_role, context_files=context_files)
+                    answer = await self._fast_rag_path(processed_query, workspace_id, user_id, history, user_role=user_role, context_files=context_files)
                 metadata["method"] = "fallback_fast_rag"
 
             metadata["grounding_score"] = answer.grounding_score
@@ -864,6 +926,16 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                     workspace_id, question, conversation_id, session=session
                 )
 
+            # 1.1 Load conversation history
+            with tracer.start_as_current_span("query.history"):
+                history = await self._load_conversation_history(conversation_id, max_messages=6, session=session)
+
+            # 1.2 Resolve implicit context files and preprocess query
+            context_files = await self._resolve_implicit_context_files(
+                question, workspace_id, context_files, session=session
+            )
+            processed_query = self._preprocess_query(question, context_files, history)
+
             # 1.5 Semantic Cache Check
             with tracer.start_as_current_span("query.cache_lookup"):
                 cached_result = await self.cache.get(workspace_id, question, session=session, context_files=context_files)
@@ -871,19 +943,14 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
             # 1.6 System Metadata Check (only on cache miss)
             sys_res = None
             if not cached_result:
-                sys_res = await self._handle_system_metadata_query(question, workspace_id, session=session)
-
-            # 3. Load conversation history
-            with tracer.start_as_current_span("query.history"):
-                history = await self._load_conversation_history(conversation_id, max_messages=6, session=session)
+                sys_res = await self._handle_system_metadata_query(processed_query, workspace_id, session=session)
 
         retrieval_task = None
         if not is_greeting and not reasoning_mode and not cached_result:
             # Preprocess query for better retrieval (reformulate vague queries)
-            retrieval_query = self._preprocess_query(question, context_files, history)
             retrieval_task = asyncio.create_task(
                 self.retriever.search(
-                    question=retrieval_query,
+                    question=processed_query,
                     workspace_id=workspace_id,
                     top_k=5,
                     user_id=user_id,
@@ -1004,7 +1071,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
             yield f"data: {json.dumps({'type': 'status', 'status': 'Analyzing query intent...', 'phase': 'routing', 'request_id': request_id})}\n\n"
 
             with tracer.start_as_current_span("query.routing"):
-                route = await self.router.route(question, reasoning_mode=reasoning_mode)
+                route = await self.router.route(processed_query, reasoning_mode=reasoning_mode)
 
             span.set_attribute("query.tier", route.tier.value)
             span.set_attribute("query.intent", route.intent.value)
@@ -1069,7 +1136,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                     except Exception as e:
                         logger.error("Speculative retrieval task failed in stream, falling back to sync search: %s", e)
                         chunks = await self.retriever.search(
-                            question=question,
+                            question=processed_query,
                             workspace_id=workspace_id,
                             top_k=5,
                             user_id=user_id,
@@ -1078,7 +1145,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                         )
                 else:
                     chunks = await self.retriever.search(
-                        question=question,
+                        question=processed_query,
                         workspace_id=workspace_id,
                         top_k=5,
                         user_id=user_id,
@@ -1092,7 +1159,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
 
             with tracer.start_as_current_span("query.path.fast_rag.verification"):
                 verified = await self.crag.verify(
-                    question=question,
+                    question=processed_query,
                     chunks=chunks,
                     workspace_id=workspace_id,
                 )
@@ -1131,7 +1198,7 @@ Please rewrite the answer to correct all citation errors. Ensure that every stat
                 try:
                     with tracer.start_as_current_span("query.path.fast_rag.generation"):
                         async for token in self.generator.stream_grounded_response(
-                            question=question,
+                            question=processed_query,
                             verified_context=verified,
                             tier=ResponseTier.FAST_RAG,
                             conversation_history=history if history else None,

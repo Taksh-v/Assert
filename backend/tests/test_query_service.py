@@ -152,14 +152,19 @@ async def test_execute_query_metadata_count(query_service, mock_db):
     mock_result_docs.all.return_value = [("Doc1", "http://doc1"), ("Doc2", "http://doc2")]
     mock_result_docs.scalar_one.return_value = mock_conv
 
+    # Implicit context files resolution result (resolves recent doc titles)
+    mock_implicit_ctx = MagicMock()
+    mock_implicit_ctx.all.return_value = [("Doc1",), ("Doc2",)]
+
     # Sequence of database execute results:
-    # 1. workspace role query
-    # 2. count query execution
-    # 3. doc list query execution
-    # 4. load conversation (to update updated_at)
+    # 1. implicit context files query (vague query resolves recent docs)
+    # 2. workspace role query
+    # 3. count query execution
+    # 4. doc list query execution
+    # 5. load conversation (to update updated_at)
     mock_role_res = MagicMock()
     mock_role_res.scalar.return_value = "employee"
-    mock_db.execute.side_effect = [mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
+    mock_db.execute.side_effect = [mock_implicit_ctx, mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
 
     result = await query_service.execute_query(
         question="how many documents are in the system?",
@@ -186,9 +191,14 @@ async def test_execute_query_metadata_list(query_service, mock_db):
     mock_result_docs.all.return_value = [("Doc1", "http://doc1"), ("Doc2", "http://doc2")]
     mock_result_docs.scalar_one.return_value = mock_conv
 
+    # Implicit context files resolution result (resolves recent doc titles)
+    mock_implicit_ctx = MagicMock()
+    mock_implicit_ctx.all.return_value = [("Doc1",), ("Doc2",)]
+
+    # Sequence: implicit_ctx → role → count → docs → conversation_update
     mock_role_res = MagicMock()
     mock_role_res.scalar.return_value = "employee"
-    mock_db.execute.side_effect = [mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
+    mock_db.execute.side_effect = [mock_implicit_ctx, mock_role_res, mock_result_count, mock_result_docs, mock_result_docs]
 
     result = await query_service.execute_query(
         question="show all documents",
